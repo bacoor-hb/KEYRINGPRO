@@ -1,0 +1,21 @@
+{
+  "secure": {
+    "SERVICE_MORILIS_API_KEY": "your_moralis_api_key",
+    "SERVICE_QUICKNODE_API_KEY": "your_quicknode_api_key",
+    "SECURE_STORAGE_DEFAULT_ENCRYPTION_KEY": "generate_a_base64_32_byte_key",
+    "KEYRING_HARDWALLET_WEB_NFC_SALT": "generate_a_random_salt",
+    "CUSTOM_AUTH_FOR_LAYER_API": "your_custom_auth_token",
+    "PASSWORD_NFC_ONE": "0x00",
+    "PASSWORD_NFC_TWO": "0x00",
+    "PASSWORD_NFC_THREE": "0x00",
+    "PASSWORD_NFC_FOUR": "0x00",
+    "RELAY_API_KEY": "your_relay_api_key",
+    "KEYCHAIN_PASSWORD_ENCRYPTION_KEY": "generate_a_base64_32_byte_key",
+    "AGENT_CORE_SECRET_KEY": "your_agent_core_secret",
+    "AGENT_CORE_GEMINI_API_KEY": "your_gemini_api_key",
+    "DEBRIDGE_ACCESS_TOKEN": "your_debridge_access_token",
+    "SERVICE_CHATWORK_API_TOKEN": "your_chatwork_api_token",
+    "SERVICE_CHATWORK_ROOM_ID": "your_chatwork_room_id"
+  },
+  "public": {}
+}

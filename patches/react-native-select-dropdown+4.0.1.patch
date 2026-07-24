@@ -1,0 +1,90 @@
+diff --git a/node_modules/react-native-select-dropdown/src/SelectDropdown.js b/node_modules/react-native-select-dropdown/src/SelectDropdown.js
+index d114c06..c95fae4 100644
+--- a/node_modules/react-native-select-dropdown/src/SelectDropdown.js
++++ b/node_modules/react-native-select-dropdown/src/SelectDropdown.js
+@@ -28,6 +28,7 @@ const SelectDropdown = (
+     /////////////////////////////
+     statusBarTranslucent /* boolean */,
+     dropdownStyle /* style object for search input */,
++    dropUp /* boolean - force the menu to open above the trigger */,
+     dropdownOverlayColor /* string */,
+     showsVerticalScrollIndicator /* boolean */,
+     /////////////////////////////
+@@ -61,7 +62,7 @@ const SelectDropdown = (
+     onDropdownButtonLayout,
+     dropdownWindowStyle,
+     onRequestClose,
+-  } = useLayoutDropdown(data, dropdownStyle);
++  } = useLayoutDropdown(data, dropdownStyle, dropUp);
+   useImperativeHandle(ref, () => ({
+     reset: () => {
+       reset();
+diff --git a/node_modules/react-native-select-dropdown/src/components/DropdownWindow.js b/node_modules/react-native-select-dropdown/src/components/DropdownWindow.js
+index 7e9747c..32f697f 100644
+--- a/node_modules/react-native-select-dropdown/src/components/DropdownWindow.js
++++ b/node_modules/react-native-select-dropdown/src/components/DropdownWindow.js
+@@ -1,8 +1,37 @@
+-import React from 'react';
+-import {View, StyleSheet} from 'react-native';
++import React, {useRef, useEffect} from 'react';
++import {StyleSheet, Animated} from 'react-native';
+ 
++// Apple-style "pop" open animation: the panel springs up from a slightly-shrunk,
++// faded state, anchored at the top so the menu grows out of its trigger. Runs
++// once on mount (the window is mounted only while the dropdown is open).
+ const DropdownWindow = ({layoutStyle, children}) => {
+-  return <View style={{...styles.dropdownOverlayView, ...styles.shadow, ...layoutStyle}}>{children}</View>;
++  const progress = useRef(new Animated.Value(0)).current;
++  useEffect(() => {
++    Animated.spring(progress, {
++      toValue: 1,
++      friction: 7,
++      tension: 90,
++      useNativeDriver: true,
++    }).start();
++  }, [progress]);
++
++  const opacity = progress.interpolate({inputRange: [0, 1], outputRange: [0, 1]});
++  const scale = progress.interpolate({inputRange: [0, 1], outputRange: [0.9, 1]});
++  const translateY = progress.interpolate({inputRange: [0, 1], outputRange: [-8, 0]});
++
++  return (
++    <Animated.View
++      style={{
++        ...styles.dropdownOverlayView,
++        ...styles.shadow,
++        ...layoutStyle,
++        opacity,
++        // translateY before scale keeps the growth anchored near the top edge.
++        transform: [{translateY}, {scale}],
++      }}>
++      {children}
++    </Animated.View>
++  );
+ };
+ 
+ export default DropdownWindow;
+diff --git a/node_modules/react-native-select-dropdown/src/hooks/useLayoutDropdown.js b/node_modules/react-native-select-dropdown/src/hooks/useLayoutDropdown.js
+index 1fc01dc..b8dcba8 100644
+--- a/node_modules/react-native-select-dropdown/src/hooks/useLayoutDropdown.js
++++ b/node_modules/react-native-select-dropdown/src/hooks/useLayoutDropdown.js
+@@ -5,7 +5,7 @@ import {useKeyboardHeight} from './useKeyboardHeight';
+ const {height} = Dimensions.get('window');
+ const DROPDOWN_MAX_HEIGHT = height * 0.4;
+ 
+-export const useLayoutDropdown = (data, dropdownStyle) => {
++export const useLayoutDropdown = (data, dropdownStyle, dropUp) => {
+   const [isVisible, setIsVisible] = useState(false); // dropdown visible ?
+   const [buttonLayout, setButtonLayout] = useState(null);
+   const [dropdownCalculatedStyle, setDropdownCalculatedStyle] = useState({});
+@@ -25,7 +25,9 @@ export const useLayoutDropdown = (data, dropdownStyle) => {
+ 
+     const remainingHeight = dropdownStyle?.height || height / 4;
+ 
+-    if (py + h > height - remainingHeight) {
++    // `dropUp` forces the menu to open above the trigger regardless of available
++    // space below; otherwise fall back to the library's auto no-room-below check.
++    if (dropUp || py + h > height - remainingHeight) {
+       return setDropdownCalculatedStyle({
+         bottom: height - (py + h) + h,
+         width: dropdownStyle?.width || w,

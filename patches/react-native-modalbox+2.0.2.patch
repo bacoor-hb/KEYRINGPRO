@@ -1,0 +1,36 @@
+diff --git a/node_modules/react-native-modalbox/index.js b/node_modules/react-native-modalbox/index.js
+index 09c1806..7fe51c1 100644
+--- a/node_modules/react-native-modalbox/index.js
++++ b/node_modules/react-native-modalbox/index.js
+@@ -52,6 +52,7 @@ export default class ModalBox extends React.PureComponent {
+     easing: PropTypes.func,
+     coverScreen: PropTypes.bool,
+     keyboardTopOffset: PropTypes.number,
++    disableKeyboardHandling: PropTypes.bool,
+     onClosed: PropTypes.func,
+     onOpened: PropTypes.func,
+     onClosingState: PropTypes.func
+@@ -72,6 +73,7 @@ export default class ModalBox extends React.PureComponent {
+     easing: Easing.elastic(0.8),
+     coverScreen: false,
+     keyboardTopOffset: Platform.OS == 'ios' ? 22 : 0,
++    disableKeyboardHandling: false,
+     useNativeDriver: true
+   };
+ 
+@@ -160,6 +162,7 @@ export default class ModalBox extends React.PureComponent {
+    * The keyboard is hidden (IOS only)
+    */
+   onKeyboardHide(evt) {
++    if (this.props.disableKeyboardHandling) return;
+     this.setState({keyboardOffset: 0});
+   }
+ 
+@@ -169,6 +172,7 @@ export default class ModalBox extends React.PureComponent {
+   onKeyboardChange(evt) {
+     if (!evt) return;
+     if (!this.state.isOpen) return;
++    if (this.props.disableKeyboardHandling) return;
+     const keyboardFrame = evt.endCoordinates;
+     const keyboardHeight = this.state.containerHeight - keyboardFrame.screenY;
+ 

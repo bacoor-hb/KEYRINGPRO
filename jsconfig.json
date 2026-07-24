@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    // "target": "es6",
+    "baseUrl": ".",
+    "paths": {
+      "common/*": [
+        "./src/Common/*"
+      ],
+      "controller/*": [
+        "./src/Controller/*"
+      ],
+      "assets/*": [
+        "./src/Assets/*"
+      ],
+      "frontend/*": [
+        "./src/Frontend/*"
+      ]
+    }
+  },
+  // "include": [
+  //   "**/*.js"
+  // ],
+  "exclude": ["node_modules"]
+}

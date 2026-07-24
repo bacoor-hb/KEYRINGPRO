@@ -1,0 +1,25 @@
+diff --git a/node_modules/@gorhom/bottom-sheet/src/hooks/useAnimatedLayout.ts b/node_modules/@gorhom/bottom-sheet/src/hooks/useAnimatedLayout.ts
+index 68c674d..669d2e2 100644
+--- a/node_modules/@gorhom/bottom-sheet/src/hooks/useAnimatedLayout.ts
++++ b/node_modules/@gorhom/bottom-sheet/src/hooks/useAnimatedLayout.ts
+@@ -106,13 +106,18 @@ export function useAnimatedLayout(
+     [state, verticalInset, modal]
+   );
+   useEffect(() => {
+-    Dimensions.addEventListener('change', ({ window }) => {
++   // Đổi tên bóc tách biến từ { window } thành { window: nextWindow }
++    const subscription = Dimensions.addEventListener('change', ({ window: nextWindow }) => {
+       state.modify(_state => {
+         'worklet';
+-        _state.window = window;
++        // Sử dụng biến nextWindow (Worklet sẽ hiểu đây là biến cục bộ truyền vào)
++        _state.window = nextWindow;
+         return _state;
+       });
+     });
++
++    // Thêm hàm dọn dẹp (cleanup) để hủy lắng nghe khi component unmount (tốt cho hiệu năng)
++    return () => subscription.remove();
+   }, [state]);
+   //#endregion
+ 

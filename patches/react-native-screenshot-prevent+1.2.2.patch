@@ -1,0 +1,102 @@
+diff --git a/node_modules/react-native-screenshot-prevent/ios/RNScreenshotPrevent.mm b/node_modules/react-native-screenshot-prevent/ios/RNScreenshotPrevent.mm
+index f6efd21..9c1bb34 100644
+--- a/node_modules/react-native-screenshot-prevent/ios/RNScreenshotPrevent.mm
++++ b/node_modules/react-native-screenshot-prevent/ios/RNScreenshotPrevent.mm
+@@ -12,6 +12,8 @@ @implementation RNScreenshotPrevent {
+     BOOL enabled;
+     UIImageView *obfuscatingView;
+     UITextField *secureField;
++    CALayer *originalLayerSuperlayer;
++    NSUInteger originalLayerIndex;
+ 
+ }
+ 
+@@ -130,6 +132,12 @@ CGSize CGSizeAspectFill(const CGSize aspectRatio, const CGSize minimumSize)
+  * 
+  * converted to ObjC and modified to get it working with RCT
+  */
++// Returns the canvas layer of secureField (the layer iOS blanks out during
++// capture). The app's real layer is parented under this canvas while secure.
++-(CALayer *) secureCanvasLayer {
++    return [secureField.layer.sublayers lastObject];
++}
++
+ -(void) addSecureTextFieldToView:(UIView *) view :(NSString *) imagePath {
+ 
+     UIView *rootView = [UIApplication sharedApplication].keyWindow.rootViewController.view;
+@@ -162,23 +170,44 @@ -(void) addSecureTextFieldToView:(UIView *) view :(NSString *) imagePath {
+         secureField.backgroundColor = [UIColor colorWithPatternImage:resultImage];
+     }
+ 
++    // Remember where the real layer lived so disableSecureView can put it back
++    // exactly. Without this the layer hierarchy stays mangled and the next
++    // screen is left blank/secured even after disableSecureView is called.
++    originalLayerSuperlayer = view.layer.superlayer;
++    originalLayerIndex = [originalLayerSuperlayer.sublayers indexOfObject:view.layer];
++
+     [view sendSubviewToBack:secureField];
+     [view addSubview:secureField];
+     [view.layer.superlayer addSublayer:secureField.layer];
+     [[secureField.layer.sublayers lastObject] addSublayer:view.layer];
+ }
+ 
+-// TODO: not working now, fix crash on _UITextFieldCanvasView contenttViewInvalidated: unrecognized selector sent to instance
++// Restores the layer hierarchy that addSecureTextFieldToView mangled, then
++// removes the secure field. Reparents the real app layer back to where it was
++// before reparenting/removing, otherwise the content disappears with the field.
+ -(void) removeSecureTextFieldFromView:(UIView *) view {
+     for(UITextField *subview in view.subviews){
+-        if([subview isMemberOfClass:[UITextField class]]) {
+-            if(subview.secureTextEntry == TRUE) {
+-                [subview removeFromSuperview];
+-                subview.secureTextEntry = FALSE;
+-                secureField.userInteractionEnabled = TRUE;
++        if([subview isMemberOfClass:[UITextField class]] && subview == secureField) {
++            CALayer *canvasLayer = [self secureCanvasLayer];
++            CALayer *appLayer = [canvasLayer.sublayers lastObject];
++
++            // move the app layer out of the secure canvas, back to its original parent
++            if (appLayer && originalLayerSuperlayer) {
++                [appLayer removeFromSuperlayer];
++                if (originalLayerIndex != NSNotFound && originalLayerIndex <= originalLayerSuperlayer.sublayers.count) {
++                    [originalLayerSuperlayer insertSublayer:appLayer atIndex:(unsigned)originalLayerIndex];
++                } else {
++                    [originalLayerSuperlayer addSublayer:appLayer];
++                }
+             }
++
++            subview.secureTextEntry = FALSE;
++            [secureField.layer removeFromSuperlayer];
++            [subview removeFromSuperview];
+         }
+     }
++    originalLayerSuperlayer = nil;
++    originalLayerIndex = NSNotFound;
+ }
+ 
+ #pragma mark - Public API
+@@ -190,7 +219,7 @@ -(void) removeSecureTextFieldFromView:(UIView *) view {
+ /** adds secure textfield view */
+ RCT_EXPORT_METHOD(enableSecureView: (NSString *)imagePath) {
+     [self enabled:YES];
+-    if(secureField.secureTextEntry == false) {
++    if(secureField == nil || secureField.secureTextEntry == false) {
+         UIView *view = [UIApplication sharedApplication].keyWindow.rootViewController.view;
+         for(UIView *subview in view.subviews) {
+             [self addSecureTextFieldToView:subview :imagePath];
+@@ -201,11 +230,14 @@ -(void) removeSecureTextFieldFromView:(UIView *) view {
+ /** removes secure textfield from the view */
+ RCT_EXPORT_METHOD(disableSecureView) {
+     [self enabled:NO];
+-    secureField.secureTextEntry = false;
++    if (secureField == nil) {
++        return;
++    }
+     UIView *view = [UIApplication sharedApplication].keyWindow.rootViewController.view;
+     for(UIView *subview in view.subviews) {
+         [self removeSecureTextFieldFromView:subview];
+     }
++    secureField = nil;
+ }
+ 
+ #ifdef RCT_NEW_ARCH_ENABLED

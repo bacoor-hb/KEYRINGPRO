@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">KEYRING PRO</string>
+    <string name="default_notification_channel_id">allDevicesApp</string>
+</resources>

@@ -1,0 +1,13 @@
+diff --git a/node_modules/react-native/React/Fabric/Mounting/ComponentViews/ScrollView/RCTPullToRefreshViewComponentView.mm b/node_modules/react-native/React/Fabric/Mounting/ComponentViews/ScrollView/RCTPullToRefreshViewComponentView.mm
+index 0d231bc..bc10363 100644
+--- a/node_modules/react-native/React/Fabric/Mounting/ComponentViews/ScrollView/RCTPullToRefreshViewComponentView.mm
++++ b/node_modules/react-native/React/Fabric/Mounting/ComponentViews/ScrollView/RCTPullToRefreshViewComponentView.mm
+@@ -76,7 +76,7 @@ - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &
+     return;
+   }
+ 
+-  const auto &oldConcreteProps = static_cast<const PullToRefreshViewProps &>(*_props);
++  const auto &oldConcreteProps = static_cast<const PullToRefreshViewProps &>(*oldProps);
+   const auto &newConcreteProps = static_cast<const PullToRefreshViewProps &>(*props);
+ 
+   if (newConcreteProps.tintColor != oldConcreteProps.tintColor) {

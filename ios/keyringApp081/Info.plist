@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>KEYRING PRO</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>co.bacoor.keyring</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>keyring</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NFCReaderUsageDescription</key>
+	<string>NFC is needed so that our app can detect NFC tags, read messages and save data to writable tags.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>KEYRING PRO need to play using while you are hiking</string>
+	<key>NSCameraUsageDescription</key>
+	<string>KEYRING PRO requires access to your camera to scan QR code</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>KEYRING PRO needs to access your FaceID so that you can use security features.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>KEYRING PRO needs to access your camera roll so that you can upload images. Your images will not be shared without your permission</string>
+	<key>RCTNewArchEnabled</key>
+	<true/>
+	<key>UIAppFonts</key>
+	<array>
+		<string>AntDesign.ttf</string>
+		<string>Ionicons.ttf</string>
+		<string>MaterialDesignIcons.ttf</string>
+		<string>LINESeedTW_TTF_Rg.ttf</string>
+		<string>LINESeedTW_TTF_Bd.ttf</string>
+		<string>LINESeedKR-Rg.ttf</string>
+		<string>LINESeedKR-Bd.ttf</string>
+		<string>LINESeedJP_A_TTF_Rg.ttf</string>
+		<string>LINESeedJP_A_TTF_Bd.ttf</string>
+		<string>Geist-Regular.ttf</string>
+		<string>Geist-Bold.ttf</string>
+		<string>Geist-Medium.ttf</string>
+		<string>LINESeedSansTH_A_Bd.ttf</string>
+		<string>LINESeedSansTH_A_Rg.ttf</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
+	<key>UILaunchStoryboardName</key>
+	<string>BootSplash</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+</dict>
+</plist>

@@ -1,0 +1,157 @@
+# Resolve react_native_pods.rb with node to allow for hoisting
+# require Pod::Executable.execute_command('node', ['-p',
+#   'require.resolve(
+#     "react-native/scripts/react_native_pods.rb",
+#     {paths: [process.argv[1]]},
+#   )', __dir__]).strip
+
+def node_require(script)
+  # Resolve script with node to allow for hoisting
+  require Pod::Executable.execute_command('node', ['-p',
+    "require.resolve(
+      '#{script}',
+      {paths: [process.argv[1]]},
+    )", __dir__]).strip
+end
+
+# Use it to require both react-native's and this package's scripts:
+node_require('react-native/scripts/react_native_pods.rb')
+node_require('react-native-permissions/scripts/setup.rb')
+
+# dotlottie-react-native requires iOS 15.4 (LottieFiles-dotLottie-iOS); RN default is 15.1.
+platform :ios, [min_ios_version_supported.to_f, 15.4].max.to_s
+prepare_react_native_project!
+
+# ⬇️ uncomment the permissions you need
+setup_permissions([
+  # 'AppTrackingTransparency',
+  # 'Bluetooth',
+  # 'Calendars',
+  # 'CalendarsWriteOnly',
+  'Camera',
+  # 'Contacts',
+  # 'FaceID',
+  # 'LocationAccuracy',
+  # 'LocationAlways',
+  # 'LocationWhenInUse',
+  'MediaLibrary',
+  # 'Microphone',
+  # 'Motion',
+  'Notifications',
+  # 'PhotoLibrary',
+  # 'PhotoLibraryAddOnly',
+  # 'Reminders',
+  # 'Siri',
+  # 'SpeechRecognition',
+  # 'StoreKit',
+])
+
+
+linkage = ENV['USE_FRAMEWORKS']
+if linkage != nil
+  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
+  use_frameworks! :linkage => linkage.to_sym
+end
+
+target 'keyringApp081' do
+  config = use_native_modules!
+
+  use_frameworks! :linkage => :static
+  $RNFirebaseAsStaticFramework = true
+  $RNFANoPrivacyAPI = true
+  use_react_native!(
+    :path => config[:reactNativePath],
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+
+    # https://github.com/facebook/react-native/blob/main/packages/react-native/scripts/react_native_pods.rb#L197-L202
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      # :ccache_enabled => true
+    )
+    # https://github.com/LottieFiles/dotlottie-ios/pull/83
+    # LottieFiles-dotLottie-iOS unconditionally flips the Y axis on ALL iOS 16.x at
+    # runtime (a fix for a Simulator-only bug, dotlottie-ios #80). On real iOS 16.x
+    # devices (e.g. iPhone X) CoreImage already renders upright, so that flip rotates
+    # the animation 180° (upside-down / mirrored). Gate the flip to the Simulator only.
+    # Applied here (not patch-package) because Pods live outside node_modules and are
+    # regenerated on every `pod install`. Idempotent: skips if already patched.
+    dotlottie_coordinator = File.join(
+      __dir__, 'Pods', 'LottieFiles-dotLottie-iOS',
+      'Sources', 'DotLottie', 'Public', 'Coordinator.swift'
+    )
+    if File.exist?(dotlottie_coordinator)
+      src = File.read(dotlottie_coordinator)
+      original = <<~SWIFT.chomp
+        #if os(iOS)
+                    // Fix coordinate system for iOS 16.0 only
+                    if #available(iOS 16.0, *) {
+                        if #available(iOS 17.0, *) {
+                            // iOS 17+ - do nothing
+                        } else {
+                            // iOS 16.x only
+                            let flipTransform = CGAffineTransform(scaleX: 1, y: -1)
+                            let translateTransform = CGAffineTransform(translationX: 0, y: view.drawableSize.height)
+                            filteredImage = filteredImage.transformed(by: flipTransform).transformed(by: translateTransform)
+                        }
+                    }
+        #endif
+      SWIFT
+      patched = <<~SWIFT.chomp
+        #if os(iOS)
+                    // Patched (keyring-app Podfile post_install): gate the iOS 16.x Y-flip to
+                    // the Simulator. On real iOS 16.x devices it rotates the animation 180°.
+        #if targetEnvironment(simulator)
+                    if #available(iOS 16.0, *) {
+                        if #available(iOS 17.0, *) {
+                            // iOS 17+ - do nothing
+                        } else {
+                            // iOS 16.x Simulator only
+                            let flipTransform = CGAffineTransform(scaleX: 1, y: -1)
+                            let translateTransform = CGAffineTransform(translationX: 0, y: view.drawableSize.height)
+                            filteredImage = filteredImage.transformed(by: flipTransform).transformed(by: translateTransform)
+                        }
+                    }
+        #endif
+        #endif
+      SWIFT
+      if src.include?(original)
+        File.write(dotlottie_coordinator, src.sub(original, patched))
+        Pod::UI.puts '[dotLottie] Patched Coordinator.swift: gated iOS 16.x Y-flip to Simulator'.green
+      elsif src.include?('targetEnvironment(simulator)')
+        Pod::UI.puts '[dotLottie] Coordinator.swift already patched'.yellow
+      else
+        Pod::UI.warn '[dotLottie] Coordinator.swift flip block not found — upstream may have changed; verify the iOS 16 flip manually'
+      end
+    end
+
+    installer.pods_project.targets.each do |target|
+        target.build_configurations.each do |config|
+            config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ""
+            config.build_settings['CODE_SIGNING_REQUIRED'] = "NO"
+            config.build_settings['CODE_SIGNING_ALLOWED'] = "NO"
+
+          # dotlottie-react-native (LottieFiles-dotLottie-iOS) requires iOS 15.4.
+          # Bump any pod target below that so CocoaPods can resolve it.
+          current_target = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+          if current_target.nil? || current_target.to_f < 15.4
+            config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.4'
+          end
+
+          # fmt/base.h unconditionally redefines FMT_USE_CONSTEVAL based on __cplusplus,
+          # so preprocessor defines are overwritten. The reliable fix is to compile fmt
+          # in C++17 mode: FMT_CPLUSPLUS (201703L) < 201709L → FMT_USE_CONSTEVAL = 0.
+          # All other pods stay in C++20 (React-perflogger needs std::unordered_map::contains).
+          if target.name == 'fmt'
+            config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
+          end
+        end
+    end
+
+  end
+end

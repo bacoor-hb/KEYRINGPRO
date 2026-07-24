@@ -1,0 +1,10 @@
+//
+//  Config.xcconfig
+//  keyringApp081
+//
+//  Created by Anh Minh Dao on 16/9/25.
+//
+
+// Configuration settings file format documentation can be found at:
+// https://developer.apple.com/documentation/xcode/adding-a-build-configuration-file-to-your-project
+#include? "tmp.xcconfig"

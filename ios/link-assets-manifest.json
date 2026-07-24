@@ -1,0 +1,49 @@
+{
+  "migIndex": 1,
+  "data": [
+    {
+      "path": "src/Assets/Font/EN/Geist-Bold.ttf",
+      "sha1": "0f50d1b486d346d07a20ad818ff273a84bd949dc"
+    },
+    {
+      "path": "src/Assets/Font/EN/Geist-Medium.ttf",
+      "sha1": "024fbd0f15e13bbc0f69c4869ff053f8ea854cc9"
+    },
+    {
+      "path": "src/Assets/Font/EN/Geist-Regular.ttf",
+      "sha1": "0bb8efc2792f5fbe15ecabd4efe7335da6593868"
+    },
+    {
+      "path": "src/Assets/Font/JP/LINESeedJP_A_TTF_Bd.ttf",
+      "sha1": "9bd1b58a4a4cc3214564952f36df6f9c94157a4b"
+    },
+    {
+      "path": "src/Assets/Font/JP/LINESeedJP_A_TTF_Rg.ttf",
+      "sha1": "bdc2e46bd94a6356c0a6bbd74ecabc8b3bffa203"
+    },
+    {
+      "path": "src/Assets/Font/KR/LINESeedKR-Bd.ttf",
+      "sha1": "ee5404f4e209715299cfb718e357e59cf11b3655"
+    },
+    {
+      "path": "src/Assets/Font/KR/LINESeedKR-Rg.ttf",
+      "sha1": "7bbcea92cc33a051af96a9374200e65c3a3873b4"
+    },
+    {
+      "path": "src/Assets/Font/TH/LINESeedSansTH_A_Bd.ttf",
+      "sha1": "7039f4718d5cb120da06ba97ef9554f250b6a9f0"
+    },
+    {
+      "path": "src/Assets/Font/TH/LINESeedSansTH_A_Rg.ttf",
+      "sha1": "2ead47917058c473528798c4e848c6158f758f77"
+    },
+    {
+      "path": "src/Assets/Font/TW/LINESeedTW_TTF_Bd.ttf",
+      "sha1": "ce86fd31e36ac4c888dc15d4eb04c1f07675d9e3"
+    },
+    {
+      "path": "src/Assets/Font/TW/LINESeedTW_TTF_Rg.ttf",
+      "sha1": "9f812c32d4022e2238c42a9799102b0927d321af"
+    }
+  ]
+}
