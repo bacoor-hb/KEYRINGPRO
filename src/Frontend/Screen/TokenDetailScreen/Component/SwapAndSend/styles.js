@@ -1,5 +1,5 @@
 import { StyleSheet } from 'react-native'
-import { pixelByHeight, pixelByWidth, sizeImageSquare, Colors, fontSize, getSafeAreaValues, getFontFamily, getSizeImgSquare, getHeightHeaderDrawer } from 'common/styles'
+import { Colors, getSizeImgSquare, pixelByHeight } from 'common/styles'
 
 const createStyles = () => {
   return StyleSheet.create({
@@ -15,6 +15,15 @@ const createStyles = () => {
     },
     btnOptionSelected: {
       backgroundColor: '#2B2B31'
+    },
+    containerSubTitle: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      minHeight: pixelByHeight(36)
+    },
+    line: {
+      height: 1,
+      backgroundColor: Colors.BG_BOX_SMALL
     }
 
   })

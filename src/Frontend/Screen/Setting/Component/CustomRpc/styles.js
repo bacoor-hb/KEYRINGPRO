@@ -15,6 +15,10 @@ const createStyles = () => {
       minHeight: pixelByHeight(40),
       backgroundColor: Colors.BG_INPUT_FIELD,
       borderRadius: pixelByHeight(24),
+      // Matches the 1px border of the dropdown menu container so the icon in the
+      // trigger lines up exactly with the icons in the list items.
+      borderWidth: 1,
+      borderColor: 'transparent',
       paddingRight: pixelByWidth(12),
       paddingVertical: pixelByHeight(4),
       display: 'flex',

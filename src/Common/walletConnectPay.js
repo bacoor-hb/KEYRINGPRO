@@ -51,6 +51,16 @@ class WalletConnectPay {
   }
 
   /**
+   * Check if the payment actions contain an eth_sendTransaction — meaning the
+   * user must perform that transaction themselves (the app does not auto-sign it).
+   * @param {Array} actions - List of payment actions
+   * @returns {boolean}
+   */
+  static hasSendTransactionAction (actions = []) {
+    return actions?.some(action => action?.walletRpc?.method === 'eth_sendTransaction') || false
+  }
+
+  /**
    * Confirm payment
    * @param {string} paymentId
    * @param {string} optionId

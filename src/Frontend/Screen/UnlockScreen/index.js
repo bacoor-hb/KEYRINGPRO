@@ -3,7 +3,7 @@ import { InteractionManager, Keyboard } from 'react-native'
 import BaseContainer from 'frontend/Container/BaseContainer'
 import { NavigationActions } from 'src/navigation/NavigationService'
 import { NAME_SCREEN } from 'common/constants/navigation'
-import { getBiometricPassword, hasBiometricPassword } from 'common/keychain'
+import { getBiometricPassword, hasBiometricPassword, getBiometryType } from 'common/keychain'
 import { submitPassword, resolveReauth } from 'common/secureVault'
 import { flushPendingDeepLink } from 'common/deepLink'
 import { flushLockedWcRequests } from 'common/walletConnectPending'
@@ -18,8 +18,14 @@ class UnlockScreen extends BaseContainer {
       password: '',
       isLoading: false,
       isError: false,
-      isAutoAuthing: false,
+      // Starts true so the very first frame is the spinner, not the password form:
+      // whether biometric auto-auth will run is only known after an async keychain
+      // read, and rendering the form first makes it flash on every app start.
+      // Every path below that decides "no auto-auth" must clear it.
+      isAutoAuthing: true,
       isFaceIdEnabled: false,
+      // Only used to pick the right icon for the biometric shortcut.
+      biometryType: null,
       isLocked: false,
       attemptsLeft: null
     }
@@ -80,14 +86,27 @@ class UnlockScreen extends BaseContainer {
 
   async componentDidMount () {
     // App locked → block everything (incl. biometric auto-auth) until it expires.
+    // Clear the spinner too, or the form never comes back when the lock expires.
     if (isLockedNow()) {
+      this.setState({ isAutoAuthing: false })
       this.showLockOverlay()
       return
     }
     try {
       const hasBio = await hasBiometricPassword()
-      if (!hasBio) return
-      this.setState({ isAutoAuthing: true, isFaceIdEnabled: true })
+      // No biometric copy → no auto-auth and no shortcut button: show the form.
+      if (!hasBio) {
+        this.setState({ isAutoAuthing: false })
+        return
+      }
+      this.setState({ isFaceIdEnabled: true })
+      // The kind only picks the shortcut's icon, and that icon is not on screen while
+      // the spinner is up — so resolving it here costs nothing visually, while still
+      // landing before the prompt below (never alongside it) and before any failure
+      // path can reveal the button. One cheap, prompt-free native call; availability
+      // is not needed since a stored copy already proves the device can authenticate.
+      const biometryType = await getBiometryType()
+      this.setState({ biometryType })
       const stored = await getBiometricPassword()
       if (stored) {
         const ok = await submitPassword(stored)

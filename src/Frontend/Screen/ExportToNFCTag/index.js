@@ -9,7 +9,7 @@ import ExportToNFC from './Components/ExportToNFC'
 import { cloneData, makeRandomHash, sleep } from 'common/function'
 import ReduxService from 'common/redux'
 import { REDUX_KEY } from 'common/constants/redux'
-import { getPrivateKeyByAddress } from 'common/wallet'
+import { getPrivateKeyByAddress, removePrivateKeyByAddress } from 'common/wallet'
 import { NavigationActions } from 'src/navigation/NavigationService'
 import { NAME_SCREEN } from 'common/constants/navigation'
 import { Share, View } from 'react-native'
@@ -20,6 +20,7 @@ import EnterPass from './Components/EnterPass'
 import HowDoUse from './Components/HowDoUse'
 import { ACCOUNT_TYPE } from 'common/constants/account'
 import { pixelByHeight, pixelByWidth } from 'common/styles'
+
 let randomHash = ''
 let isExportSuccess = false
 class ExportToNFCTagScreen extends BaseContainer {
@@ -160,6 +161,11 @@ class ExportToNFCTagScreen extends BaseContainer {
         accountListReduxTemp[indexAccount] = activeAccountTemp.account
         ReduxService.setActiveAccount(activeAccountTemp.account)
         ReduxService.setAccountList(accountListReduxTemp)
+        // Delete the on-device key the moment the account becomes COLD, in the same
+        // step that marks it so — not in the alert's callback, which does not run
+        // when another alert is already showing (alertWithType ignores the new one,
+        // callback and all) or when the app is killed while the alert is up.
+        removePrivateKeyByAddress(address)
 
         await this.closeDrawer()
         await sleep(400)
@@ -225,6 +231,7 @@ class ExportToNFCTagScreen extends BaseContainer {
           overClickClose: false,
           autoClose: false,
           type: 'error',
+          noAnimation: true,
           moreView: (
             <View style={{ gap: pixelByWidth(18), marginTop: pixelByHeight(6) }} className='flex relative flex-row justify-between items-center'>
               <View style={{ flex: 1 }}>

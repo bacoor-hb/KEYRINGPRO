@@ -3,21 +3,32 @@ import { REACT_QUERY_KEY } from 'common/constants/reactQuery'
 import { zeroAddress } from 'viem'
 import { isNativeToken } from 'common/tokens'
 import Config from 'react-native-config'
+import { sanitizeUrl } from 'common/function'
 const getData = async ({ queryKey }) => {
   try {
-    let [, chainId, textSearch] = queryKey
+    let [, chainId, optionSearch] = queryKey
 
-    if (isNativeToken(textSearch)) {
-      textSearch = zeroAddress
+    if (typeof optionSearch === 'string' && isNativeToken(optionSearch)) {
+      optionSearch = zeroAddress
     }
     const baseUrl = `${Config.KEYRING_API}/token-list/all`
 
     let url = `${baseUrl}?chainId=${chainId}`
-    if (textSearch) {
-      url += `&key=${textSearch}`
+    if (typeof optionSearch === 'object' && optionSearch !== null) {
+      Object.entries(optionSearch).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          if (isNativeToken(value)) {
+            url += `&${encodeURIComponent(key)}=${zeroAddress}`
+          } else {
+            url += `&${encodeURIComponent(key)}=${encodeURIComponent(value)}`
+          }
+        }
+      })
+    } else if (optionSearch) {
+      url += `&key=${optionSearch}`
     }
 
-    const res = await fetch(url)
+    const res = await fetch(sanitizeUrl(url))
 
     const data = await res.json()
 
@@ -48,11 +59,11 @@ const getData = async ({ queryKey }) => {
   }
 }
 
-const useGetTokenSearchByChain = (chainId, textSearch = '') => {
-  const { data, ...restData } = useQuery([REACT_QUERY_KEY.getTokenSearchByChain, chainId, textSearch],
+const useGetTokenSearchByChain = (chainId, optionSearch = '') => {
+  const { data, ...restData } = useQuery([REACT_QUERY_KEY.getTokenSearchByChain, chainId, optionSearch],
     getData,
     {
-      enabled: !!textSearch
+      enabled: !!optionSearch
     }
   )
 

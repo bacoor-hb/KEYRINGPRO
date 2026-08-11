@@ -11,27 +11,30 @@ const styles = StyleSheet.create({
   // Boxed background around the confirmation form + its confirm button only.
   formBox: {
     backgroundColor: Colors.BG_INPUT_FIELD,
-    borderRadius: pixelByWidth(16),
-    padding: pixelByHeight(12)
+    borderRadius: pixelByWidth(15),
+    padding: pixelByHeight(12),
+    gap: pixelByHeight(14)
   },
+
+  // Header block: title row + the divider under it, spaced as one unit.
+  headerBlock: { gap: pixelByHeight(12) },
   poolHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  poolMeta: { flexDirection: 'row', gap: pixelByWidth(6), paddingVertical: pixelByWidth(4), borderRadius: pixelByWidth(999) },
-  tag: { paddingHorizontal: pixelByWidth(10), paddingVertical: pixelByWidth(4), borderRadius: pixelByWidth(12), alignItems: 'center', justifyContent: 'center' },
+  poolMeta: { flexDirection: 'row', gap: pixelByWidth(6), borderRadius: pixelByWidth(24) },
+  tag: { paddingHorizontal: pixelByWidth(12), paddingVertical: pixelByHeight(3), borderRadius: pixelByWidth(11), alignItems: 'center', justifyContent: 'center', backgroundColor: '#09090A' },
 
-  divider: { height: 1, marginVertical: pixelByHeight(8) },
-
-  row: { flexDirection: 'row', justifyContent: 'space-between', gap: pixelByHeight(8), flex: 1 },
-  rowLabel: { },
-  rowValue: {
+  divider: {
+    height: pixelByHeight(1)
   },
 
-  sectionTitle: { },
-  rangeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: pixelByHeight(8) },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: pixelByWidth(8) },
+
+  rangeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   rangeItem: { alignItems: 'center', flex: 1 },
   rangeValue: { marginTop: pixelByHeight(2) },
   rangeSep: { paddingHorizontal: pixelByWidth(8) },
 
-  ctaWrap: { marginTop: pixelByHeight(8) }
+  // The x402 fee line + the confirm button, spaced as one block.
+  submitBlock: { gap: pixelByHeight(8) }
 })
 
 export default styles

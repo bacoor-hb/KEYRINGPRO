@@ -1,4 +1,5 @@
 import I18n from 'assets/Lang'
+import { LENDING_ENABLED } from 'frontend/Services/keyringAgent'
 
 // The init-suggestion decision TREE.
 //
@@ -28,12 +29,58 @@ import I18n from 'assets/Lang'
 //
 // Titles carry their own leading emoji, so no icon asset is involved.
 
-// The x402 charge the agent settles for a paid action, surfaced in the pill's
-// label so the cost is visible BEFORE the user commits to the turn (the approval
-// sheet is the second, authoritative confirmation — see X402SignModal). Kept
-// here rather than baked into the 16 translation files so a price change is one
-// edit; the strings interpolate {{fee}}.
-const PAID_ACTION_FEE = '0.05 USDC on Base'
+// ─── x402 fees ───────────────────────────────────────────────────────────────
+//
+// The charge the agent settles for a paid action, surfaced in the pill's label so
+// the cost is visible BEFORE the user commits to the turn (the approval sheet is
+// the second, authoritative confirmation — see X402SignModal).
+//
+// The numbers are NOT kept here: they come from the paid backend's own OpenAPI
+// document (`x-payment-info.price` per route), fetched once by useX402Fees. This
+// module only holds the last map that hook resolved, because the pills render
+// from inside a memoized list (MessageBubble) — a module cache labels every level
+// of the tree without threading a prop through the whole thread.
+//
+// Nodes name the operationId they are priced by (`sendNft`, `sendToken`, …), so
+// the app tracks the operation rather than a path the server is free to move.
+let X402_FEES = {}
+
+// Pills already sitting in the thread render inside a memoized bubble that only
+// compares message fields, so a price arriving after a bubble was built would
+// never reach it — the bubble would keep its no-fee label for the rest of the
+// session. Subscribers are notified when the map is replaced, which lets those
+// bubbles re-render exactly once. See useX402FeeLabels.
+const feeListeners = new Set()
+
+export const subscribeX402Fees = (fn) => {
+  feeListeners.add(fn)
+  return () => { feeListeners.delete(fn) }
+}
+
+export const setX402Fees = (fees) => {
+  X402_FEES = fees || {}
+  feeListeners.forEach((fn) => fn())
+}
+
+// The fee label for an operation, e.g. "0.05 USDC on Base". Null until the spec
+// has loaded, or when the server does not price that operation up front — the
+// title then renders its no-fee variant instead of a stale or invented number.
+export const getFeeLabel = (operationId) => X402_FEES[operationId]?.label || null
+
+// A pill's label, with the fee appended only once it is actually known. The
+// unpriced string is the same copy without the "(Fee: …)" suffix, so a slow or
+// unreachable spec degrades to a plain button rather than an empty price or a
+// flash of the wrong one.
+const withFee = (key, operationId) => () => {
+  const fee = getFeeLabel(operationId)
+  return fee ? I18n.t(`${key}WithFee`, { fee }) : I18n.t(key)
+}
+const LENDING_SUGGESTION = {
+  key: 'lending',
+  title: () => I18n.t('AISearch.suggestions.callAgent_lending'),
+  prompt: () => I18n.t('AISearch.suggestions.callAgent_lendingPrompt')
+}
+
 export const AI_SUGGESTIONS = [
   {
     // Fully canned, and a dead end by design: it invites the user to type. No
@@ -64,7 +111,8 @@ export const AI_SUGGESTIONS = [
           },
           {
             key: 'send',
-            title: () => I18n.t('AISearch.suggestions.nft_send', { fee: PAID_ACTION_FEE }),
+            // Priced by the spec's `sendNft` operation (/api/send-nft).
+            title: withFee('AISearch.suggestions.nft_send', 'sendNft'),
             prompt: () => I18n.t('AISearch.suggestions.nft_sendPrompt')
           }
         ]
@@ -81,24 +129,62 @@ export const AI_SUGGESTIONS = [
           },
           {
             key: 'send',
-            title: () => I18n.t('AISearch.suggestions.balance_send', { fee: PAID_ACTION_FEE }),
+            // Priced by the spec's `sendToken` operation (/api/send-token). The
+            // native-coin variant (`sendNative`) is the same price today, and the
+            // pill covers both kinds of send — token is the representative one.
+            title: withFee('AISearch.suggestions.balance_send', 'sendToken'),
             prompt: () => I18n.t('AISearch.suggestions.balance_sendPrompt')
           }
         ]
       },
       {
         key: 'pools',
+        // The ranking itself is free — the `addPool` fee is only charged if the
+        // user goes on to add liquidity from it, so no price is shown here.
         title: () => I18n.t('AISearch.suggestions.callAgent_pools'),
         prompt: () => I18n.t('AISearch.suggestions.callAgent_poolsPrompt')
-      }
-      // {
-      //   key: 'lending',
-      //   title: () => I18n.t('AISearch.suggestions.callAgent_lending'),
-      //   prompt: () => I18n.t('AISearch.suggestions.callAgent_lendingPrompt')
-      // }
+      },
+      // Only when the lending subagent is routable: with it off the core has
+      // nothing to answer a supply/earn question with, so the pill would promise
+      // a turn that cannot happen.
+      ...(LENDING_ENABLED ? [LENDING_SUGGESTION] : [])
     ]
   }
 ]
+
+// ─── Per-session root pills ─────────────────────────────────────────────────
+//
+// AI_SUGGESTIONS above is the DEFAULT root, shown for the general footer search
+// and every session that doesn't ask for its own. A session opened from a
+// specific feature (the Swap-and-send drawer, …) starts on its own root instead,
+// so the first pills the user sees are about the thing they just tapped away
+// from rather than the generic agent menu.
+//
+// These nodes are LEAVES (a `prompt`, no `reply`): tapping one sends a real turn
+// to the agent, exactly like the deepest level of the default tree. Nothing else
+// changes — history, dismissal and the idle timer are all keyed by session
+// already, so a session's pills come and go independently of the others.
+//
+// Unlike the default tree these carry NO emoji and the label IS the prompt: the
+// pill reads as the question the user is about to ask, so one key drives both.
+const SESSION_SUGGESTIONS = {
+  swapAndSend: [
+    {
+      key: 'crossChainGasCharges',
+      title: () => I18n.t('AISearch.suggestions.swapAndSend_gasCharges'),
+      prompt: () => I18n.t('AISearch.suggestions.swapAndSend_gasCharges')
+    },
+    {
+      key: 'whyAddGasCrossChain',
+      title: () => I18n.t('AISearch.suggestions.swapAndSend_whyAddGas'),
+      prompt: () => I18n.t('AISearch.suggestions.swapAndSend_whyAddGas')
+    }
+  ]
+}
+
+// The root pill set for a session. Unknown / undefined sessions fall back to the
+// default tree, so adding an entry point never has to touch this file.
+export const getRootSuggestions = (session) => SESSION_SUGGESTIONS[session] || AI_SUGGESTIONS
 
 // Whether tapping this node is answered by the app instead of the agent. Having
 // a `reply` is what decides it — NOT having children, so a node can be canned

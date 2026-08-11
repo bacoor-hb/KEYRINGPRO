@@ -54,7 +54,20 @@ class LiquidityManagement extends BaseContainer {
     const idx = list.findIndex(a => [a?.address].some(x => x?.toLowerCase() === target))
     const isViewOnly = idx > -1 && list[idx]?.accountType === ACCOUNT_TYPE.VIEW_ONLY
     const name = idx > -1 && !isViewOnly ? (list[idx]?.name || `Account ${idx + 1}`) : I18n.t('v2.liquidity.registerAddress')
-    return <InfoAccountHeader infoAccount={{ name, address: activeLiquidityAddress }} showAlert={this.showAlert} />
+    // An LP address can be registered from outside the app, in which case it is no
+    // account of this wallet and the header's view-only test can only answer "no" —
+    // it would never badge an LP address that really is a contract. For those, the
+    // bytecode alone decides. An LP address that IS one of the wallet's accounts
+    // keeps the normal rule (view-only + contract), so a hot account of your own
+    // is not badged here when it would not be badged anywhere else.
+    const isInWallet = idx > -1
+    return (
+      <InfoAccountHeader
+        infoAccount={{ name, address: activeLiquidityAddress }}
+        showAlert={this.showAlert}
+        alwaysCheckContract={!isInWallet}
+      />
+    )
   }
 
   render () {

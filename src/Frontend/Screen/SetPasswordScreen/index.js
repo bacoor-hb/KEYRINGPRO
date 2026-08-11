@@ -1,10 +1,11 @@
 import React from 'react'
 import I18n from 'assets/Lang'
+import { AppState } from 'react-native'
 import BaseContainer from 'frontend/Container/BaseContainer'
 import Page from './page'
 import { ThemeContext } from 'frontend/Contexts/ThemeContext'
 import { NavigationActions } from 'src/navigation/NavigationService'
-import { savePasswordWithBiometric, clearBiometricPassword } from 'common/keychain'
+import { savePasswordWithBiometric, clearBiometricPassword, getDeviceAuthInfo } from 'common/keychain'
 import { setPasswordFirstTime } from 'common/secureVault'
 import MyButton from 'frontend/Components/UI/MyButton'
 
@@ -16,10 +17,49 @@ class SetPasswordScreen extends BaseContainer {
       newPassword: '',
       confirmPassword: '',
       isPassNotMatch: false,
-      isFaceIdOn: true,
+      // Device auth defaults OFF until we know the device can actually do it —
+      // the row only renders (and the toggle only turns itself on) when available.
+      isFaceIdOn: false,
+      biometryType: null,
+      isBiometricAvailable: false,
       isAgree: false,
       isLoading: false
     }
+  }
+
+  componentDidMount () {
+    super.componentDidMount && super.componentDidMount()
+    this.checkDeviceAuth()
+    // The user may enroll Face ID / a fingerprint in the system settings and come
+    // back — re-check on foreground so the row appears without an app restart.
+    this.appStateSubscription = AppState.addEventListener('change', this.onAppStateChange)
+  }
+
+  componentWillUnmount () {
+    super.componentWillUnmount && super.componentWillUnmount()
+    this.isUnmounted = true
+    this.appStateSubscription && this.appStateSubscription.remove()
+  }
+
+  onAppStateChange = (appState) => {
+    // Skip while submitting: iOS goes 'inactive' → 'active' around the Face ID
+    // prompt fired by savePasswordWithBiometric, and re-checking there would race
+    // with the toggle value that submit already resolved.
+    if (appState === 'active' && !this.state.isLoading) this.checkDeviceAuth()
+  }
+
+  // Show the device-auth row only on devices that can authenticate, labelled with
+  // the biometry the device actually has (Face ID / Touch ID / fingerprint / …).
+  checkDeviceAuth = async () => {
+    const { biometryType, isAvailable } = await getDeviceAuthInfo()
+    if (this.isUnmounted) return
+    this.setState((prevState) => ({
+      biometryType,
+      isBiometricAvailable: isAvailable,
+      // Default ON when available. Keep the user's own choice once they touched
+      // the toggle, and never leave it ON when the device can't authenticate.
+      isFaceIdOn: isAvailable ? (this.hasTouchedFaceIdToggle ? prevState.isFaceIdOn : true) : false
+    }))
   }
 
   onBackRoute = () => {
@@ -39,6 +79,7 @@ class SetPasswordScreen extends BaseContainer {
   }
 
   onToggleFaceId = (value) => {
+    this.hasTouchedFaceIdToggle = true
     this.setState({ isFaceIdOn: value })
   }
 
@@ -59,8 +100,11 @@ class SetPasswordScreen extends BaseContainer {
 
   onSetPassword = async () => {
     try {
-      const { confirmPassword, isFaceIdOn } = this.state
+      const { confirmPassword, isBiometricAvailable } = this.state
       const { onSuccess } = this.props.route?.params || {}
+      // Never try to save a biometric copy on a device that can't authenticate,
+      // even if the toggle was left on from an earlier state.
+      let isFaceIdOn = this.state.isFaceIdOn && isBiometricAvailable
 
       this.setState({ isLoading: true })
 
@@ -80,8 +124,12 @@ class SetPasswordScreen extends BaseContainer {
       if (isFaceIdOn) {
         const ok = await savePasswordWithBiometric(confirmPassword)
         if (!ok) {
-          this.setState({ isLoading: false })
-          return
+          // Cancelled or failed biometry prompt. The vault password is already set,
+          // so stopping here would dead-end the flow — continue without device auth
+          // instead; the user can turn it on later in Security. No toast: onSuccess
+          // navigates away immediately and the toast lives inside this screen.
+          isFaceIdOn = false
+          this.setState({ isFaceIdOn: false })
         }
       }
 

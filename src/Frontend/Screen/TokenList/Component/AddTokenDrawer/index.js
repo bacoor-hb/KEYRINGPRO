@@ -30,6 +30,8 @@ import AllChainServices from 'controller/AllChainServices'
 import BaseAPI from 'controller/API/BaseAPI'
 import CoinGeckoAPI from 'controller/API/CoinGeckoAPI'
 import ReduxService from 'common/redux'
+import { resolveKeyringTokenPriceUSD } from 'src/Services/TokenListV2'
+import { resolveOnchainSymbolFor } from 'src/Services/TokenListV2/symbolOnchain'
 import { getAddress, formatUnits } from 'viem'
 import { FIELD_MIN_HEIGHT } from 'frontend/Screen/TokenDetailScreen/Component/SendToken/styles'
 
@@ -142,7 +144,16 @@ const AddTokenDrawer = ({ _this }) => {
       //    contract checks below.
       const keyring = await _fetchKeyringToken(chainId, addr)
       if (keyring) {
-        setTokenData(_keyringToTokenMeta(keyring, addr))
+        const meta = _keyringToTokenMeta(keyring, addr)
+        // `_keyringToTokenMeta` already prefers the API's `symbolOnchain`. When
+        // the API didn't return one, read `symbol()` so a token added while it IS
+        // listed shows the same ticker as one added while it isn't — the path
+        // below reads the contract directly. Keeps the listing symbol when the
+        // contract can't answer.
+        setTokenData({
+          ...meta,
+          symbol: (await resolveOnchainSymbolFor(chainId, addr, keyring?.symbolOnchain)) || meta.symbol
+        })
         setResultState(RESULT_STATE.SUCCESS)
         return
       }
@@ -153,10 +164,10 @@ const AddTokenDrawer = ({ _this }) => {
       //    fall through to the error state. We intentionally skip the ERC20
       //    supportsInterface probe — plain ERC20s don't implement ERC165, so on
       //    custom chains that eth_call reverts and wrongly fails valid tokens.
-      // Resolve RPC by chainId (not chain type): for Quicknode chains this maps
-      // chainId → chainType → web3Link, and for custom chains it falls back to
-      // the chain's linkProvider in blockchainListRedux. Passing the chain type
-      // string fails for custom chains (e.g. Plasma 9745), leaving rpcUrl null.
+      // Resolve RPC by chainId (not chain type): Quicknode chains hit
+      // settings().rpcUrlByChainId, and custom chains fall back to the chain's
+      // linkProvider in blockchainListRedux. Passing the chain type string fails
+      // for custom chains (e.g. Plasma 9745), leaving rpcUrl null.
       const rpcUrl = getRpcUrlByChain(Number(selectedChain.chainId)) || selectedChain.linkProvider
 
       const meta = await _getTokenMeta(rpcUrl, addr, selectedChain)
@@ -202,9 +213,12 @@ const AddTokenDrawer = ({ _this }) => {
       // in which case only isManuallyShown brings it back into the list.
       if (existing.isHidden || !existing.isManuallyShown) {
         const tokens = entry.tokens.map((t) => (
-          t.metaKey === metaKey ? { ...t, isHidden: false, isManuallyShown: true } : t
+          t.metaKey === metaKey ? { ...t, isHidden: false, hiddenByUser: false, isManuallyShown: true } : t
         ))
-        ReduxService.setAccountTokenList({ ...list, [address]: { ...entry, tokens } })
+        // Mirror the choice into the account-level map so it survives the token
+        // object being rebuilt by a later refresh (see commitChainTokens).
+        const userHiddenKeys = { ...(entry.userHiddenKeys || {}), [metaKey]: false }
+        ReduxService.setAccountTokenList({ ...list, [address]: { ...entry, tokens, userHiddenKeys } })
       }
       syncChainFilter(chainId)
       _this?.closeDrawer && _this.closeDrawer()
@@ -221,7 +235,14 @@ const AddTokenDrawer = ({ _this }) => {
         address,
         tokenData.decimals
       )
-      const valueUSD = balanceFormatted * tokenData.priceUSD
+      // For a share-based vault the API price quotes the UNDERLYING asset while
+      // the balance is in SHARES, so `balance x price` understates the position.
+      // resolveKeyringTokenPriceUSD reads the vault on-chain and returns the
+      // per-SHARE price, which is the unit `balanceFormatted` is actually in. It
+      // returns null when the read fails (and passes plain tokens straight
+      // through), so the API price stays the fallback.
+      const { priceUSD, isYieldConverted } = await _resolvePriceUSD(chainId, contractAddr, tokenData)
+      const valueUSD = balanceFormatted * priceUSD
 
       const newToken = {
         chainId,
@@ -236,15 +257,26 @@ const AddTokenDrawer = ({ _this }) => {
         isPossibleSpam: tokenData.isPossibleSpam,
         balance,
         balanceFormatted,
-        priceUSD: tokenData.priceUSD,
+        priceUSD,
         valueUSD,
         priceChange24hPct: tokenData.priceChange24hPct,
         coinGeckoId: tokenData.coinGeckoId,
         marketCapRank: tokenData.marketCapRank,
         categories: tokenData.categories,
         socials: tokenData.socials,
+        // Same fields the refresh service writes, so a manually added token is a
+        // first-class citizen of the yield path: commitChainTokens keeps them,
+        // refreshTokenBalances selects vaults by yieldProtocol, and the detail
+        // screen reads yieldAsset to decide the chart can't be drawn.
+        yieldProtocol: tokenData.yieldProtocol,
+        yieldAsset: tokenData.yieldAsset,
+        // A converted price is per-share; flagged so a later refresh doesn't
+        // mistake it for the plain API price.
+        isYieldConverted,
         isCustom: true,
         isHidden: false,
+        // Explicit user action — refreshes must not re-derive this one.
+        hiddenByUser: false,
         isManuallyShown: true
       }
 
@@ -252,7 +284,9 @@ const AddTokenDrawer = ({ _this }) => {
       const freshList = ReduxService.getAccountTokenList()
       const freshEntry = freshList[address] || { tokens: [], totalUSD: 0, lastSyncedAt: 0 }
       const tokens = [...(freshEntry.tokens || []), newToken]
-      ReduxService.setAccountTokenList({ ...freshList, [address]: { ...freshEntry, tokens } })
+      // Same account-level mirror as above — the user asked for this token.
+      const userHiddenKeys = { ...(freshEntry.userHiddenKeys || {}), [metaKey]: false }
+      ReduxService.setAccountTokenList({ ...freshList, [address]: { ...freshEntry, tokens, userHiddenKeys } })
       syncChainFilter(chainId)
     } finally {
       setIsAdding(false)
@@ -423,7 +457,7 @@ const _buildSocials = (k) => ({
 // Normalized metadata shape consumed by the result row + handleAdd. Both the
 // Keyring and on-chain/CoinGecko paths return this exact shape so the rest of
 // the component never has to branch on the source.
-const _buildMeta = ({ contractAddress, symbol, name, iconUrl, decimals, priceUSD, priceChange24hPct, coinGeckoId, marketCapRank, categories, socials }) => ({
+const _buildMeta = ({ contractAddress, symbol, name, iconUrl, decimals, priceUSD, priceChange24hPct, coinGeckoId, marketCapRank, categories, socials, yieldProtocol, yieldAsset }) => ({
   contractAddress: lowerCase(contractAddress),
   symbol: symbol || '',
   name: name || symbol || '',
@@ -435,6 +469,17 @@ const _buildMeta = ({ contractAddress, symbol, name, iconUrl, decimals, priceUSD
   marketCapRank: marketCapRank || null,
   categories: categories || null,
   socials: socials || null,
+  // Yield identity, carried from the Keyring entry. Without it a manually added
+  // vault is indistinguishable from a plain token everywhere downstream, and its
+  // balance is valued as `shares x underlying price` forever — the on-chain
+  // path that fixes that (refreshTokenBalances) selects vaults by yieldProtocol.
+  // Passed through RAW: the Keyring caller records a real answer (tag or null),
+  // while the on-chain/CoinGecko fallback — where the Keyring API never
+  // answered (unlisted token, or the lookup failed) — leaves both `undefined`,
+  // so the refresh backfills keep asking instead of treating "no answer yet" as
+  // the settled verdict "not a vault".
+  yieldProtocol,
+  yieldAsset,
   isVerified: false,
   isPossibleSpam: false
 })
@@ -458,7 +503,11 @@ const _fetchKeyringToken = async (chainId, contractAddress) => {
 // Map a raw Keyring entry → normalized metadata.
 const _keyringToTokenMeta = (keyring, contractAddress) => _buildMeta({
   contractAddress,
-  symbol: keyring?.auditGoplus?.token_symbol || keyring?.symbol,
+  // `symbolOnchain` (when the API provides it) is the contract's own ticker, so
+  // it outranks the audit/listing symbols. The on-chain fallback path below
+  // already reads `symbol()` directly, so this keeps both paths consistent
+  // without spending an extra RPC call here.
+  symbol: keyring?.symbolOnchain || keyring?.auditGoplus?.token_symbol || keyring?.symbol,
   name: keyring?.name,
   iconUrl: keyring?.icon_image,
   decimals: keyring?.decimals,
@@ -467,7 +516,11 @@ const _keyringToTokenMeta = (keyring, contractAddress) => _buildMeta({
   coinGeckoId: keyring?.coinGeckoId || keyring?.idCoinGecko,
   marketCapRank: keyring?.market_cap_rank,
   categories: keyring?.categories,
-  socials: _buildSocials(keyring)
+  socials: _buildSocials(keyring),
+  // This entry came from a BY-ADDRESS Keyring lookup — authoritative on yield
+  // identity — so an absent tag is a real answer and is recorded as `null`.
+  yieldProtocol: keyring?.yieldProtocol || null,
+  yieldAsset: keyring?.yieldAsset || null
 })
 
 // Fallback path: resolve name/symbol/decimals on-chain, then enrich price +
@@ -517,6 +570,33 @@ const _getTokenMeta = async (rpcUrl, address, chain) => {
     })
   } catch {
     return null
+  }
+}
+
+// Price in the same unit as `balanceFormatted`, plus whether it came from a
+// conversion. Plain tokens keep the API price; a share-based vault is re-read
+// on-chain so the number is per SHARE rather than per underlying unit.
+//
+// Falls back to the API price whenever the conversion isn't possible (not a
+// vault, missing yieldAsset, RPC failure) — the value is then merely stale
+// rather than wrong by the share ratio, and the next full refresh corrects it.
+// `isYieldConverted` reports what actually happened rather than being inferred
+// from the two prices differing, which would misreport a vault trading at par.
+const _resolvePriceUSD = async (chainId, contractAddress, tokenData) => {
+  const apiPrice = { priceUSD: tokenData.priceUSD, isYieldConverted: false }
+  if (!tokenData?.yieldProtocol) return apiPrice
+  try {
+    const perShare = await resolveKeyringTokenPriceUSD(chainId, {
+      address: contractAddress,
+      symbol: tokenData.symbol,
+      decimals: tokenData.decimals,
+      price: tokenData.priceUSD,
+      yieldProtocol: tokenData.yieldProtocol,
+      yieldAsset: tokenData.yieldAsset
+    })
+    return perShare > 0 ? { priceUSD: perShare, isYieldConverted: true } : apiPrice
+  } catch {
+    return apiPrice
   }
 }
 

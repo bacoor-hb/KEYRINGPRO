@@ -8,12 +8,17 @@ import MyRowItem from 'frontend/Components/UI/MyRowItem'
 import TokenIconWithChain from 'frontend/Components/UI/TokenIconWithChain'
 import MyIcon from 'frontend/Components/UI/MyIcon'
 import createStyles from './styles'
-import { getSizeImgSquare, pixelByHeight, pixelByWidth, sizeImageSquare } from 'common/styles'
+import { getSafeAreaValues, getSizeImgSquare, pixelByHeight, pixelByWidth, sizeImageSquare } from 'common/styles'
 import MyText from 'frontend/Components/UI/MyText'
 import MyButton from 'frontend/Components/UI/MyButton'
 import ScrollViewBlurHeader from 'frontend/Components/UI/ScrollViewBlurHeader'
 import BtnBack from 'frontend/Components/UI/BtnBack'
 import SwapAndSendSubmit from '../SwapAndSendSubmit'
+import { NavigationActions } from 'src/navigation/NavigationService'
+import { NAME_SCREEN } from 'common/constants/navigation'
+import ReduxService from 'common/redux'
+import { REDUX_KEY } from 'common/constants/redux'
+import { AI_SEARCH_SESSION } from 'common/aiSearchHistory'
 
 const SwapAndSend = ({ _this }) => {
   const {
@@ -31,8 +36,15 @@ const SwapAndSend = ({ _this }) => {
   const chainIdOut = chainOut?.chainId || tokenIn?.chainId
   const styles = createStyles()
 
-  const askAi = (message, useNfcInfo) => {
-
+  // Open AI Search on the Swap-and-send session. Nothing is sent: the screen
+  // opens on this session's own root pills ("What are cross-chain gas charges?" /
+  // "Why add gas for cross-chain?" — see getRootSuggestions), and the user picks
+  // the question themselves rather than arriving mid-answer.
+  const askAi = () => {
+    NavigationActions.navigate(NAME_SCREEN.aiSearch, {
+      address: ReduxService.getReduxDataByKey(REDUX_KEY.activeAccount)?.account?.address,
+      sessionKey: AI_SEARCH_SESSION.swapAndSend
+    })
   }
 
   const handleOpenSubmit = () => {
@@ -54,7 +66,7 @@ const SwapAndSend = ({ _this }) => {
 
       />
       <ScrollViewBlurHeader isUseDrawer>
-        <View style={{ gap: pixelByHeight(14), paddingTop: pixelByHeight(8) }}>
+        <View style={{ gap: pixelByHeight(14), paddingTop: pixelByHeight(8), paddingBottom: getSafeAreaValues().bottom }}>
           <MyRowItem
             containerContentStyle={{ paddingVertical: 8 }}
             lefIcon={(
@@ -75,7 +87,7 @@ const SwapAndSend = ({ _this }) => {
             }
           >
             <View className='flex items-center flex-row justify-between'>
-              <MyText variant='subTitle' fontWeight={700}>ETH</MyText>
+              <MyText variant='subTitle' fontWeight={700}>{tokenOut?.symbol}</MyText>
               <View className='flex items-center flex-row' style={{ gap: pixelByWidth(14) }}>
                 <TouchableOpacity
                   activeOpacity={1}
@@ -93,13 +105,16 @@ const SwapAndSend = ({ _this }) => {
             </View>
 
           </MyRowItem>
+          <View style={styles.line} />
 
           <View style={{ gap: pixelByHeight(8) }}>
-            <MyText variant='subTitle' fontWeight={700}>{I18n.t('v2.swapAndSend.whatIsSwapAndSend')}</MyText>
+            <View style={styles.containerSubTitle}>
+              <MyText variant='subTitle' fontWeight={700}>{I18n.t('v2.swapAndSend.whatIsSwapAndSend')}</MyText>
+            </View>
             <View>
 
               <MyRowItem
-                onPress={() => askAi(I18n.t('NFC.whatIsNfcTag'), true)}
+                onPress={() => askAi()}
                 lefIcon={(
                   <View className='flex items-center' style={{ width: getSizeImgSquare('large') }}>
                     <MyIcon uri={images.UIV2.icons.idea} />
@@ -112,7 +127,15 @@ const SwapAndSend = ({ _this }) => {
                 <View className='flex items-center flex-row justify-between'>
                   <MyText className='text-medium'>{I18n.t('v2.swapAndSend.addGasCharges')}</MyText>
                   <View>
-                    <MyButton noMinWidth style={{ height: pixelByHeight(28) }}>
+                    {/* The button sits inside the row's own touchable, and its
+                        TouchableOpacity captures the tap — so it needs the same
+                        handler explicitly, otherwise pressing the button itself
+                        does nothing. */}
+                    <MyButton
+                      noMinWidth
+                      style={{ height: pixelByHeight(28) }}
+                      onPress={() => askAi()}
+                    >
                       <MyIcon style={{ width: sizeImageSquare(35), height: sizeImageSquare(17) }} uri={images.UIV2.icons.btnAiChat} />
 
                     </MyButton>

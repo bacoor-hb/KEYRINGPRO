@@ -13,7 +13,8 @@ import { lowerCase } from 'common/function'
 export const AI_SEARCH_SESSION = {
   general: 'general',
   nfcTag: 'nfcTag',
-  token: 'token'
+  token: 'token',
+  swapAndSend: 'swapAndSend'
 }
 
 const DEFAULT_SESSION = AI_SEARCH_SESSION.general
@@ -115,6 +116,29 @@ export const refreshSuggestions = (address, session) => {
 export const dismissSuggestions = (address, session) => {
   if (!address) return
   suggestionsState[buildKey(session, address)] = { leftAt: 0 }
+}
+
+// Put threads back to SHOWING because their conversation no longer exists.
+//
+// The idle clock is the only OTHER way out of HIDDEN, and it is deliberately
+// slow — but a thread whose messages were just wiped has nothing left to have
+// dismissed the pills over, so it must not sit hidden waiting out that clock.
+// Wiping history is therefore a trigger in its own right: reset wallet, restore
+// from backup, and deleting an account all clear the thread and must clear this
+// alongside it, or the user comes back to an empty chat with no pills at all.
+//
+// `address` omitted (the wallet-wide wipes) clears EVERY thread; passing one
+// clears just that address's session buckets — the mirror of removeAiMessages,
+// which is the map-side half of the same operation.
+export const resetSuggestions = (address) => {
+  if (!address) {
+    Object.keys(suggestionsState).forEach((key) => delete suggestionsState[key])
+    return
+  }
+  const suffix = `::${lowerCase(address)}`
+  Object.keys(suggestionsState)
+    .filter((key) => key.endsWith(suffix))
+    .forEach((key) => delete suggestionsState[key])
 }
 
 // The user left the screen: (re)start a HIDDEN thread's clock from NOW.

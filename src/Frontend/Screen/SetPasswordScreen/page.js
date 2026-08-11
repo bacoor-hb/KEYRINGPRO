@@ -9,8 +9,9 @@ import Checkbox from 'frontend/Components/Common/Checkbox'
 import images from 'assets/Image'
 import styles from './styles'
 import TitleScreen from 'frontend/Components/UI/TitleScreen'
-import { getSizeImgSquare, pixelByHeight } from 'common/styles'
+import { pixelByHeight } from 'common/styles'
 import InputCustom from 'frontend/Components/UI/InputCustom'
+import { getDeviceAuthLabel, isFaceBiometryType } from 'common/keychain'
 
 const SetPasswordPage = (_this) => {
   const { func, state } = _this
@@ -19,8 +20,10 @@ const SetPasswordPage = (_this) => {
     newPassword = '',
     confirmPassword = '',
     isPassNotMatch = false,
-    isFaceIdOn = true,
-    isAgree = false
+    isFaceIdOn = false,
+    isAgree = false,
+    biometryType = null,
+    isBiometricAvailable = false
   } = state
 
   return (
@@ -69,15 +72,19 @@ const SetPasswordPage = (_this) => {
                 }}
               />
 
-              <MyInput
-                readOnly
-                value={I18n.t('v2.security.turnFaceId')}
-                leftIcon={images.UIV2.icons.faceID}
-                leftIconConfig={{ iconWrapperStyle: styles.leftIconWrapper }}
-                rightIcon={(
-                  <MySwitch value={isFaceIdOn} onValueChange={onToggleFaceId} />
-                )}
-              />
+              {/* Only offered when the device can actually authenticate — a device
+                  with no biometry enrolled and no passcode gets no row at all. */}
+              {isBiometricAvailable && (
+                <MyInput
+                  readOnly
+                  value={getDeviceAuthLabel(biometryType)}
+                  leftIcon={isFaceBiometryType(biometryType) ? images.UIV2.icons.faceID : images.UIV2.security.deviceAuthen}
+                  leftIconConfig={{ iconWrapperStyle: styles.leftIconWrapper }}
+                  rightIcon={(
+                    <MySwitch value={isFaceIdOn} onValueChange={onToggleFaceId} />
+                  )}
+                />
+              )}
             </View>
 
             <View style={styles.agreeRow}>

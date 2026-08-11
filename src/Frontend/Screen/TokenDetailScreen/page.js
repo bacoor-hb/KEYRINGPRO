@@ -18,20 +18,17 @@ import { convertAddressArrToString, isHideMenuForAppleReview, lowerCase, routeLi
 import { useSelector } from 'react-redux'
 import { getChainIconByChain } from 'common/chain'
 import ReduxService from 'common/redux'
+import { ACCOUNT_TYPE } from 'common/constants/account'
 import useGetTokenPriceChanges from 'frontend/Hooks/useGetTokenPriceChanges'
 import useGetTokenPriceHistory from 'frontend/Hooks/useGetTokenPriceHistory'
 import useGetTokenPrice from 'frontend/Hooks/useGetTokenPrice'
-import { NavigationActions } from 'src/navigation/NavigationService'
-import { NAME_SCREEN } from 'common/constants/navigation'
-import { AI_SEARCH_SESSION } from 'common/aiSearchHistory'
 import I18n from 'assets/Lang'
-import GlassView from 'frontend/Components/UI/GlassView'
 import createStyles from './styles'
 import MyRowItem from 'frontend/Components/UI/MyRowItem'
 import useGetSettingExchange from 'frontend/Hooks/useGetSettingExchange'
 import LottieRefreshFlatList from 'frontend/Components/UI/LottieRefreshFlatList'
 import { refreshAccountTokens } from 'src/Services/TokenListV2'
-import BottomGradientBar from 'frontend/Components/UI/BottomGradientBar'
+import { isShareBasedProtocol } from 'keyring-agent-core'
 
 // Up/down green & red shared by the chart, the price, and the 24h % so all
 // three always agree — same hues as Colors.GREEN_TEXT / Colors.RED_TEXT.
@@ -94,6 +91,13 @@ const TokenDetailScreenPage = (_this) => {
   const routeParams = props?.route?.params || {}
   const address = lowerCase(routeParams.address || '')
   const accountTokenListRedux = useSelector((s) => s.accountTokenListRedux)
+  const accountListRedux = useSelector((s) => s.accountListRedux)
+  // View-only accounts hold no key, so they can't sign. The screen still shows
+  // every piece of info — only the signable operations below are disabled.
+  const isViewOnly = useMemo(() => {
+    const account = (accountListRedux || []).find((item) => lowerCase(item?.address) === address)
+    return account?.accountType === ACCOUNT_TYPE.VIEW_ONLY
+  }, [accountListRedux, address])
   const { data: settingExchange } = useGetSettingExchange()
   // The navigation param `token` is just a snapshot taken when the screen opened.
   // Merge the LIVE entry from accountTokenList (refreshed e.g. after a send) over
@@ -123,19 +127,53 @@ const TokenDetailScreenPage = (_this) => {
   // Lazy-load real price history by coinGeckoId. Days from app settings (fallback 7).
   // A series shorter than 2 points can't be charted, so treat it as no data.
   const { data: priceHistory, isLoading: isChartLoading, refetch: refetchPriceHistory } = useGetTokenPriceHistory(token?.coinGeckoId)
-  const chartData = priceHistory.length > 1 ? priceHistory : null
+  // Yield/vault tokens (the API returns a `yieldAsset`) price per SHARE, while the
+  // history series is the underlying's — the two don't line up, so rather than
+  // draw a misleading curve we show the no-data state until a per-share series
+  // exists. Temporary: drop this guard once the API serves vault price history.
+  //
+  // `yieldAsset` is the primary signal — the API sends it only for share-based
+  // vaults, the exact tokens whose price history is in the wrong unit. `!!{}` is
+  // true, so an empty object would blank a plain token's chart: require at least
+  // one own key rather than mere presence.
+  //
+  // isShareBasedProtocol is checked too because the two tags are stored together
+  // but can arrive apart. A token added by an older build carries neither until
+  // the mount refresh backfills them, and that refresh can fail; core's
+  // allow-list then still identifies the vault from `yieldProtocol` alone.
+  // Deliberately NOT a bare `yieldProtocol` test, which would also catch
+  // rebasing receipts (aave-v3 etc.) — their price IS the underlying's, so their
+  // chart is correct and must keep rendering.
+  const isYieldToken = useMemo(() => {
+    const yieldAsset = token?.yieldAsset
+    if (yieldAsset && Object.keys(yieldAsset).length > 0) return true
+    return isShareBasedProtocol(token?.yieldProtocol)
+  }, [token?.yieldAsset, token?.yieldProtocol])
+  const chartData = !isYieldToken && priceHistory.length > 1 ? priceHistory : null
 
   const chainId = token?.chainId
 
-  // On entry, refresh THIS token's chain balance so the hero/holding value isn't
-  // the stale snapshot taken when the row was tapped on the token list. Keyed on
-  // a primitive (chainId), so it fires once per screen rather than on every live
-  // re-render after the fetch commits. The price/chart hooks already refetch
-  // fresh on mount, so this only needs to cover the balance.
+  // Refresh ONLY the token this screen shows. `tokenAddress` takes
+  // refreshAccountTokens' targeted shortcut: a direct RPC read for this one
+  // token instead of the whole chain's Moralis/multicall pipeline. That path
+  // re-prices share-based vaults too, so it is correct for every token type.
+  const contractAddress = token?.contractAddress
+  const refreshThisToken = useCallback(() => {
+    if (!address || !chainId || !contractAddress) return Promise.resolve()
+    return refreshAccountTokens(address, {
+      chainIds: [chainId],
+      tokenAddress: [contractAddress]
+    })
+  }, [address, chainId, contractAddress])
+
+  // On entry, refresh so the hero/holding value isn't the stale snapshot taken
+  // when the row was tapped on the token list. Keyed on primitives, so it fires
+  // once per screen rather than on every live re-render after the fetch commits
+  // (`refreshThisToken` itself is stable for the same reason). The price/chart
+  // hooks already refetch fresh on mount, so this only needs to cover the balance.
   useEffect(() => {
-    if (!address || !chainId) return
-    refreshAccountTokens(address, { chainIds: [chainId] })
-  }, [address, chainId])
+    refreshThisToken()
+  }, [refreshThisToken])
 
   // Pull-to-refresh: reload the balance AND the live price / chart / change data
   // from the API, driving the custom three-dot Lottie spinner while in flight.
@@ -144,18 +182,23 @@ const TokenDetailScreenPage = (_this) => {
     if (!address || !chainId) return
     setRefreshing(true)
     Promise.allSettled([
-      refreshAccountTokens(address, { chainIds: [chainId] }),
+      refreshThisToken(),
       refetchPrice(),
       refetchPriceHistory(),
       refetchPriceChanges()
     ]).finally(() => setRefreshing(false))
-  }, [address, chainId, refetchPrice, refetchPriceHistory, refetchPriceChanges])
+  }, [address, chainId, refreshThisToken, refetchPrice, refetchPriceHistory, refetchPriceChanges])
 
   // Normalize to a fixed-order list of { timeFrame, changePercent }, dropping
   // any timeframe the API didn't return. The 24h value comes from a different
   // source than the rest (token.priceChange24hPct, same as the token name / hero
   // %), so we override just the 24h entry to keep both spots in agreement.
+  //
+  // Hidden for a yield token for the same reason the chart is: these percentages
+  // track the UNDERLYING's price, not the per-share price shown above, so they
+  // would contradict the hero. Empty list ⇒ the row renders nothing.
   const changeList = useMemo(() => {
+    if (isYieldToken) return []
     const byFrame = {}
     priceChanges.forEach((c) => { if (c?.timeFrame) byFrame[c.timeFrame] = c })
     return TIMEFRAME_ORDER
@@ -167,7 +210,7 @@ const TokenDetailScreenPage = (_this) => {
           ? (Number(token.priceChange24hPct) || 0)
           : (Number(c.changePercent) || 0)
       }))
-  }, [priceChanges, token.priceChange24hPct])
+  }, [priceChanges, token.priceChange24hPct, isYieldToken])
 
   const sosialIconList = useMemo(() => ReduxService.getAppSettingByKey?.('SOCIAL_ICON') || {}, [])
 
@@ -175,15 +218,50 @@ const TokenDetailScreenPage = (_this) => {
     const change = Number(token.priceChange24hPct) || 0
     const isNative = !!token.isNative || token.contractAddress === 'native'
     const balance = token.balanceFormatted || 0
-    // Prefer the freshly fetched live price; fall back to the cached snapshot.
+    // Unit price. The token list's own priceUSD normally wins: it is refreshed by
+    // the same pass that produced `valueUSD` below, so the price shown and the
+    // holding shown always come from one snapshot. `livePriceUSD` is otherwise a
+    // fallback for a token the list has no price for (it is fetched on mount and
+    // can be older than Redux — see the valueUSD note).
+    //
+    // With NO balance that agreement is vacuous — `valueUSD` is 0 whichever price
+    // is used — so the fresher number wins instead. This is what a zero-balance
+    // token needs: the balance refresh has no balance to patch, so its stored
+    // price is only as new as the last time it held something, and for a vault
+    // added by an older build it can be the raw UNDERLYING price rather than the
+    // per-share one `livePriceUSD` resolves.
     const livePrice = Number(livePriceUSD)
-    const price = livePrice > 0 ? livePrice : (token.priceUSD || 0)
-    // Keep the holding value coherent with the price shown — recompute it from
-    // the live price when we have one, else fall back to the snapshot value.
-    const valueUSD = livePrice > 0 ? balance * price : (token.valueUSD || 0)
+    const storedPrice = token.priceUSD || 0
+    const hasBalance = balance > 0
+    const price = hasBalance
+      ? (storedPrice > 0 ? storedPrice : (livePrice > 0 ? livePrice : 0))
+      : (livePrice > 0 ? livePrice : storedPrice)
+    // Holding value: the token list's own number whenever it has one, exactly
+    // like TokenRow — that is what keeps the two screens showing the same figure.
+    //
+    // It is NOT recomputed from `livePrice`. For a share-based yield vault the
+    // list stores a per-SHARE priceUSD (valueUSD / shares, see
+    // applyYieldConversions), so `balance x priceUSD` reproduces valueUSD
+    // exactly — but only against the price from the SAME refresh. `livePriceUSD`
+    // comes from react-query and is fetched on mount only (staleTime: 0 marks
+    // data stale, it does not refetch when Redux changes), so as the vault
+    // accrues, refreshAccountTokens raises the stored per-share price while
+    // `livePrice` stays at its mount-time value — multiplying by it pinned the
+    // holding to its opening number while the list kept rising.
+    //
+    // The fallback covers the case where there is no list entry to agree with:
+    // `token` is then the raw navigation snapshot (Redux has no tokens for this
+    // account yet — deep link, freshly restored wallet, or a token built without
+    // a metaKey; see the `token` memo's early return). Showing $0 there while a
+    // price and a balance are both on screen would be plainly wrong, and with no
+    // stored value in play `balance x price` cannot disagree with anything.
+    const valueUSD = token.valueUSD || balance * price
+    // Already the on-chain ticker when one was resolved — the balance pipeline
+    // writes it onto `symbol` before committing (see TokenListV2/symbolOnchain).
+    const symbol = token.symbol || ''
     return {
-      name: token.name || token.symbol || '-',
-      symbol: token.symbol || '',
+      name: token.name || symbol || '-',
+      symbol,
       iconUri: token.iconUrl || null,
       chainId: token.chainId,
       isNative,
@@ -195,7 +273,7 @@ const TokenDetailScreenPage = (_this) => {
       price,
       // Native → symbol; ERC20 → short address (same format used elsewhere).
       contractDisplay: isNative
-        ? (token.symbol || I18n.t('v2.tokenDetail.native'))
+        ? (symbol || I18n.t('v2.tokenDetail.native'))
         : convertAddressArrToString([token.contractAddress || ''], 6, 6)
     }
   }, [token, livePriceUSD])
@@ -213,70 +291,6 @@ const TokenDetailScreenPage = (_this) => {
 
     return true
   }, [settingExchange, display])
-
-  // "Learn more" → open the AI assistant on this token. We hand AISearch a
-  // DIRECT get-token-info call (`directTool`) so it can skip the router/LLM
-  // arg-parsing and run the tool straight away, plus `initialMessage` as the
-  // visible question (and the fallback when the core predates runTool — AISearch
-  // then just sends it through the normal chat() pipeline). Covers every token
-  // shape: ERC20 (exact contract lookup), native coin (symbol/name), unknown
-  // chain, and the no-identifier case (no keyword → no directTool → chat path).
-  const onLearnMore = () => {
-    // Identifier label for the research prompt — kept English (Gemini-facing).
-    const tokenLabel = display.name || display.symbol || 'this token'
-    // Visible chat bubble — show it in the user's app language. Its own fallback
-    // ("this token") is localized too, so the bubble never mixes languages. The
-    // research `prompt` below stays English (forwarded verbatim to Gemini, which
-    // the user never sees); the reply language is pinned separately by AISearch.
-    const displayLabel = display.name || display.symbol || I18n.t('AISearch.thisToken')
-    const userMessage = I18n.t('AISearch.tellMeAboutToken', { value: displayLabel })
-
-    // keyword: ERC20 → exact contract lookup (0x…); native coin (no contract) →
-    // symbol, then name. The tool treats a 0x value as a precise lookup and
-    // anything else as a name/symbol search.
-    const isErc20 = !display.isNative &&
-      typeof token.contractAddress === 'string' &&
-      token.contractAddress.startsWith('0x')
-    const keyword = isErc20 ? token.contractAddress : (display.symbol || display.name || '')
-
-    // chain: this token's OWN chain (may differ from the AISearch wallet chain),
-    // passed as a hex string (e.g. '0x1', '0xa') — the core resolves by hex
-    // chainId. Accept an already-hex value as-is; convert a decimal id to hex.
-    // Omit when missing/blank/invalid so the tool resolves from wallet context
-    // instead of erroring.
-    const chainRaw = display.chainId != null ? String(display.chainId).trim() : ''
-    let chain
-    if (chainRaw) {
-      chain = chainRaw.startsWith('0x')
-        ? chainRaw.toLowerCase()
-        : (Number.isNaN(Number(chainRaw)) ? undefined : `0x${Number(chainRaw).toString(16)}`)
-    }
-
-    // Self-contained research prompt — the tool forwards this verbatim to Gemini
-    // (it does NOT see the user's message), so it must name the token + chain.
-    // Use the human-readable decimal id here (e.g. "1", "10"); `args.chain` below
-    // carries the hex form the core resolves by.
-    const prompt =
-      `Research the ${tokenLabel}${display.symbol ? ` (${display.symbol})` : ''} token` +
-      `${chainRaw ? ` on chain ${chainRaw}` : ''} using up-to-date web sources. ` +
-      'Cover: what it is and its core utility; current USD price, 24h change, market cap, FDV and 24h volume; ' +
-      'recent news or announcements in the last 30 days with dates and sources; the concrete reason behind any ' +
-      'recent price move; on-chain signals such as holder count, liquidity and unusual volume; team or protocol ' +
-      'updates; key risks or red flags; and overall sentiment with a brief, hedged short-term outlook.'
-
-    // No usable identifier (no contract, symbol or name) → skip the direct tool
-    // and let AISearch send `initialMessage` through the normal pipeline.
-    const directTool = keyword
-      ? { name: 'get-token-info', args: { keyword, ...(chain ? { chain } : {}), prompt } }
-      : null
-
-    NavigationActions.navigate(NAME_SCREEN.aiSearch, {
-      address,
-      sessionKey: AI_SEARCH_SESSION.token,
-      initialMessage: userMessage,
-      directTool
-    })
-  }
 
   // Single up/down direction (24h change) shared by price, chart and the % text.
   const chartColor = display.isPriceUp ? Colors.GREEN_TEXT : Colors.RED_TEXT
@@ -390,7 +404,9 @@ const TokenDetailScreenPage = (_this) => {
   )
 
   const renderChart = () => {
-    if (isChartLoading && !chartData) {
+    // A yield token goes straight to "no data" — no spinner first, since the
+    // in-flight history request can never produce a chart for it.
+    if (isChartLoading && !chartData && !isYieldToken) {
       return (
         <View style={[styles.chartPlaceholder, { alignItems: 'center', justifyContent: 'center' }]}>
           <MyDotsLoading variant='small' />
@@ -574,9 +590,12 @@ const TokenDetailScreenPage = (_this) => {
 
   const renderOperations = () => (
     <View style={styles.operationList}>
-      <MyText variant='subTitle' className='text-white' style={{ marginBottom: pixelByHeight(12) }}>{I18n.t('v2.tokenDetail.tokenOperation')}</MyText>
+      <MyText variant='subTitle' className='text-white' style={{ marginBottom: pixelByHeight(12), opacity: isViewOnly ? 0.5 : 1 }}>{I18n.t('v2.tokenDetail.tokenOperation')}</MyText>
 
+      {/* All three operations need a signature, so a view-only account gets them
+          dimmed + unpressable (MyRowItem's `disable` does both). */}
       <OperationRow
+        disabled={isViewOnly}
         icon={images.UIV2.icons.home.send}
         title={I18n.t('Initial.send')}
         onPress={onSend}
@@ -585,7 +604,7 @@ const TokenDetailScreenPage = (_this) => {
         isHideMenuForAppleReview()
           ? null : (
             <OperationRow
-              disabled={disableExchange}
+              disabled={isViewOnly || disableExchange}
               icon={images.UIV2.icons.swapAndSend}
               title={I18n.t('v2.swapAndSend.title')}
               onPress={() => onSwapAndSend({ ...token, ...display })}
@@ -596,7 +615,7 @@ const TokenDetailScreenPage = (_this) => {
         isHideMenuForAppleReview()
           ? null : (
             <OperationRow
-              disabled={disableExchange}
+              disabled={isViewOnly || disableExchange}
               icon={images.UIV2.icons.exchange}
               title={I18n.t('Initial.exchange')}
               onPress={() => onExchange({ ...token, ...display })}
@@ -636,24 +655,6 @@ const TokenDetailScreenPage = (_this) => {
           )}
 
         />
-        {/* Pinned AI prompt — opens the assistant pre-asked about this token.
-            Same liquid-glass treatment as the AI-search button in FooterAISearch. */}
-        <BottomGradientBar style={{ paddingHorizontal: 0 }}>
-          <TouchableOpacity
-            activeOpacity={0.8}
-            style={styles.learnMoreWrap}
-            onPress={onLearnMore}
-          >
-            <GlassView interactive effect='clear' style={styles.learnMoreWrap}>
-              <View style={styles.learnMoreInner}>
-                <MyIcon uri={images.UIV2.icons.aiChat} variant='small' style={styles.learnMoreIcon} />
-                <MyText className='text-medium'>
-                  {I18n.t('AISearch.learnMoreAbout', { value: display.symbol || display.name })}
-                </MyText>
-              </View>
-            </GlassView>
-          </TouchableOpacity>
-        </BottomGradientBar>
       </View>
 
     </MyViewPage>

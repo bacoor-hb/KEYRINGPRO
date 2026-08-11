@@ -57,6 +57,21 @@ const HistoryWCPayItem = ({ item, isFirst, isLast }) => {
     return name
   }
 
+  const getTimeStamp = () => {
+    if (item.block_timestamp) {
+      return moment(item.block_timestamp).format('DD/MM/YYYY HH:mm')
+    }
+
+    // time expired in 15 minutes:
+    // NOTE: *1000 =>convert second to milliseconds
+    // NOTE: - 15 * 60 * 1000 =>subtract 15 minutes from the expiration time
+    if (item?.info?.expiresAt) {
+      return moment(item?.info?.expiresAt * 1000 - 15 * 60 * 1000).format('DD/MM/YYYY HH:mm')
+    }
+
+    return moment().format('DD/MM/YYYY HH:mm')
+  }
+
   return (
     <MyRowItem
       noPadding
@@ -64,7 +79,7 @@ const HistoryWCPayItem = ({ item, isFirst, isLast }) => {
       <View style={[styles.container, isFirst && { paddingTop: pixelByHeight(0) }]}>
         <View style={styles.itemRow}>
           <MyText className='text-low'>{I18n.t('TxTransferHistoryScreen.timeStamp')}</MyText>
-          <MyText>{moment(item.block_timestamp).format('DD/MM/YYYY HH:mm')}</MyText>
+          <MyText>{getTimeStamp()}</MyText>
         </View>
 
         <View style={styles.itemRow}>
@@ -89,7 +104,18 @@ const HistoryWCPayItem = ({ item, isFirst, isLast }) => {
           <MyText className='text-low'>{I18n.t('TxTransferHistoryScreen.value')}</MyText>
           <View style={styles.valueRow}>
             <TokenIconWithChain tokenIconUri={iconToken} chainId={item.chainId} />
-            <MyBalance fontWeight={700} variant='subTitle' fractionDigits={18} value={getAmountPaid()} />
+            <View
+              style={{
+                flex: 1
+              }}>
+              <MyBalance
+                ticker
+                fontWeight={700}
+                variant='subTitle'
+                fractionDigits={18}
+                value={getAmountPaid()} />
+            </View>
+
           </View>
         </View>
       </View>

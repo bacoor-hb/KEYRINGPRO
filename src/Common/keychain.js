@@ -12,6 +12,10 @@ import { hasPassword as hasVaultPassword, wipeVault } from './secureVault'
 const WRAP_CIPHER = 'aes-256-gcm'
 const WRAP_IV_LENGTH = 12
 
+// Biometry kinds reported by react-native-keychain. Read through a local fallback
+// so a missing/renamed enum can never crash a render path that asks for the label.
+const BIOMETRY = Keychain.BIOMETRY_TYPE || {}
+
 // Keychain entry name + account slot for the biometric-protected user password.
 const VAULT_USER_PASSWORD = 'VAULT_USER_PASSWORD'
 const VAULT_USER_PASSWORD_ACCOUNT = 'VAULT_USER_PASSWORD'
@@ -64,6 +68,94 @@ export const checkCanImplyAuthentication = async () => {
     return canImplyAuthentication
   } catch (error) {
     return false
+  }
+}
+
+/**
+ * What device-level authentication this device can actually perform right now.
+ *
+ * `getSupportedBiometryType()` is enrollment-aware on both platforms — it returns
+ * null when nothing is usable (Face ID never set up, fingerprints removed, broken
+ * sensor), not only when the hardware is missing. So it is the right signal for
+ * "should we even offer the Face ID / biometric toggle".
+ *
+ * Availability differs per platform because of how ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE
+ * behaves (see savePasswordWithBiometric):
+ * - iOS: falls back to the device passcode, so a passcode-only iPhone (no biometry
+ *   enrolled) can still use the feature → canImplyAuthentication is the deciding flag.
+ * - Android: the passcode-only fallback needs API 30+ and cannot be probed from JS,
+ *   so we conservatively require enrolled biometry.
+ *
+ * @returns {Promise<{ biometryType: string|null, canImplyAuthentication: boolean, isAvailable: boolean }>}
+ */
+export const getDeviceAuthInfo = async () => {
+  const biometryType = await getBiometryType()
+  const canImplyAuthentication = await checkCanImplyAuthentication()
+  const isAvailable = ISIOS ? !!canImplyAuthentication : !!biometryType
+
+  return {
+    biometryType,
+    canImplyAuthentication: !!canImplyAuthentication,
+    isAvailable
+  }
+}
+
+/**
+ * Which biometry is enrolled, or null. Prompt-free and cheap — this is the single
+ * call to use when only the KIND is needed (e.g. picking an icon), so the unlock
+ * path doesn't pay for the extra availability check of getDeviceAuthInfo.
+ * @returns {Promise<string|null>} a Keychain.BIOMETRY_TYPE value or null
+ */
+export const getBiometryType = async () => {
+  try {
+    // Keychain.BIOMETRY_TYPE = TouchID | FaceID | OpticID | Fingerprint | Face | Iris
+    return (await Keychain.getSupportedBiometryType()) || null
+  } catch (error) {
+    return null
+  }
+}
+
+/**
+ * Face-like biometry (Face ID / Android face unlock / Optic ID) — used to pick the
+ * face icon vs the generic device-auth icon.
+ * @param {string|null} biometryType
+ * @returns boolean
+ */
+export const isFaceBiometryType = (biometryType) => {
+  // Guard first: these helpers run inside render (incl. UnlockScreen), so they must
+  // never throw on a missing type or an unexpected enum shape.
+  if (!biometryType) return false
+  return (
+    biometryType === BIOMETRY.FACE_ID ||
+    biometryType === BIOMETRY.FACE ||
+    biometryType === BIOMETRY.OPTIC_ID
+  )
+}
+
+/**
+ * Label for the device-auth toggle, matching what the device will actually prompt
+ * for. A null biometryType means no biometry is enrolled — on iOS the toggle still
+ * works through the device passcode, hence the passcode wording.
+ * @param {string|null} biometryType
+ * @returns string
+ */
+export const getDeviceAuthLabel = (biometryType) => {
+  if (!biometryType) return I18n.t('v2.security.turnDevicePasscode')
+  switch (biometryType) {
+    case BIOMETRY.FACE_ID:
+      return I18n.t('v2.security.turnFaceId')
+    case BIOMETRY.TOUCH_ID:
+      return I18n.t('v2.security.turnTouchId')
+    case BIOMETRY.OPTIC_ID:
+      return I18n.t('v2.security.turnOpticId')
+    case BIOMETRY.FINGERPRINT:
+      return I18n.t('v2.security.turnFingerprint')
+    case BIOMETRY.FACE:
+    case BIOMETRY.IRIS:
+      return I18n.t('v2.security.turnBiometrics')
+    default:
+      // Unknown kind reported by a future lib version → generic biometric wording.
+      return I18n.t('v2.security.turnBiometrics')
   }
 }
 
@@ -205,11 +297,22 @@ export const clearBiometricPassword = async () => {
 export const savePasswordWithBiometric = async (password) => {
   try {
     const wrapped = wrapPassword(password)
+    // Ask for an access control the device can actually satisfy. With no enrolled
+    // biometry (never set up, reset, or Face ID denied for this app), an ACL that
+    // still carries the biometry flag can be rejected on write or read back without
+    // ever presenting a prompt — the user then sees nothing happen. Falling back to
+    // DEVICE_PASSCODE keeps a working passcode-protected copy on those devices.
+    // Devices WITH enrolled biometry keep the previous ACL exactly as before.
+    const biometryType = await getBiometryType()
     const saved = await Keychain.setInternetCredentials(
       VAULT_USER_PASSWORD,
       VAULT_USER_PASSWORD_ACCOUNT,
       wrapped,
-      { accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE }
+      {
+        accessControl: biometryType
+          ? Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE
+          : Keychain.ACCESS_CONTROL.DEVICE_PASSCODE
+      }
     )
     if (!saved) return false
 

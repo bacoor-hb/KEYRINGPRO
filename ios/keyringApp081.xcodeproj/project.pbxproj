@@ -12,11 +12,13 @@
 		296D7A52A155E98F1AC4B113 /* Pods_keyringApp081.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 174723789278B5333DA25F45 /* Pods_keyringApp081.framework */; };
 		30B90AB8CAE14375A4602562 /* LINESeedSansTH_A_Rg.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 58FF8D67DC4743E38D5A0662 /* LINESeedSansTH_A_Rg.ttf */; };
 		38142142040445A2B0639803 /* LINESeedJP_A_TTF_Bd.ttf in Resources */ = {isa = PBXBuildFile; fileRef = F30C210C8C054FE59ABBDBB5 /* LINESeedJP_A_TTF_Bd.ttf */; };
+		53868E716DCA41B104BD339A /* RCTPlatformInfo.m in Sources */ = {isa = PBXBuildFile; fileRef = 437E8B1D9A5BE08EE8C5BABB /* RCTPlatformInfo.m */; };
 		6426B08E8F874301802291B1 /* BootSplash.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A0F3D84FD46A4201BD2A3C3C /* BootSplash.storyboard */; };
 		6EB73444A72A488F82B66107 /* LINESeedKR-Bd.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 6A6DCDF57056476CBC395FE0 /* LINESeedKR-Bd.ttf */; };
 		72BC91406F97413C991E332C /* LINESeedTW_TTF_Bd.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 387871410011458FBDB4DF80 /* LINESeedTW_TTF_Bd.ttf */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		86DB651A2CB54C04ADF671E2 /* Geist-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA99F88591C64F86A54607B5 /* Geist-Bold.ttf */; };
+		9ABCDC82806F1CEA7C65DC67 /* KeyboardAssistantBarHider.m in Sources */ = {isa = PBXBuildFile; fileRef = 876A252CE47F8ABFE234AC24 /* KeyboardAssistantBarHider.m */; };
 		A36F4D91898247A3998B04BB /* LINESeedJP_A_TTF_Rg.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 52D471D7B2114A6596C8A5E9 /* LINESeedJP_A_TTF_Rg.ttf */; };
 		B8A2C6390CC44C11BE457341 /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4B4E5CB020FE493085ED518F /* Colors.xcassets */; };
 		B8AA092EEF3C487F8F58A63D /* Geist-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 90B4536E39B9413FB35A3954 /* Geist-Medium.ttf */; };
@@ -37,6 +39,7 @@
 		174723789278B5333DA25F45 /* Pods_keyringApp081.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_keyringApp081.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		387871410011458FBDB4DF80 /* LINESeedTW_TTF_Bd.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = LINESeedTW_TTF_Bd.ttf; path = ../src/Assets/Font/TW/LINESeedTW_TTF_Bd.ttf; sourceTree = "<group>"; };
 		3B4392A12AC88292D35C810B /* Pods-keyringApp081.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-keyringApp081.debug.xcconfig"; path = "Target Support Files/Pods-keyringApp081/Pods-keyringApp081.debug.xcconfig"; sourceTree = "<group>"; };
+		437E8B1D9A5BE08EE8C5BABB /* RCTPlatformInfo.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = RCTPlatformInfo.m; sourceTree = "<group>"; };
 		4B4E5CB020FE493085ED518F /* Colors.xcassets */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = folder.assetcatalog; name = Colors.xcassets; path = keyringApp081/Colors.xcassets; sourceTree = "<group>"; };
 		52D471D7B2114A6596C8A5E9 /* LINESeedJP_A_TTF_Rg.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = LINESeedJP_A_TTF_Rg.ttf; path = ../src/Assets/Font/JP/LINESeedJP_A_TTF_Rg.ttf; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-keyringApp081.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-keyringApp081.release.xcconfig"; path = "Target Support Files/Pods-keyringApp081/Pods-keyringApp081.release.xcconfig"; sourceTree = "<group>"; };
@@ -44,10 +47,12 @@
 		6A6DCDF57056476CBC395FE0 /* LINESeedKR-Bd.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "LINESeedKR-Bd.ttf"; path = "../src/Assets/Font/KR/LINESeedKR-Bd.ttf"; sourceTree = "<group>"; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = keyringApp081/AppDelegate.swift; sourceTree = "<group>"; };
 		7FD408DB6F8D4D98AEEE155C /* Geist-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "Geist-Regular.ttf"; path = "../src/Assets/Font/en/Geist-Regular.ttf"; sourceTree = "<group>"; };
+		876A252CE47F8ABFE234AC24 /* KeyboardAssistantBarHider.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = KeyboardAssistantBarHider.m; sourceTree = "<group>"; };
 		90B4536E39B9413FB35A3954 /* Geist-Medium.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "Geist-Medium.ttf"; path = "../src/Assets/Font/en/Geist-Medium.ttf"; sourceTree = "<group>"; };
 		A0F3D84FD46A4201BD2A3C3C /* BootSplash.storyboard */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = BootSplash.storyboard; path = keyringApp081/BootSplash.storyboard; sourceTree = "<group>"; };
 		AA99F88591C64F86A54607B5 /* Geist-Bold.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "Geist-Bold.ttf"; path = "../src/Assets/Font/en/Geist-Bold.ttf"; sourceTree = "<group>"; };
 		C6208AF6897542148E5ECF05 /* LINESeedSansTH_A_Bd.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = LINESeedSansTH_A_Bd.ttf; path = ../src/Assets/Font/TH/LINESeedSansTH_A_Bd.ttf; sourceTree = "<group>"; };
+		DF218389297737CBA6559FCF /* RCTPlatformInfo.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = RCTPlatformInfo.h; sourceTree = "<group>"; };
 		E034C0D42E866CE1008E611C /* RCTMinimizer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RCTMinimizer.h; sourceTree = "<group>"; };
 		E034C0D52E866CE1008E611C /* RCTMinimizer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RCTMinimizer.m; sourceTree = "<group>"; };
 		E0BAAA462E7952C10015756A /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
@@ -128,6 +133,16 @@
 			path = "";
 			sourceTree = "<group>";
 		};
+		4CA83B603A1AE17B46EF4FC9 /* RCTPlatformInfo */ = {
+			isa = PBXGroup;
+			children = (
+				DF218389297737CBA6559FCF /* RCTPlatformInfo.h */,
+				437E8B1D9A5BE08EE8C5BABB /* RCTPlatformInfo.m */,
+			);
+			name = RCTPlatformInfo;
+			path = RCTPlatformInfo;
+			sourceTree = "<group>";
+		};
 		832341AE1AAA6A7D00B99B32 /* Libraries */ = {
 			isa = PBXGroup;
 			children = (
@@ -183,8 +198,19 @@
 			isa = PBXGroup;
 			children = (
 				E034C0D62E866CE1008E611C /* RCTMinimizer */,
+				4CA83B603A1AE17B46EF4FC9 /* RCTPlatformInfo */,
+				FEF86D1A740A5FDA7B416928 /* KeyboardAssistantBar */,
 			);
 			path = NativeModules;
+			sourceTree = "<group>";
+		};
+		FEF86D1A740A5FDA7B416928 /* KeyboardAssistantBar */ = {
+			isa = PBXGroup;
+			children = (
+				876A252CE47F8ABFE234AC24 /* KeyboardAssistantBarHider.m */,
+			);
+			name = KeyboardAssistantBar;
+			path = KeyboardAssistantBar;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -378,6 +404,8 @@
 			files = (
 				E034C0D82E866CE1008E611C /* RCTMinimizer.m in Sources */,
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
+				53868E716DCA41B104BD339A /* RCTPlatformInfo.m in Sources */,
+				9ABCDC82806F1CEA7C65DC67 /* KeyboardAssistantBarHider.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -424,7 +452,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 6.0.0;
+				MARKETING_VERSION = 6.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -453,7 +481,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 6.0.0;
+				MARKETING_VERSION = 6.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",

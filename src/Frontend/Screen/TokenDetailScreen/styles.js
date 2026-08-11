@@ -110,25 +110,6 @@ const createStyles = () => {
       // paddingVertical: pixelByHeight(2)
       paddingHorizontal: pixelByWidth(12)
     },
-    // Pinned "Learn more about X" AI pill at the bottom of the screen — liquid
-    // glass treatment matching the AI-search button (FooterAISearch).
-    learnMoreWrap: {
-      height: getSizeImgSquare('large'),
-      borderRadius: 24
-    },
-    learnMoreInner: {
-      flex: 1,
-      height: '100%',
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: pixelByWidth(8),
-      paddingHorizontal: pixelByWidth(16)
-    },
-    learnMoreIcon: {
-      width: getSizeImgSquare('small'),
-      height: getSizeImgSquare('small')
-    },
     rankPillText: {
       color: Colors.TEXT_MEDIUM
     },

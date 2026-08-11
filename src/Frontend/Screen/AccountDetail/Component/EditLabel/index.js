@@ -38,7 +38,7 @@ const EditLabel = ({ _this, account: accountProp, initialName, onSave }) => {
         />
 
         <InputCustom
-          typeInput='area'
+          // typeInput='area'
           placeholder={I18n.t('v2.accountDetail.enterNewLabel')}
           defaultValue=''
           value={name}

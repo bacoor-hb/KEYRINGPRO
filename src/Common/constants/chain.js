@@ -213,7 +213,7 @@ export const SUPPORTED_BLOCKCHAIN_DATA = {
     linkScanHash: 'https://megaeth.blockscout.com/tx/',
     linkScan: 'https://megaeth.blockscout.com/address/',
     linkScanTokenHolding: 'https://megaeth.blockscout.com/address/',
-    linkProvider: 'https://rpc-megaeth-mainnet.globalstake.io',
+    linkProvider: 'https://mainnet.megaeth.com/rpc',
     chainId: 4326,
     icon: images.UIV2.defaultChains[4326],
     name: 'MegaETH',
@@ -329,6 +329,73 @@ export const SUPPORTED_CHAINS_BY_SERVICE_MORALIS = {
   143: 'monad' // Monad Mainnet |
 }
 
+// Networks the Alchemy PORTFOLIO API (assets/tokens/by-address) accepts, keyed by
+// chainId.
+//
+// Position in the routing (see balanceSourcesFor in Services/TokenListV2):
+//   - chain ALSO in SUPPORTED_CHAINS_BY_SERVICE_MORALIS → Alchemy is the FALLBACK
+//   - chain NOT in Moralis                              → Alchemy is the PRIMARY
+//     source, replacing a per-token RPC scan with one API call.
+//
+// This is NOT the same set as ALCHEMY_ENDPOINT (common/constants/alchemy), which
+// lists JSON-RPC NODE networks for the tx-history feature. The two are gated
+// differently — measured on a live key: node URLs return 403 for any chain not
+// enabled on the account, while the Portfolio API answers for every network
+// regardless. So never derive one map from the other.
+//
+// EVERY entry below was verified against the live endpoint, on three axes,
+// because a wrong slug here silently shows ANOTHER CHAIN'S balances:
+//   1. the slug answers 200 (flow-, moonbeam- and sei-mainnet answer
+//      `Unsupported network` despite Alchemy running nodes for them);
+//   2. the chainId's name in the chain list matches the slug;
+//   3. the chain's native symbol matches the Keyring token list's native entry —
+//      the Alchemy path matches native BY SYMBOL, so a mismatch would bury the
+//      user's native balance in the Hidden list.
+//
+// DELIBERATELY EXCLUDED — 16507. ALCHEMY_ENDPOINT maps it to `gensyn-mainnet`,
+// but 16507 is **Genesys Network** (native GSYS, gchainexplorer.genesys.network)
+// while Gensyn is an unrelated project. That mapping is wrong; copying it here
+// would have priced one chain's wallet with another chain's balances. The
+// tx-history feature still carries the bad entry — fix it there separately.
+export const SUPPORTED_CHAINS_BY_SERVICE_ALCHEMY = {
+  // Also served by Moralis → Alchemy is the fallback here.
+  1: 'eth-mainnet',
+  10: 'opt-mainnet',
+  56: 'bnb-mainnet',
+  100: 'gnosis-mainnet',
+  137: 'polygon-mainnet',
+  143: 'monad-mainnet',
+  2020: 'ronin-mainnet',
+  8453: 'base-mainnet',
+  42161: 'arb-mainnet',
+  43114: 'avax-mainnet',
+  59144: 'linea-mainnet',
+
+  // Not served by Moralis → Alchemy is the PRIMARY source. Before this, each of
+  // these read one balance per LISTED token over RPC, which is what pushed the
+  // paid RPC past its per-second limit.
+  30: 'rootstock-mainnet',
+  130: 'unichain-mainnet',
+  // Alchemy lists this one as "DATA Network"; the app still calls it Story.
+  // Same chain — native symbol DATA on both sides, explorer storyscan.xyz.
+  1514: 'story-mainnet',
+  232: 'lens-mainnet',
+  324: 'zksync-mainnet',
+  360: 'shape-mainnet',
+  480: 'worldchain-mainnet',
+  999: 'hyperliquid-mainnet',
+  1868: 'soneium-mainnet',
+  2741: 'abstract-mainnet',
+  4663: 'robinhood-mainnet',
+  33139: 'apechain-mainnet',
+  42220: 'celo-mainnet',
+  57073: 'ink-mainnet',
+  80094: 'berachain-mainnet',
+  81457: 'blast-mainnet',
+  534352: 'scroll-mainnet',
+  7777777: 'zora-mainnet'
+}
+
 // chainIds where the canonical Multicall3 contract (0xcA11bde05977b3631167028862bE2a173976CA11)
 // is deployed — full list from https://www.multicall3.com/deployments
 // (source: https://github.com/mds1/multicall deployments.json). Used to decide
@@ -377,7 +444,8 @@ export const CHAINS_SUPPORT_LIQUIDITY_POOL_UNISWAP = [
   43114, // avax
   42161, // arbitrum
   8453, // base
-  130 // unichain
+  130, // unichain
+  4663 // robinhood
 ]
 export const CHAINS_SUPPORT_LIQUIDITY_POOL_PANCAKESWAP = [
   1, // ether
@@ -395,7 +463,8 @@ export const LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_UNISWAP = {
   42161: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88', // arbitrum
   10: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88', // optimism
   8453: '0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1', // base
-  130: '0x943e6e07a7e8e791dafc44083e54041d743c46e9' // unichain
+  130: '0x943e6e07a7e8e791dafc44083e54041d743c46e9', // unichain
+  4663: '0x73991a25c818bf1f1128deaab1492d45638de0d3' // robinhood
 }
 export const LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_PANCAKESWAP = {
   1: '0x46A15B0b27311cedF172AB29E4f4766fbE7F4364', // ether

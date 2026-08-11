@@ -28,6 +28,14 @@ import {
 import { privateKeyToAccount } from 'viem/accounts'
 const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11'
 
+// trackingTx outcomes. Thrown as Error messages so callers can tell a real
+// on-chain failure (reverted) from "we simply could not confirm" (timeout) and
+// from an abandoned poll (cancelled) — three states that must NOT be reported
+// to the user as the same thing.
+export const TX_TRACK_REVERTED = 'TX_REVERTED'
+export const TX_TRACK_TIMEOUT = 'TX_TIMEOUT'
+export const TX_TRACK_CANCELLED = 'TX_TRACKING_CANCELLED'
+
 // Deterministic node errors. If one RPC returns any of these the request is
 // invalid / unaffordable (e.g. a tx with insufficient funds or a stale nonce) —
 // every other RPC will reject it identically, and failing over would only
@@ -48,6 +56,18 @@ const NON_FAILOVER_ERRORS = [
   ExecutionRevertedError
 ]
 
+// Same idea as NON_FAILOVER_ERRORS, but matched by message: viem ships no error
+// class for these. The node already holds a tx for this (sender, nonce) pair, so
+// every other RPC would reject the re-broadcast identically. Without this entry
+// fallback() sprays the same signed tx across every endpoint and then surfaces
+// the LAST node's error instead of the real reason.
+// Deliberately NOT matching a bare "transaction underpriced" (no "replacement"):
+// that one means the price is below THIS node's floor, and another RPC with a
+// lower floor may well accept it — there, failing over is the right move.
+const NON_FAILOVER_MESSAGES = [
+  /replacement transaction underpriced/i
+]
+
 // shouldThrow for every fallback() transport. Returns true to stop failover
 // (throw immediately). Keeps viem's default stops (user rejected / tx rejected)
 // and adds the deterministic node rejections above. Only genuine
@@ -62,18 +82,11 @@ const shouldStopFailover = (error) => {
     return true
   }
   const message = `${error?.details || ''} ${error?.message || ''}`
-  return NON_FAILOVER_ERRORS.some((err) => err.nodeMessage?.test(message))
+  return NON_FAILOVER_ERRORS.some((err) => err.nodeMessage?.test(message)) ||
+    NON_FAILOVER_MESSAGES.some((pattern) => pattern.test(message))
 }
 
 class ViemWeb3 {
-  static getChainSettingInApp (chainId) {
-    const data = settings().web3Link
-    const chain = Object.values(data).find(chain => {
-      return chain.chainId?.toString() === chainId?.toString()
-    })
-    return chain
-  }
-
   /**
  * Get list RPC sorted by priority
  * @param {*} chainId
@@ -81,8 +94,7 @@ class ViemWeb3 {
  * @Note Priority: rpcCustom > rpcUrlPaid > rpcMoreBackup
  */
   static getListRpc (chainId) {
-    const chainSettingInApp = this.getChainSettingInApp(chainId)
-    const rpcUrlPaid = chainSettingInApp?.linkProvider || ''
+    const rpcUrlPaid = settings().rpcUrlByChainId?.[chainId] || ''
 
     const chainInfo = getChainInfo(chainId)
     const rpcCustom = chainInfo?.rpcCustom || ''
@@ -129,12 +141,37 @@ class ViemWeb3 {
     return wallet
   }
 
-  static async trackingTx (chainId, hash, timeout = 160000) {
+  /**
+   * Poll for a tx receipt until it settles. Preferred over viem's
+   * waitForTransactionReceipt for anything driven by a screen, because that one
+   * watches EVERY block (emitMissed) and, while the receipt is missing, fetches
+   * each full block to look for a replacement tx — and cannot be cancelled. This
+   * loop only calls eth_getTransactionReceipt and checks `shouldStop` between
+   * polls, so closing the screen actually stops the RPC traffic.
+   *
+   * @param {number|string} chainId
+   * @param {string} hash
+   * @param {number} timeout    ms to keep polling before giving up (default 22.5s)
+   * @param {Function} [shouldStop] returns true to abandon the poll (screen gone)
+   * @returns {Promise<object>} the receipt, when the tx succeeded
+   * @throws {Error} TX_REVERTED | TX_TIMEOUT | TX_TRACKING_CANCELLED
+   */
+  static async trackingTx (chainId, hash, timeout = 1500 * 15, shouldStop) {
+    // With no RPC for this chain getPublicClient builds fallback([]), whose very
+    // first request throws a TypeError on the missing transport — and the
+    // "receipt not found yet" catch below would swallow it, spinning out the
+    // whole timeout doing nothing. Give up straight away instead.
+    if (!this.getListRpc(chainId).length) throw new Error(TX_TRACK_TIMEOUT)
+
     const client = this.getPublicClient(chainId)
     const interval = 1500
-    let elapsedTime = 0
+    const startTime = Date.now()
 
-    while (elapsedTime < timeout) {
+    while (Date.now() - startTime < timeout) {
+      // Checked OUTSIDE the try below, so the cancel isn't swallowed by the
+      // "receipt not found yet" handler and mistaken for a still-pending tx.
+      if (shouldStop?.()) throw new Error(TX_TRACK_CANCELLED)
+
       try {
         const receipt = await client.getTransactionReceipt({ hash })
 
@@ -142,29 +179,42 @@ class ViemWeb3 {
           if (receipt.status === 'success') {
             return receipt
           }
+
+          if (receipt.status === 'reverted') {
+            throw new Error(TX_TRACK_REVERTED)
+          }
         }
       } catch (error) {
-        if (error.message === 'TX_REVERTED') throw error
+        // viem THROWS TransactionReceiptNotFoundError for a tx that is still
+        // pending — the normal case here, so swallow it and poll again. Without
+        // this catch the loop dies on the very first poll of any unmined tx.
+        if (error?.message === TX_TRACK_REVERTED) throw error
       }
 
-      elapsedTime += interval
       await sleep(interval)
     }
 
-    throw new Error('TX_TIMEOUT')
+    throw new Error(TX_TRACK_TIMEOUT)
   }
 
   /**
    * @param {} chainId
    * @param {Array<{abi: Array, address: string, functionName: string, args?: Array}>} calls
+   * @param {{batchSize?: number}} [options] `batchSize` is viem's calldata-bytes
+   *   chunk size (default 1024); it splits `calls` into that many bytes per
+   *   eth_call and fires every chunk in parallel with no throttle. Pass 0 to
+   *   disable that split and send `calls` as ONE request — only do this when the
+   *   caller already chunks and meters the batches itself. Omitted elsewhere, so
+   *   existing callers keep viem's default behavior.
    * @returns
    */
-  static readMulticall (chainId, calls = []) {
+  static readMulticall (chainId, calls = [], options = {}) {
     const client = this.getPublicClient(chainId)
     const result = client.multicall({
       contracts: calls,
       allowFailure: true,
-      multicallAddress: MULTICALL3_ADDRESS
+      multicallAddress: MULTICALL3_ADDRESS,
+      ...(options.batchSize != null ? { batchSize: options.batchSize } : {})
     })
     return result
   }
@@ -367,8 +417,16 @@ class ViemWeb3 {
       ...txRequest
     })
 
-    callback?.(hash)
-    const receipt = await this.trackingTx(chainId, hash)
+    if (hash && hash?.startsWith('0x')) {
+      callback?.(hash)
+    }
+
+    const receipt = await walletClient.waitForTransactionReceipt({ hash })
+
+    if (receipt?.status === 'reverted') {
+      throw new Error('TX_FAILED')
+    }
+
     return receipt.transactionHash
   }
 }

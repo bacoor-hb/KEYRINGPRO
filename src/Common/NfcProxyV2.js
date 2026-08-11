@@ -6,7 +6,7 @@ import NfcManager, {
 } from 'react-native-nfc-manager'
 import I18n from 'assets/Lang'
 import NFCSettingPopup from 'frontend/Components/NFCSettingPopup'
-import { checkNFCDataFormat, convertNFCPayloadTextToReadableText, decryptBackupFileContent, getAddressFromNFCData, getPrivateKeyHashFromNFCData, logDebug, sleep } from './function'
+import { checkNFCDataFormat, convertNFCPayloadTextToReadableText, decryptBackupFileContent, getAddressFromNFCData, getPrivateKeyHashFromNFCData, lowerCase, sleep } from './function'
 import LoadingScanNFCPopup from 'frontend/Screen/KeyCardOperation/components/LoadingScanNFCPopup'
 import ConfirmWriteNFCPopup from 'frontend/Screen/KeyCardOperation/components/ConfirmWriteNFCPopup'
 import { getKeyCardPassword } from './wallet'
@@ -427,9 +427,9 @@ class NfcProxyV2 {
           const dataEncode = getPrivateKeyHashFromNFCData(privateKeyHash)
           privateKey = await this.decryptDataNfc(dataEncode, passwordFile || '')
 
-          if (addressFromNFCData !== userAddress || !privateKey) {
+          if (lowerCase(addressFromNFCData) !== lowerCase(userAddress) || !privateKey) {
             privateKey = ''
-            this.showAlert(I18n.t('NFC.nfcNotMatchAccountErr'), '', { type: true, timeout: 4000 })
+            this.baseContainer.showAlert(I18n.t('NFC.nfcNotMatchAccountErr'), '', { type: true, timeout: 4000 })
             NfcManager.cancelTechnologyRequest()
           }
         } else {
@@ -443,7 +443,7 @@ class NfcProxyV2 {
         })
       return privateKey
     } catch (error) {
-      this.showAlert(I18n.t('NFC.nfcNotMatchAccountErr'), '', { type: true, timeout: 4000 })
+      this.baseContainer.showAlert(I18n.t('NFC.nfcNotMatchAccountErr'), '', { type: true, timeout: 4000 })
       NfcManager.cancelTechnologyRequest()
       return ''
     }
@@ -497,6 +497,15 @@ class NfcProxyV2 {
       } catch (error) {
         return ''
       }
+    }
+  }
+
+  detectVersionFileNfc= (content) => {
+    try {
+      const parsed = JSON.parse(content)
+      return parsed?.version || 1
+    } catch (error) {
+      return 1
     }
   }
 }

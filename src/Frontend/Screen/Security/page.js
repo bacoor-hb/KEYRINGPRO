@@ -31,6 +31,14 @@ const SecurityPage = (_this) => {
 
   const [isDeviceAuthOn, setIsDeviceAuthOn] = useState(false)
 
+  // Hide the toggle on devices that can't authenticate (no biometry enrolled and,
+  // on iOS, no passcode). Still show it while a biometric copy exists, so a user
+  // whose biometry disappeared can always turn the feature back off.
+  // Read from state, not the optimistic local isDeviceAuthOn: that one flips before
+  // handleToggleDeviceAuth resolves, which would unmount the row mid-interaction
+  // (while its confirm drawer is opening) and bring it back on failure.
+  const showDeviceAuthRow = !!state?.isBiometricAvailable || !!state?.isTurnFaceId
+
   useEffect(() => {
     if (state?.isTurnFaceId !== undefined) setIsDeviceAuthOn(!!state.isTurnFaceId)
   }, [state?.isTurnFaceId])
@@ -160,24 +168,26 @@ const SecurityPage = (_this) => {
 
               </MySelectDropdown>
 
-              <MyRowItem
-                lefIcon={(
-                  <View style={styles.containerLeftItem}>
-                    <MyIcon uri={images.UIV2.security.deviceAuthen} />
+              {showDeviceAuthRow && (
+                <MyRowItem
+                  lefIcon={(
+                    <View style={styles.containerLeftItem}>
+                      <MyIcon uri={images.UIV2.security.deviceAuthen} />
+                    </View>
+                  )}
+                  onPress={handleMenuChangePassword}
+                >
+                  <View className='flex flex-row items-center justify-between'>
+                    <MyText className='text-medium font-normal'>{I18n.t('v2.security.deviceAuth')}</MyText>
+                    <View className='absolute right-0  h-full items-end justify-center '>
+                      <MySwitch
+                        value={isDeviceAuthOn}
+                        onValueChange={onToggleDeviceAuth}
+                      />
+                    </View>
                   </View>
-                )}
-                onPress={handleMenuChangePassword}
-              >
-                <View className='flex flex-row items-center justify-between'>
-                  <MyText className='text-medium font-normal'>{I18n.t('v2.security.deviceAuth')}</MyText>
-                  <View className='absolute right-0  h-full items-end justify-center '>
-                    <MySwitch
-                      value={isDeviceAuthOn}
-                      onValueChange={onToggleDeviceAuth}
-                    />
-                  </View>
-                </View>
-              </MyRowItem>
+                </MyRowItem>
+              )}
             </>
           )}
 

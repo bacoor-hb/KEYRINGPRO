@@ -108,7 +108,7 @@ const PoolList = ({ _this, isLoading, listLiquidityPool = [], listTokensDetail, 
   // Track the drag distance 1:1 so the actions slide in only as far as the user
   // has pulled — no early reveal on light swipes (matches the TokenList feel).
   const renderRightActions = (item, dragX) => {
-    const isRaydium = item.type === typeLiquidityPool.raydium
+    const hasTxdLink = !!item?.initialHash
     const isHidden = deletedSet.has(item?._id)
     const trans = dragX.interpolate({
       inputRange: [-SWIPE_ACTIONS_WIDTH, 0],
@@ -141,22 +141,24 @@ const PoolList = ({ _this, isLoading, listLiquidityPool = [], listTokensDetail, 
                   <MyIcon uri={images.UIV2.icons.eyeHide} variant='small' />
                 </View>
               </TouchableOpacity>
-              {!isRaydium && (
-                <>
-                  <TouchableOpacity activeOpacity={0.8} style={styles.action} onPress={() => onRealTime(item)}>
-                    <View style={[styles.actionIcon, { backgroundColor: '#2D8DEDCC' }]}>
-                      <MyIcon uri={images.UIV2.icons.icon_explorer} variant='small' />
-                    </View>
-                  </TouchableOpacity>
-                  {!!item?.initialHash && (
-                    <TouchableOpacity activeOpacity={0.8} style={styles.action} onPress={() => onTxd(item)}>
-                      <View style={[styles.actionIcon, { backgroundColor: '#767F8CCC' }]}>
-                        <MyIcon uri={images.UIV2.icons.icon_txd} variant='small' />
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                </>
-              )}
+
+              <TouchableOpacity activeOpacity={0.8} style={styles.action} onPress={() => onRealTime(item)}>
+                <View style={[styles.actionIcon, { backgroundColor: '#2D8DEDCC' }]}>
+                  <MyIcon uri={images.UIV2.icons.icon_explorer} variant='small' />
+                </View>
+              </TouchableOpacity>
+              {/* Always rendered so the actions column keeps a stable width; without an
+                  initialHash there's nothing to open, so it shows dimmed and non-pressable. */}
+              <TouchableOpacity
+                activeOpacity={0.8}
+                disabled={!hasTxdLink}
+                style={[styles.action, !hasTxdLink && styles.actionDisabled]}
+                onPress={() => onTxd(item)}
+              >
+                <View style={[styles.actionIcon, { backgroundColor: '#767F8CCC' }]}>
+                  <MyIcon uri={images.UIV2.icons.icon_txd} variant='small' />
+                </View>
+              </TouchableOpacity>
             </>
 
           )}
@@ -204,8 +206,11 @@ const PoolList = ({ _this, isLoading, listLiquidityPool = [], listTokensDetail, 
 
     const tokenInfo0 = listTokensDetail?.find((token) => token?.address?.toLowerCase() === item?.token0?.address?.toLowerCase())
     const tokenInfo1 = listTokensDetail?.find((token) => token?.address?.toLowerCase() === item?.token1?.address?.toLowerCase())
-    const symbolToken0 = tokenInfo0?.auditGoplus?.token_symbol ?? tokenInfo0?.symbol ?? item?.token0?.symbol
-    const symbolToken1 = tokenInfo1?.auditGoplus?.token_symbol ?? tokenInfo1?.symbol ?? item?.token1?.symbol
+    // `symbolOnchain` is the contract's own ticker — the API's field when it
+    // returns one, otherwise a `symbol()` read filled in by
+    // useFetchMulticallDetailToken — so it outranks the Goplus audit listing.
+    const symbolToken0 = tokenInfo0?.symbolOnchain || tokenInfo0?.auditGoplus?.token_symbol || tokenInfo0?.symbol || item?.token0?.symbol
+    const symbolToken1 = tokenInfo1?.symbolOnchain || tokenInfo1?.auditGoplus?.token_symbol || tokenInfo1?.symbol || item?.token1?.symbol
 
     const amountToken0Format = splitDecimalNumber(BigNumber(Math.max(isNaN(item?.earning?.token0Earning) ? 0 : item?.earning?.token0Earning, isNaN(item?.unclaimedToken0Last24hProfit) ? 0 : item?.unclaimedToken0Last24hProfit, 0)).decimalPlaces(16))
     const amountToken1Format = splitDecimalNumber(BigNumber(Math.max(isNaN(item?.earning?.token1Earning) ? 0 : item?.earning?.token1Earning, isNaN(item?.unclaimedToken1Last24hProfit) ? 0 : item?.unclaimedToken1Last24hProfit, 0)).decimalPlaces(16))

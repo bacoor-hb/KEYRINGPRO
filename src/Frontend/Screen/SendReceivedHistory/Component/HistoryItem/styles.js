@@ -1,13 +1,12 @@
 import { StyleSheet } from 'react-native'
-import { pixelByHeight, pixelByWidth, Colors, DarkColors, sizeImageSquare, getSizeImgSquare } from 'common/styles'
+import { pixelByHeight, pixelByWidth, DarkColors, getSizeImgSquare } from 'common/styles'
 
-const createStyles = (isDarkMode) => {
+const createStyles = () => {
   return StyleSheet.create({
     container: {
       paddingTop: pixelByHeight(14),
       paddingBottom: pixelByHeight(14),
       gap: pixelByHeight(8)
-      // marginBottom: pixelByHeight(14)
     },
     itemRow: {
       gap: pixelByHeight(4)
@@ -21,21 +20,13 @@ const createStyles = (isDarkMode) => {
       width: getSizeImgSquare('large'),
       height: getSizeImgSquare('large'),
       borderRadius: getSizeImgSquare('small'),
-      backgroundColor: isDarkMode ? DarkColors.GREEN : Colors.GREEN
-    },
-    valueList: {
-      gap: pixelByHeight(14)
+      backgroundColor: DarkColors.GREEN
     },
     valueRow: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: pixelByWidth(8),
       position: 'relative'
-    },
-    containerIconChain: {
-      position: 'absolute',
-      bottom: sizeImageSquare(-3),
-      right: sizeImageSquare(-3)
     }
   })
 }

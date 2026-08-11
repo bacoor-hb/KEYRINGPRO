@@ -1,5 +1,5 @@
-import { View, ActivityIndicator, FlatList, RefreshControl } from 'react-native'
-import React, { useState } from 'react'
+import { View, ActivityIndicator, FlatList } from 'react-native'
+import React from 'react'
 import createStyles from './styles'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
 import TitleDrawer from 'frontend/Components/UI/TitleDrawer'

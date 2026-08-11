@@ -106,9 +106,11 @@ const MyActionRow = ({
 
       {description && (
         <View style={styles.itemContentContainer} className='flex-row items-center'>
+          {/* Invisible spacer mirroring the leading icon column so the
+              description lines up with the title column above it. */}
           <View className='opacity-0'>
             {leftElement || (icon && (
-              <View {...iconConfig}>
+              <View {...iconConfig} style={[{ justifyContent: 'center', alignItems: 'center', width: getSizeImgSquare('large') }, mergeStyle(iconConfig?.style)]}>
                 <MyIcon uri={icon} variant={iconConfig?.variant || 'medium'} />
               </View>
             ))}

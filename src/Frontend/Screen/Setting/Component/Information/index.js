@@ -7,6 +7,7 @@ import I18n from 'assets/Lang'
 import createStyles from './styles'
 import { pixelByHeight, pixelByWidth, width } from 'common/styles'
 import MyText from 'frontend/Components/UI/MyText'
+import MyIcon from 'frontend/Components/UI/MyIcon'
 import { handleOpenUrl, isHideMenuForAppleReview, jsonStr2Obj } from 'common/function'
 import ReduxService from 'common/redux'
 import MyRowItem from 'frontend/Components/UI/MyRowItem'
@@ -41,6 +42,10 @@ const Information = () => {
       const url = snsArr[0].url
       handleOpenUrl(url)
     }
+
+    if (type === 'github_open_source') {
+      handleOpenUrl('https://github.com/bacoor-hb/KEYRINGPRO')
+    }
   }
 
   const getInfoDetailKeyring = () => {
@@ -73,10 +78,16 @@ const Information = () => {
         ? null
         : (
           {
-            title: '𝕏 Twitter',
+            title: 'Twitter',
+            leftIcon: images.UIV2.icons.settings.twitter,
             onPress: () => handleExplorer('twitter')
           }
         ),
+      {
+        title: I18n.t('v2.info.githubOpenSource'),
+        leftIcon: images.UIV2.icons.settings.github,
+        onPress: () => handleExplorer('github_open_source')
+      },
       {
         title: (
           <View
@@ -108,6 +119,14 @@ const Information = () => {
     ]
 
     return data.filter(item => item !== null).map((item, index) => {
+      const content = typeof item.title === 'string' ? (
+        <MyText className={cn('text-medium', item?.titleClassName)}>
+          {item.title}
+        </MyText>
+      ) : (
+        item.title
+      )
+
       return (
         <MyRowItem
           noBorder={item?.noBorder}
@@ -115,12 +134,15 @@ const Information = () => {
           onPress={item?.onPress ? item.onPress : undefined}
         >
           {
-            typeof item.title === 'string' ? (
-              <MyText className={cn('text-medium', item?.titleClassName)}>
-                {item.title}
-              </MyText>
+            item?.leftIcon ? (
+              <View
+                style={{ gap: pixelByWidth(8) }}
+                className='flex flex-row items-center'>
+                <MyIcon variant='small' uri={item.leftIcon} />
+                {content}
+              </View>
             ) : (
-              item.title
+              content
             )
           }
         </MyRowItem>

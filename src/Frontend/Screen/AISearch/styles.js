@@ -32,7 +32,7 @@ const styles = StyleSheet.create({
     // free space left, so the list behaves exactly as before and still rests on
     // the newest message.
     flexGrow: 1,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-end'
     //
     // No vertical padding here: clearance for the floating INPUT lives on the
     // ListHeaderComponent (page.js), which inverted is what renders at the
@@ -99,7 +99,6 @@ const styles = StyleSheet.create({
     height: getSizeImgSquare('small')
   },
   input: {
-    lineHeight: fontSize(16.5) + fontSize(4),
     flex: 1,
     color: Colors.WHITE,
     fontSize: fontSize(16.5),
@@ -120,6 +119,15 @@ const styles = StyleSheet.create({
     width: BTN_SIZE,
     height: BTN_SIZE,
     borderRadius: BTN_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  // Thinking state: no fixed width — the glass pill hugs the typing dots and
+  // grows with them, while keeping the round-end height/radius of the button.
+  scrollDownBtnThinking: {
+    height: BTN_SIZE,
+    borderRadius: BTN_SIZE / 2,
+    paddingHorizontal: pixelByWidth(14),
     alignItems: 'center',
     justifyContent: 'center'
   },

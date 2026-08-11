@@ -84,6 +84,11 @@ const styles = StyleSheet.create({
     width: getSizeImgSquare('large'),
     justifyContent: 'center'
   },
+  // Dimmed state for an action that is shown but has nothing to open (e.g. a
+  // position with no initialHash) — keeps the column layout stable.
+  actionDisabled: {
+    opacity: 0.3
+  },
   actionIcon: {
     width: getSizeImgSquare('large'),
     height: getSizeImgSquare('large'),

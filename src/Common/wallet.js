@@ -183,15 +183,70 @@ export const removePrivateKeyByAddress = (address) => {
   }
 }
 
-export const isAccountFromKeyCard = (address) => {
+/**
+ * Does this account entry itself declare that its key lives on an NFC card?
+ * Looks ONLY at the object handed in — nothing on this device — so it is also the
+ * right question to ask of an entry coming from a backup file, where the device's
+ * own account list says nothing about it.
+ *
+ * Two witnesses, and only two: `isFromKeyCard` (written by every app version) and
+ * `accountType`, which is the V2 spelling of the same fact — old backups predate
+ * it, newer ones carry both. `passwordFile` is NOT consulted even though it has
+ * always been written alongside isFromKeyCard: that pairing is a convention, not
+ * an invariant (importPrivateKey takes the two as independent arguments), and a
+ * false positive here is unrecoverable — the account would demand a tap from a
+ * card that does not exist, and a restore would drop its key for good.
+ *
+ * @param {object} account a single account entry
+ * @returns {boolean}
+ */
+export const hasKeyCardFlags = (account) => {
+  return !!(account && (account.isFromKeyCard || account.accountType === ACCOUNT_TYPE.COLD))
+}
+
+/**
+ * Is this account's private key held on an external NFC keycard (⇒ every signing
+ * or key-reading flow must ask for a card tap)?
+ *
+ * Accepts EITHER an account entry or a bare address, because the callers have
+ * one or the other: the account screens hold the entry, the signing paths only
+ * know the address they are signing for.
+ *
+ * Fail-closed by design: an address-only answer depends on a list lookup, and
+ * that lookup can legitimately miss — legacy BTC/Solana entries carry a
+ * `rootAddress` pointing at the EVM account of the same card, which the user
+ * may have deleted. So when given an entry, ask the entry ITSELF first, then its
+ * own address, and only then its root address. One source saying "keycard" is
+ * enough.
+ *
+ * @param {object|string} accountOrAddress an accountListRedux entry, or an address
+ * @returns {boolean}
+ */
+export const isAccountFromKeyCard = (accountOrAddress) => {
   try {
+    if (!accountOrAddress) return false
+
     const accountListInSecureStorage = getDataFromSecureStorage(KEYSTORE.SET_ACCOUNT_LIST, [])
+    const findByAddress = (address) => {
+      if (!address) return null
+      return accountListInSecureStorage.find(account => lowerCase(account.address) === lowerCase(address))
+    }
 
-    const accountInfoFromSecureStorage = accountListInSecureStorage.find(account => lowerCase(account.address) === lowerCase(address))
+    if (typeof accountOrAddress === 'string') {
+      return hasKeyCardFlags(findByAddress(accountOrAddress))
+    }
 
-    return accountInfoFromSecureStorage?.isFromKeyCard || false
+    const account = accountOrAddress
+    if (hasKeyCardFlags(account)) return true
+    if (hasKeyCardFlags(findByAddress(account.address))) return true
+    // Root = the EVM account of the same card. Checked last, and only as a hint:
+    // it may well have been deleted, which is precisely why the entry's own flags
+    // are consulted above rather than trusting this lookup alone.
+    if (account.rootAddress && lowerCase(account.rootAddress) !== lowerCase(account.address)) {
+      return hasKeyCardFlags(findByAddress(account.rootAddress))
+    }
+    return false
   } catch (error) {
-    // throw error
     return false
   }
 }

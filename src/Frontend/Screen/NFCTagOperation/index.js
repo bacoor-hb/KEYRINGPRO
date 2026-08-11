@@ -2,7 +2,7 @@ import BaseContainer from 'frontend/Container/BaseContainer'
 import React from 'react'
 import Page from './page'
 import CopyNFCTag from './Component/CopyNFCTag'
-import { checkNFCDataFormat, convertNFCPayloadTextToReadableText, decryptBackupFileContent, decryptPrivateKeyFromKeyringHardwalletWeb, getAddressFromNFCData, getPrivateKeyHashFromNFCData, lowerCase, sleep, verifyCorrectWalletByPk } from 'common/function'
+import { checkNFCDataFormat, convertNFCPayloadTextToReadableText, decryptPrivateKeyFromKeyringHardwalletWeb, getAddressFromNFCData, getPrivateKeyHashFromNFCData, lowerCase, sleep, verifyCorrectWalletByPk } from 'common/function'
 import EnterPassShowPrivateKey from './Component/EnterPassShowPrivateKey'
 import ViewPrivateKey from '../AccountDetail/Component/ViewPrivateKey'
 import NfcProxy from 'common/NfcProxy'
@@ -10,10 +10,11 @@ import I18n from 'assets/Lang'
 import NfcManager, { NfcTech, Ndef, NfcError } from 'react-native-nfc-manager'
 import ReduxService from 'common/redux'
 import EraserNFC from './Component/EraserNFC'
-import { Platform } from 'react-native'
+import { Platform, View } from 'react-native'
 import * as RNFS from '@dr.pogodin/react-native-fs'
 import { errorCodes, isErrorWithCode, pick, types } from '@react-native-documents/picker'
-import { decryptStringAesGcm } from 'common/cryptoVault'
+import { pixelByHeight, pixelByWidth } from 'common/styles'
+import MyButton from 'frontend/Components/UI/MyButton'
 
 class NFCTagOperationScreen extends BaseContainer {
   constructor (props) {
@@ -94,7 +95,7 @@ class NFCTagOperationScreen extends BaseContainer {
   }
 
   handleCopyNFCTag =async (address, nfcData) => {
-    const callback = async () => {
+    const callbackCopy = async (isClearAndWrit = false) => {
       // Dismiss the CopyNFCTag drawer first: on Android the scan UI is itself a drawer,
       // and on iOS the system sheet would otherwise come up over this one.
       this.closeDrawer()
@@ -119,7 +120,7 @@ class NFCTagOperationScreen extends BaseContainer {
         tag.ndefStatus = await NfcManager.ndefHandler.getNdefStatus()
 
         const isLocked = tag?.ndefStatus?.status === 3
-        const isEmpty = !tag?.ndefMessage || tag.ndefMessage[0]?.tnf === 0
+        const isEmpty = !tag?.ndefMessage || tag.ndefMessage.length === 0 || tag.ndefMessage[0]?.tnf === 0
 
         if (isLocked) {
           this.nfcProxy.closeLoadingPopupNFCForAndroid()
@@ -127,10 +128,10 @@ class NFCTagOperationScreen extends BaseContainer {
           return
         }
 
-        // Only a blank card may be written to, so an in-use keycard can't be clobbered.
-        if (!isEmpty) {
-          this.nfcProxy.closeLoadingPopupNFCForAndroid()
-          this.showAlert(I18n.t('NFC.notEmptyCard'), '', { type: true, timeout: 4000 })
+        if (!isEmpty && !isClearAndWrit) {
+          this.closeDrawer()
+          await sleep(400) // drawer close animation is 400ms
+          callbackNFCHasData()
           return
         }
 
@@ -141,6 +142,7 @@ class NFCTagOperationScreen extends BaseContainer {
         } else {
           this.nfcProxy.closeLoadingPopupNFCForAndroid()
         }
+        await sleep(400) // drawer close animation is 400ms
         this.showAlert(I18n.t('NFC.copyNFCCardSuccess'), '', { timeout: 4000 })
       } catch (error) {
         this.nfcProxy.closeLoadingPopupNFCForAndroid()
@@ -154,9 +156,40 @@ class NFCTagOperationScreen extends BaseContainer {
       }
     }
 
+    const callbackNFCHasData = () => {
+      this.showAlert(
+        I18n.t('v2.exportNfc.nfcNotEmpty'),
+        '',
+        {
+          overClickClose: false,
+          autoClose: false,
+          type: 'error',
+          noAnimation: true,
+          moreView: (
+            <View style={{ gap: pixelByWidth(18), marginTop: pixelByHeight(6) }} className='flex relative flex-row justify-between items-center'>
+              <View style={{ flex: 1 }}>
+                <MyButton className='w-full' onPress={this.closeAlert} label={I18n.t('Initial.close')} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <MyButton
+                  onPress={async () => {
+                    this.closeAlert()
+                    await sleep(400)
+                    callbackCopy(true)
+                  }}
+                  variant='dangerous'
+                  className='w-full'
+                  label={I18n.t('NFC.continue')} />
+              </View>
+            </View>
+          )
+        }
+      )
+    }
+
     this.openDrawer({
       children: (
-        <CopyNFCTag callback={callback} />
+        <CopyNFCTag callback={() => callbackCopy(false)} />
       )
     })
   }
@@ -231,8 +264,11 @@ class NFCTagOperationScreen extends BaseContainer {
       const isNfcFromKHW = await NfcProxy.checkNfcIsFromKeyringHardWalletWeb(tagEvent)
 
       const privateKeyEncryptFromKHW = await NfcProxy.getEncryptPrivateKeyFromNfcKeyringHardWallet(tagEvent)
-      const privateKeyHash = convertNFCPayloadTextToReadableText(tagEvent.ndefMessage[0])
-      const isCorrectFormat = checkNFCDataFormat(tagEvent.ndefMessage[0], privateKeyHash) || isNfcFromKHW
+      const dataNFC = convertNFCPayloadTextToReadableText(tagEvent.ndefMessage[0])
+      const dataEncodeNFC = getPrivateKeyHashFromNFCData(dataNFC)
+      const isCorrectFormat = checkNFCDataFormat(tagEvent.ndefMessage[0], dataNFC) || isNfcFromKHW
+      let versionExportDataNFC = 1
+      let versionExportDataInApp = 1
 
       if (!isCorrectFormat && !isNfcFromKHW) {
         this.closeDrawer()
@@ -271,27 +307,28 @@ class NFCTagOperationScreen extends BaseContainer {
       }
 
       // Show private key from KEYRING PRO APP
-      if (privateKeyHash) {
-        const address = getAddressFromNFCData(privateKeyHash)
+      if (dataNFC) {
+        const address = getAddressFromNFCData(dataNFC)
         const accountListRedux = ReduxService.getReduxDataByKey('accountListRedux') || []
-        const privateKeyHashWithoutAddress = getPrivateKeyHashFromNFCData(privateKeyHash)
+        const privateKeyHashWithoutAddress = getPrivateKeyHashFromNFCData(dataNFC)
 
         const findAccount = accountListRedux.find(item => {
-          return item && item?.passwordFile && lowerCase(item?.address) === lowerCase(address)
+          const addressLowerCase = lowerCase(address)
+          return item && item?.passwordFile && (
+            lowerCase(item?.address) === addressLowerCase ||
+            lowerCase(item?.rootAddress) === addressLowerCase
+          )
         })
 
         if (findAccount) {
-          let privateKeyFromHash
-          const privateKeyFromHashAES = decryptBackupFileContent(privateKeyHashWithoutAddress, findAccount.passwordFile.toString())
-          const privateKeyFromHashAESGCM = await decryptStringAesGcm(privateKeyHashWithoutAddress, findAccount.passwordFile.toString())
+          versionExportDataInApp = this._nfcProxy.detectVersionFileNfc(findAccount?.passwordFileEncode?.toString())
+          versionExportDataNFC = this._nfcProxy.detectVersionFileNfc(dataNFC)
+        }
 
-          if (privateKeyFromHashAES) {
-            privateKeyFromHash = privateKeyFromHashAES
-          } else {
-            privateKeyFromHash = privateKeyFromHashAESGCM
-          }
+        if (findAccount && versionExportDataNFC === versionExportDataInApp) {
+          const privateKeyFromHash = await this.nfcProxy.decryptDataNfc(privateKeyHashWithoutAddress, findAccount.passwordFile.toString())
 
-          const addressFromHash = getAddressFromNFCData(privateKeyHash)
+          const addressFromHash = getAddressFromNFCData(dataNFC)
 
           if (addressFromHash !== address || !privateKeyFromHash) {
             this.showAlert(I18n.t('NFC.accountNotExistErr'), '', { type: true, timeout: 4000 })
@@ -311,12 +348,21 @@ class NFCTagOperationScreen extends BaseContainer {
             )
           })
         } else {
+          // iOS keeps its NFC sheet up for as long as the technology request lives, and
+          // handleReadNfcCard only tears that request down AFTER this callback resolves.
+          // The branch above just opens a drawer and returns, so the sheet dismisses on
+          // its own — but this one awaits the document picker, so the sheet outlived the
+          // read and sat there until the user cancelled it by hand. Close the session
+          // first, then hand over to the system UI.
+          await NfcManager.cancelTechnologyRequest().catch(() => 0)
+          await sleep(500) // let the iOS sheet finish dismissing before the picker appears
+
           const fileContent = await this.onShowFilePicker()
 
           if (fileContent) {
             const infoNFC = {
               passwordFileEncode: fileContent,
-              dataNFC: privateKeyHashWithoutAddress
+              dataNFC: dataEncodeNFC
             }
 
             this.openDrawer({
@@ -324,9 +370,8 @@ class NFCTagOperationScreen extends BaseContainer {
                 <EnterPassShowPrivateKey isUseFile infoNFC={infoNFC} _this={this} />
               )
             })
-          } else {
-            NfcManager.cancelTechnologyRequest()
           }
+          // Nothing to cancel on the empty path any more: the session is already gone.
         }
       }
     })

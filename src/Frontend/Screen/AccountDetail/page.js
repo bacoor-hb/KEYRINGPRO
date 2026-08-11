@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import I18n from 'assets/Lang'
 import { View, TouchableOpacity } from 'react-native'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
@@ -11,6 +11,7 @@ import { getSafeAreaValues, pixelByHeight, pixelByWidth, sizeImageSquare } from 
 import { useSelector } from 'react-redux'
 import ViewExplorer from './Component/ViewExplorer'
 import { ACCOUNT_TYPE } from 'common/constants/account'
+import { isAccountFromKeyCard } from 'common/wallet'
 import { NavigationActions } from 'src/navigation/NavigationService'
 import { NAME_SCREEN } from 'common/constants/navigation'
 import MyButton from 'frontend/Components/UI/MyButton'
@@ -23,7 +24,14 @@ const AccountDetailPage = ({ _this }) => {
   const { handleShowOption } = _this
   const { activeAccount, accountListRedux } = useSelector(state => state)
   const { account } = activeAccount
-  const isAccountNFC = account?.accountType === ACCOUNT_TYPE.COLD
+  // The SAME question the screen's actions ask before touching a key (see
+  // isAccountFromKeyCard), not a raw `accountType === COLD` read. A legacy
+  // BTC/Solana account restored from an old backup can carry its keycard link on
+  // `rootAddress` — the EVM account of the same card — so the plain field read
+  // left those screens presenting a hot account while every action on it demanded
+  // a card tap. What the UI claims and what the app enforces must come from one
+  // source. Memoised: it reads secure storage.
+  const isAccountNFC = useMemo(() => isAccountFromKeyCard(account), [account])
   const isAccountViewOnly = account?.accountType === ACCOUNT_TYPE.VIEW_ONLY
   const isAccountEVm = account?.chain === STANDARD_CHAIN.Evm
   // Hide "Delete Account" when it's the only account left — the user must keep
@@ -214,30 +222,24 @@ const AccountDetailPage = ({ _this }) => {
       </ScrollViewBlurHeader>
 
       {
-        isAccountEVm && (
-          <>
-            {
-              account?.accountType === ACCOUNT_TYPE.COLD && (
-                <BottomGradientBar>
-                  <View className='flex items-center mx-auto'>
-                    <MyIcon uri={images.UIV2.icons.coldNFCWallet} style={styles.iconCold} />
-                  </View>
-                </BottomGradientBar>
+        isAccountNFC && (
+          <BottomGradientBar>
+            <View className='flex items-center mx-auto'>
+              <MyIcon uri={images.UIV2.icons.coldNFCWallet} style={styles.iconCold} />
+            </View>
+          </BottomGradientBar>
 
-              )
-            }
-            {
-              account?.accountType === ACCOUNT_TYPE.HOT && (
-                <BottomGradientBar>
-                  <MyButton onPress={() => handleRoutePage(NAME_SCREEN.exportToNFCTag)} className='w-full'>
-                    <MyTextTicker className='text-medium'>
-                      {I18n.t('v2.accountDetail.advancedProtection')}
-                    </MyTextTicker>
-                  </MyButton>
-                </BottomGradientBar>
-              )
-            }
-          </>
+        )
+      }
+      {
+        isAccountEVm && account?.accountType === ACCOUNT_TYPE.HOT && (
+          <BottomGradientBar>
+            <MyButton onPress={() => handleRoutePage(NAME_SCREEN.exportToNFCTag)} className='w-full'>
+              <MyTextTicker className='text-medium'>
+                {I18n.t('v2.accountDetail.advancedProtection')}
+              </MyTextTicker>
+            </MyButton>
+          </BottomGradientBar>
         )
       }
 

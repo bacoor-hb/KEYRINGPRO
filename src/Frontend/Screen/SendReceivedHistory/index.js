@@ -4,8 +4,9 @@ import Page from './page'
 import InfoAccountHeader from 'frontend/Components/UI/InfoAccountHeader'
 import ReduxService from 'common/redux'
 import { connect } from 'react-redux'
-import { SUPPORTED_CHAINS_BY_SERVICE_MORALIS } from 'common/constants/chain'
+import { LIST_DEFAULT_CHAIN_ID, SUPPORTED_CHAINS_BY_SERVICE_MORALIS } from 'common/constants/chain'
 import ChainSelectorDropdown from 'frontend/Components/UI/ChainSelectorDropdown'
+import { ALCHEMY_ENDPOINT } from 'common/constants/alchemy'
 
 class SendReceivedHistoryScreen extends BaseContainer {
   constructor (props) {
@@ -53,10 +54,26 @@ class SendReceivedHistoryScreen extends BaseContainer {
     const chainsValid = []
 
     for (const chainId of activeEvmChainIdsRedux) {
-      if (SUPPORTED_CHAINS_BY_SERVICE_MORALIS[chainId]) {
+      if (ALCHEMY_ENDPOINT[chainId]) {
         chainsValid.push(chainId)
       }
     }
+    chainsValid.sort((a, b) => {
+      const idA = Number(a?.chainId ?? a)
+      const idB = Number(b?.chainId ?? b)
+      const indexA = LIST_DEFAULT_CHAIN_ID.indexOf(idA)
+      const indexB = LIST_DEFAULT_CHAIN_ID.indexOf(idB)
+
+      if (indexA !== -1 && indexB !== -1) {
+        return indexA - indexB
+      }
+
+      if (indexA !== -1) return -1
+
+      if (indexB !== -1) return 1
+
+      return 0
+    })
 
     return <ChainSelectorDropdown isUseHeader maxShow={4} selectedChainId={this.state.chainId} onSelectChain={this.handleSelectChainId} data={chainsValid} />
   }

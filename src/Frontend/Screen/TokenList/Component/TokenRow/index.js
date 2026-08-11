@@ -3,6 +3,7 @@ import { View, TouchableOpacity, StyleSheet } from 'react-native'
 import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
 import MyIcon from 'frontend/Components/UI/MyIcon'
 import MyNumber from 'frontend/Components/UI/MyNumber'
+import MyRollingNumber from 'frontend/Components/UI/MyRollingNumber'
 import FiatBalance from 'frontend/Components/UI/FiatBalance'
 import TokenIconWithChain from 'frontend/Components/UI/TokenIconWithChain'
 import images from 'assets/Image'
@@ -44,16 +45,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: pixelByHeight(2)
+    marginTop: pixelByHeight(2),
+    gap: pixelByWidth(8)
   },
-  // maxWidth keeps a long balance+symbol from pushing the change% off-screen;
-  // it truncates (numberOfLines=1) instead of growing the row.
-  balance: {
-    color: Colors.TEXT_MEDIUM,
-    maxWidth: width(55),
-    marginLeft: pixelByWidth(8),
-    textAlign: 'right'
-  },
+  // Takes the width left after the change%. No alignItems on purpose — the
+  // odometer has to be handed this full width so it can tell whether the balance
+  // overflows and needs to scroll; it right-aligns itself internally.
+  balanceWrap: { flex: 1 },
   up: { color: Colors.GREEN },
   down: { color: Colors.RED_TEXT }
 })
@@ -62,7 +60,15 @@ const styles = StyleSheet.create({
 //   noChevron   bool — hide the right-arrow (e.g. inside HiddenTokenList).
 //   isSelected  bool — when true, override the dim styling (used by hidden-list
 //                       multi-select: selected rows render bright, others dim).
-const TokenRow = ({ isViewOnly, token, onPress, noChevron, isSelected }) => {
+//   active      bool — forwarded to MyRollingNumber: the balance animation is
+//                       held while the screen isn't the one on screen, so a
+//                       refresh that lands during Send/Exchange plays on return
+//                       instead of finishing out of sight.
+//   spinOnAppear bool — forwarded too: the token has only just turned up in the
+//                       wallet, so its balance spins once to announce itself.
+//                       The screen decides this — a row can't tell "new token"
+//                       from "scrolled back into view".
+const TokenRow = ({ token, onPress, noChevron, isSelected, active, spinOnAppear }) => {
   if (!token) return null
   const valueUSD = token.valueUSD || 0
   const balance = token.balanceFormatted || 0
@@ -87,31 +93,28 @@ const TokenRow = ({ isViewOnly, token, onPress, noChevron, isSelected }) => {
             </View>
             <FiatBalance valueUSD={valueUSD} variant='subTitle' style={styles.value} numberOfLines={1} />
           </View>
-          <View style={[styles.lineBottom, { gap: pixelByWidth(8) }]}>
+          <View style={styles.lineBottom}>
             <View>
               <MyNumber value={change} fractionDigits={2} fixedDecimals suffix='%' signed style={changeStyle} />
             </View>
-            <View
-              style={{
-                flex: 1,
-                alignItems: 'flex-end'
-              }}
-            >
-              <MyTextTicker>
-                <MyNumber
-                  className='text-medium'
-                  value={balance}
-                  fractionDigits={8}
-                  suffix={` ${token.symbol || ''}`}
-                  numberOfLines={1}
-                />
-              </MyTextTicker>
-
+            <View style={styles.balanceWrap}>
+              {/* Odometer spin — up/green or down/red — whenever a refresh
+                  brings a different balance in. `identity` is the token key so
+                  a recycled row doesn't animate the swap. */}
+              <MyRollingNumber
+                className='text-medium'
+                value={balance}
+                identity={token.metaKey}
+                active={active}
+                spinOnAppear={spinOnAppear}
+                fractionDigits={8}
+                suffix={` ${token.symbol || ''}`}
+              />
             </View>
 
           </View>
         </View>
-        {!noChevron && <MyIcon uri={images.UIV2.icons.arrowRightLow} variant='small' style={{ opacity: isViewOnly ? 0.5 : 1 }} />}
+        {!noChevron && <MyIcon uri={images.UIV2.icons.arrowRightLow} variant='small' />}
       </View>
     </TouchableOpacity>
   )

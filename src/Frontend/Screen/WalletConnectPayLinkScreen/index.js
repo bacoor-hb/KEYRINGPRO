@@ -227,7 +227,8 @@ class WalletConnectPayScreen extends BaseContainer {
         resultHash: resultTracking,
         optionsPayments: optionsPayments[chainId],
         optionPaid: option,
-        chainId
+        chainId,
+        block_timestamp: Date.now()
       }
 
       if (resultTracking.status === 'succeeded') {
@@ -274,7 +275,7 @@ class WalletConnectPayScreen extends BaseContainer {
             children: <FormEnterUserInfo
               url={urlEnterForm}
               onComplete={() => {
-                this.closeAllDrawer()
+                this.closeDrawer()
                 resolve(true)
               }}
               onError={() => reject(TYPE_STEP_PAYMENT.error)}
@@ -344,10 +345,14 @@ class WalletConnectPayScreen extends BaseContainer {
   }
 
   onCancel = (isBack = false) => {
+    const { callback } = this.props?.route?.params || {}
+
     if (isBack) {
       NavigationActions.goBack()
+      callback?.()
     } else {
       NavigationActions.goBack()
+      callback?.()
       // NavigationActions.reset(NAME_SCREEN.scanScreen)
     }
   }

@@ -2,7 +2,7 @@ import React from 'react'
 import { View, TouchableOpacity } from 'react-native'
 import I18n, { resolveLocale } from 'assets/Lang'
 import images from 'assets/Image'
-import { handleOpenExplorerHash, handleOpenExplorerUserAddress } from 'common/chain'
+import { getUrlExplorerHash, handleOpenExplorerHash, handleOpenExplorerUserAddress } from 'common/chain'
 import MyText from 'frontend/Components/UI/MyText'
 import MyIcon from 'frontend/Components/UI/MyIcon'
 import MyButton from 'frontend/Components/UI/MyButton'
@@ -26,7 +26,7 @@ import styles from './styles'
 //     live this mount, so a rehydrated terminal state renders statically.
 // They diverge while signing/confirming (intro animates, result not settled yet)
 // and when resuming a persisted broadcast (intro static, result settles live).
-export default function TxStatusTimeline ({ status, txHash, from, chainId, language, onCopyHash, onRetry, errorMessage, animate = true, animateIntro = true }) {
+export default function TxStatusTimeline ({ status, txHash, from, chainId, language, onCopyHash, onRetry, errorMessage, errorTitle, animate = true, animateIntro = true }) {
   // Flow strings live under `chatAgent`; the explorer hint + "waiting for
   // confirmation" strings are reused from the send-token flow under `Initial`.
   const t = (key, opts) => I18n.t(`chatAgent.${key}`, { ...(opts || {}), locale: resolveLocale(language) })
@@ -40,7 +40,10 @@ export default function TxStatusTimeline ({ status, txHash, from, chainId, langu
   const showResult = status === TX_STATUS.CONFIRMING || isDone || isError
 
   const resultTitleClass = isDone ? 'text-green' : isError ? 'text-red' : ''
-  const resultTitle = isDone ? t('statusSuccess') : isError ? t('statusFailed') : ti('waitingCofirmation')
+  // `errorTitle` lets a host name the failure when "Failed" is not what
+  // happened — an expired quote, say, where nothing was actually sent. Optional
+  // and defaulted, so callers that don't pass it are unchanged.
+  const resultTitle = isDone ? t('statusSuccess') : isError ? (errorTitle || t('statusFailed')) : ti('waitingCofirmation')
 
   const renderTxHash = () => (
     <View style={styles.hashRow}>
@@ -57,7 +60,10 @@ export default function TxStatusTimeline ({ status, txHash, from, chainId, langu
         activeOpacity={0.7}
         style={styles.copyBtn}
         className='border border-box-small bg-input-field'
-        onPress={() => txHash && onCopyHash?.(txHash)}
+        onPress={() => {
+          const linkScanHash = getUrlExplorerHash(txHash, chainId)
+          txHash && onCopyHash?.(linkScanHash)
+        }}
       >
         <MyIcon variant='small' uri={images.UIV2.icons.copyWhite} />
       </TouchableOpacity>
@@ -136,7 +142,11 @@ export default function TxStatusTimeline ({ status, txHash, from, chainId, langu
         )
       )}
 
-      {isError && (
+      {/* Only when the host actually wants a retry here. A host that keeps its
+          own form live on failure (WalletActionForm) drives the retry from its
+          own submit button, and passes no handler so this one doesn't duplicate
+          it. */}
+      {isError && !!onRetry && (
         <MyButton
           className='w-full'
           style={styles.ctaWrap}

@@ -31,8 +31,10 @@ const Dot = ({ delay }) => {
 }
 
 // Just the animated dots — no avatar, background or border.
-const TypingIndicator = () => (
-  <View style={[styles.row, styles.rowBot, styles.typingContainer]}>
+// `bare` drops the message-row margins/padding so the dots can sit centered
+// inside a tight container (e.g. the round jump-to-bottom button).
+const TypingIndicator = ({ bare = false }) => (
+  <View style={bare ? styles.typingBare : [styles.row, styles.rowBot, styles.typingContainer]}>
     <Dot delay={0} />
     <Dot delay={150} />
     <Dot delay={300} />

@@ -96,7 +96,8 @@ const AutoFitAmountInput = ({
   // Text appearance only (color, fontFamily). Layout-affecting props
   // (width/height/padding/fontSize) are owned by this component.
   textStyle,
-  onFocus
+  onFocus,
+  disabled = false
 }) => {
   // Coerce defensively: `undefined` (unset Redux default) must render as a
   // normal empty controlled input, and any non-string that sneaks in must not
@@ -217,6 +218,7 @@ const AutoFitAmountInput = ({
         style={styles.scaleWrapper}
       >
         <TextInput
+          editable={!disabled}
           value={text}
           onChangeText={handleChangeText}
           keyboardType={keyboardType}

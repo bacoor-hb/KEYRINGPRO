@@ -1,3 +1,38 @@
+diff --git a/node_modules/@gorhom/bottom-sheet/src/components/bottomSheet/BottomSheet.tsx b/node_modules/@gorhom/bottom-sheet/src/components/bottomSheet/BottomSheet.tsx
+index fc52033..6529f20 100644
+--- a/node_modules/@gorhom/bottom-sheet/src/components/bottomSheet/BottomSheet.tsx
++++ b/node_modules/@gorhom/bottom-sheet/src/components/bottomSheet/BottomSheet.tsx
+@@ -608,7 +608,21 @@ const BottomSheetComponent = forwardRef<BottomSheet, BottomSheetProps>(
+         }
+ 
+         if (position === animatedPosition.get()) {
+-          return;
++          /**
++           * PATCH: counterpart of the `handleOnEnd` patch in
++           * `useGestureEventsHandlersDefault`. A request to animate to the CLOSED
++           * position must go through even when the sheet already sits there (dragged
++           * fully down by hand), otherwise `animateToPositionCompleted` — and with it
++           * `onClose` — never runs and the sheet stays mounted behind its backdrop.
++           * The zero-distance animation simply completes on the next frame.
++           * Already-closed sheets (index -1) still take the early exit.
++           */
++          const isClosingFromClosedPosition =
++            position === animatedDetentsState.get().closedDetentPosition &&
++            animatedCurrentIndex.get() !== -1;
++          if (!isClosingFromClosedPosition) {
++            return;
++          }
+         }
+ 
+         // early exit if there is a running animation to
+@@ -708,6 +722,7 @@ const BottomSheetComponent = forwardRef<BottomSheet, BottomSheetProps>(
+         animatedKeyboardState,
+         animatedPosition,
+         animatedSheetState,
++        animatedCurrentIndex,
+       ]
+     );
+     /**
 diff --git a/node_modules/@gorhom/bottom-sheet/src/hooks/useAnimatedLayout.ts b/node_modules/@gorhom/bottom-sheet/src/hooks/useAnimatedLayout.ts
 index 68c674d..669d2e2 100644
 --- a/node_modules/@gorhom/bottom-sheet/src/hooks/useAnimatedLayout.ts
@@ -22,4 +57,31 @@ index 68c674d..669d2e2 100644
 +    return () => subscription.remove();
    }, [state]);
    //#endregion
+ 
+diff --git a/node_modules/@gorhom/bottom-sheet/src/hooks/useGestureEventsHandlersDefault.tsx b/node_modules/@gorhom/bottom-sheet/src/hooks/useGestureEventsHandlersDefault.tsx
+index acf3890..6803f68 100644
+--- a/node_modules/@gorhom/bottom-sheet/src/hooks/useGestureEventsHandlersDefault.tsx
++++ b/node_modules/@gorhom/bottom-sheet/src/hooks/useGestureEventsHandlersDefault.tsx
+@@ -397,8 +397,21 @@ export const useGestureEventsHandlersDefault: GestureEventsHandlersHookType =
+         /**
+          * if destination point is the same as the current position,
+          * then no need to perform animation.
++         *
++         * PATCH: closing is a state transition, not just a position change.
++         * `animateToPosition` is the only place `onClose` is fired from, so when the
++         * user drags the sheet all the way down, the position is already clamped to
++         * the closed position and this early exit skips the close entirely: the sheet
++         * stays mounted off-screen (invisible) while its backdrop keeps blocking the
++         * whole UI. Reproducible with a mouse on macOS ("Designed for iPad"), where
++         * the pointer can travel past the bottom edge of the window; on a phone the
++         * finger rarely lands exactly on the closed position. So keep the early exit
++         * for every destination EXCEPT the closed one.
+          */
+-        if (destinationPoint === animatedPosition.value) {
++        if (
++          destinationPoint === animatedPosition.value &&
++          destinationPoint !== closedDetentPosition
++        ) {
+           return;
+         }
  

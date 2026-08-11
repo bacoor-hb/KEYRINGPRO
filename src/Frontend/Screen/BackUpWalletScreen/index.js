@@ -8,7 +8,7 @@ import { connect } from 'react-redux'
 // components
 import PermissionRequestPopup from './components/PermissionRequestPopup'
 import { ThemeContext } from 'frontend/Contexts/ThemeContext'
-import { pickDirectory } from '@react-native-documents/picker'
+import { pickDirectory, saveDocuments, errorCodes, isErrorWithCode } from '@react-native-documents/picker'
 import { NavigationActions } from 'src/navigation/NavigationService'
 import { FileSystem, AndroidScoped } from 'react-native-file-access'
 import { getPrivateKeyByAddress } from 'common/wallet'
@@ -120,6 +120,44 @@ class BackUpWalletScreen extends BaseContainer {
     }
   }
 
+  // macOS-only save path ("Designed for iPad" / Catalyst). The share sheet used by
+  // saveFileIOS is unusable there: UIKit-on-macOS reports completed = NO for the
+  // "Save to Files" activity even when the file was written, and RN's native handler
+  // only calls back when `completed` is YES or `activityType` is nil
+  // (RCTActionSheetManager.mm) — so with a non-nil activityType the Share.share promise
+  // never settles at all. Either way we never reached the success branch: no popup and
+  // no history entry. The document picker resolves with the real target uri instead, or
+  // rejects with OPERATION_CANCELED. iPhone keeps the share sheet (AirDrop, Mail, ...).
+  saveFileMac = async (fileName, fileContent, filePath) => {
+    const dataFileBackup = {
+      fileName,
+      fileContent,
+      filePath,
+      time: moment(new Date()).format('HH:mm YYYY-MM-DD')
+    }
+
+    try {
+      await RNFS.writeFile(filePath, fileContent, 'utf8')
+
+      // encodeURI because the native side does `URL(string:)!` on each entry — an
+      // un-escaped path (a space in the macOS user name is enough) would crash there.
+      const [savedFile] = await saveDocuments({
+        sourceUris: [`file://${encodeURI(filePath)}`],
+        copy: true
+      })
+
+      // The user picked the destination, so report where it actually landed.
+      dataFileBackup.filePath = savedFile?.uri || filePath
+      dataFileBackup.result = savedFile
+      this.setListBackupFiles(dataFileBackup)
+      this.showAlert(null, '', { callback: this.onBackRoute })
+    } catch (err) {
+      // Dismissing the save dialog is not an error — leave the screen as it is.
+      if (isErrorWithCode(err) && err.code === errorCodes.OPERATION_CANCELED) return
+      this.showAlert(null, '', { type: true })
+    }
+  }
+
   onBackupFile = async () => {
     if (this.state.isCreatingBackup) return
     this.setState({ isCreatingBackup: true })
@@ -146,7 +184,9 @@ class BackUpWalletScreen extends BaseContainer {
       this.setState({ isCreatingBackup: false })
 
       const filePath = `${RNFS.TemporaryDirectoryPath}/${fileName}.txt`
-      if (ISIOS) {
+      if (ISMAC) {
+        this.saveFileMac(fileName, fileContent, filePath)
+      } else if (ISIOS) {
         this.saveFileIOS(fileName, fileContent, filePath)
       } else {
         this.saveFileAnroid(fileName, fileContent)

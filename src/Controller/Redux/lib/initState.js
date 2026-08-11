@@ -72,7 +72,9 @@ var initState = {
   //       symbol,
   //       decimals,
   //       isCustom,
-  //       isHidden,
+  //       isHidden,        // effective flag the UI reads
+  //       hiddenByUser,    // boolean|undefined — the user's explicit choice
+  //       autoHidden,      // auto verdict of the last fetch (no price / unlisted)
   //       balance,
   //       balanceFormatted,
   //       priceUSD,
@@ -80,6 +82,9 @@ var initState = {
   //       priceChange24hPct,
   //       metaKey
   //     }],
+  //     // metaKey → the user's hide choice, kept at ACCOUNT level so it outlives
+  //     // the token objects (chain toggled off, balance drained to 0).
+  //     userHiddenKeys: { [metaKey]: boolean },
   //     totalUSD: number,
   //     lastSyncedAt: number
   //   }

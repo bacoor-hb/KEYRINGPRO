@@ -13,5 +13,8 @@ export const REACT_QUERY_KEY = {
   getBalanceToken: 'getBalanceToken',
   getTokenPriceChanges: 'getTokenPriceChanges',
   getTokenPriceHistory: 'getTokenPriceHistory',
-  getDecimalToken: 'getDecimalToken'
+  getDecimalToken: 'getDecimalToken',
+  getRawBalanceToken: 'getRawBalanceToken',
+  getPaymentTokenInfo: 'getPaymentTokenInfo',
+  getX402Fees: 'getX402Fees'
 }

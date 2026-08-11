@@ -38,6 +38,7 @@ import NagemonAPI from 'controller/API/NagemonAPI'
 import { getSdkError } from '@walletconnect/utils'
 import { formatJsonRpcResult } from '@json-rpc-tools/utils'
 import { removeCallRequest } from './chain'
+import { resetSuggestions } from './aiSearchHistory'
 import { getConnectorV2, redirectBackToDapp } from './walletconnect'
 import { ethers } from 'ethers'
 import { hexToBigInt } from 'viem'
@@ -61,10 +62,10 @@ export default class ReduxService {
   static resetChainIdByAddressScreen (chainId) {
     const reduxData = storeRedux.getState()
     const { activeAccount } = reduxData
-    const activeAccountTemp = { ...activeAccount }
+    const activeAccountTemp = cloneData(activeAccount)
     if (activeAccountTemp?.chainIdScreen) {
       Object.keys(activeAccountTemp.chainIdScreen).forEach(key => {
-        if (activeAccountTemp.chainIdScreen[key] === chainId) {
+        if (activeAccountTemp.chainIdScreen[key]?.toString() === chainId?.toString()) {
           delete activeAccountTemp.chainIdScreen[key]
         }
       })
@@ -76,7 +77,7 @@ export default class ReduxService {
     let chainIdByAddressScreenTemp = {}
     const reduxData = storeRedux.getState()
     const { activeAccount } = reduxData
-    const activeAccountTemp = { ...activeAccount }
+    const activeAccountTemp = cloneData(activeAccount)
     const { chainIdScreen, account } = activeAccount
 
     if (account) {
@@ -154,6 +155,9 @@ export default class ReduxService {
         storageRedux.push({ action: StorageReduxAction.setActiveEvmChainIds, init: initState.activeEvmChainIds })
         storageRedux.push({ action: StorageReduxAction.setAccountTokenList, init: initState.accountTokenList })
         storageRedux.push({ action: StorageReduxAction.setAiSearchHistory, init: initState.aiSearchHistory })
+        // The threads are gone, so no thread can still be "dismissed" — the pills
+        // must be back up the next time AI Search is opened.
+        resetSuggestions()
         storageRedux.push({ action: StorageReduxAction.setNotificationReadIds, init: initState.arrInit })
         storageRedux.push({ action: StorageReduxAction.setNotificationList, init: initState.arrInit })
       }
@@ -474,12 +478,13 @@ export default class ReduxService {
   }
 
   static async handleConnection (connection) {
-    // "Online" = interface is up AND internet is actually reachable. Note
-    // `isInternetReachable` can be null (unknown) — treat only an explicit
-    // `false` as offline so we don't fire false alerts before the first probe.
-    const isOnline = !!connection &&
-      connection.isConnected !== false &&
-      connection.isInternetReachable !== false
+    // "Online" = the network interface is up, nothing more. We deliberately do
+    // NOT look at `isInternetReachable`: that flag is the result of a probe that
+    // reports false-negatives on every background/resume cycle (iOS kills the
+    // in-flight probe when the app is suspended, Android revokes
+    // NET_CAPABILITY_VALIDATED / NOT_SUSPENDED while dozing), which showed the
+    // offline icon on a perfectly working connection.
+    const isOnline = !!connection && connection.isConnected !== false
 
     // Offline is surfaced inline where it matters (e.g. TokenList balance),
     // so we only keep the redux flag up to date here.
@@ -741,6 +746,10 @@ export default class ReduxService {
     // restored account that happens to share an address.
     this.callDispatchAction(StorageReduxAction.setActiveAccount(initState.activeAccount))
     this.callDispatchAction(StorageReduxAction.setAiSearchHistory(initState.aiSearchHistory))
+    // …and with it the dismissed-pill state, so the restored wallet opens AI
+    // Search on a fresh thread WITH its init suggestions rather than an empty
+    // chat whose pills are still hidden from before the restore.
+    resetSuggestions()
     // Drop the previous wallet's liquidity registration/deletion state so the
     // restored wallet doesn't inherit pools tied to a different account.
     this.callDispatchAction(StorageReduxAction.setAddressRegisteredLiquidity(initState.addressRegisteredLiquidity.slice()))

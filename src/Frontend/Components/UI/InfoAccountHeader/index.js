@@ -20,17 +20,41 @@ import useIsContractAddress from 'frontend/Hooks/useIsContractAddress'
 // (Contract Address) badge is then shown only for VIEW-ONLY accounts whose address
 // has bytecode on an active EVM chain — a watch-only contract address. Off by default
 // so other headers don't pay for the RPC call.
-const InfoAccountHeader = ({ infoAccount, showAlert, showContractBadge = true }) => {
+//
+// `alwaysCheckContract` drops the view-only half of that test, for screens whose
+// address is not an account in this wallet at all: Liquidity Management renders a
+// registered LP address, which can be registered from outside the app and lives in
+// `addressRegisteredLiquidity`, never in `accountListRedux`. The account lookup can
+// only ever answer "no" for it, so without this the badge could never show — not
+// even for an LP address that really is a contract.
+const InfoAccountHeader = ({ infoAccount, showAlert, showContractBadge = true, alwaysCheckContract = false }) => {
   const { activeAccount } = useSelector(state => state)
+  const accountList = useSelector(state => state.accountListRedux)
   const { account } = activeAccount
   const address = infoAccount?.address || account?.address || zeroAddress
 
   // Only view-only accounts get the contract check — a watch-only address is the only
   // case where the user might be tracking a contract rather than a wallet.
-  const isViewOnly = account?.accountType === ACCOUNT_TYPE.VIEW_ONLY
+  //
+  // Looked up by the ADDRESS BEING SHOWN rather than read off the active account:
+  // a header can render an address that is not the active one, and asking the
+  // active account there answers the question for the wrong address — registering
+  // any view-only contract elsewhere would flip the badge on for it.
+  const shownAccount = (accountList || []).find(
+    (a) => String(a?.address || '').toLowerCase() === String(address).toLowerCase()
+  ) || (
+    // The active account is persisted separately, so it can briefly be missing
+    // from the list; fall back to it rather than dropping the badge mid-update.
+    String(account?.address || '').toLowerCase() === String(address).toLowerCase()
+      ? account
+      : null
+  )
+  const isViewOnly = shownAccount?.accountType === ACCOUNT_TYPE.VIEW_ONLY
 
   // react-query keeps the result in-memory across remounts (no AsyncStorage).
-  const isContract = useIsContractAddress(address, { enabled: showContractBadge && isViewOnly })
+  const isContract = useIsContractAddress(address, {
+    enabled: showContractBadge && (alwaysCheckContract || isViewOnly)
+  })
 
   /**
    * Temporarily disable based on https://trello.com/c/R99xiYHp

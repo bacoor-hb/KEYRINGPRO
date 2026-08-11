@@ -98,20 +98,39 @@ const NftImage = ({ image }) => {
   )
 }
 
-const NftCard = ({ nft }) => (
-  <View style={styles.card}>
-    {/* pointerEvents none so the artwork never steals taps/scroll from the chat */}
-    <View style={styles.imageWrap} pointerEvents='none'>
-      <NftImage image={nft.image} />
-    </View>
-    <MyTextTicker variant='small' numberOfLines={1} style={styles.name}>
-      {nft.name}
-    </MyTextTicker>
-    <MyTextTicker variant='small' numberOfLines={1} style={styles.meta}>
-      {`#${nft.tokenId}`}
-    </MyTextTicker>
-  </View>
-)
+// A card is tappable only in picker mode — i.e. when the agent asked the user to
+// choose one NFT and gave this card the prompt to submit for it. Browse galleries
+// pass no prompt, so they stay inert. Either way the card looks IDENTICAL: the
+// picker is the same gallery the user already knows, only now answering a
+// question, so it gets no frame, badge or styling of its own — just a press
+// target over the exact same layout.
+const NftCard = ({ nft, onPick }) => {
+  const Container = onPick ? TouchableOpacity : View
+  return (
+    <Container style={styles.card} {...(onPick ? { onPress: onPick, activeOpacity: 0.7 } : {})}>
+      {/* pointerEvents none so the artwork never steals taps/scroll from the chat.
+          In picker mode this also lets the tap fall through to the card itself
+          instead of being swallowed by the image/WebView. */}
+      <View style={styles.imageWrap} pointerEvents='none'>
+        <NftImage image={nft.image} />
+      </View>
+      <MyTextTicker variant='small' numberOfLines={1} style={styles.name}>
+        {nft.name}
+      </MyTextTicker>
+      <MyTextTicker variant='small' numberOfLines={1} style={styles.meta}>
+        {`#${nft.tokenId}`}
+      </MyTextTicker>
+      {/* Only sent when a picker spans several collections — there the name and
+          token id can be identical on every card, and the collection is the one
+          thing that tells them apart. Absent everywhere else. */}
+      {!!nft.collectionName && (
+        <MyTextTicker variant='small' numberOfLines={1} style={styles.meta}>
+          {nft.collectionName}
+        </MyTextTicker>
+      )}
+    </Container>
+  )
+}
 
 /**
  * Gallery of the NFTs a wallet holds in one collection. Rendered from the
@@ -119,33 +138,63 @@ const NftCard = ({ nft }) => (
  * (often large `data:` base64) images arrive as structured props and are drawn
  * by the FE directly — they never pass through the chat text.
  *
- * props: { walletAddress, collectionName, nfts: [{ name, tokenId, contractAddress, image, chain }] }
+ * Two modes, decided by the agent via `props.mode`:
+ *   - 'browse' (default) — read-only. What get-wallet-nfts renders.
+ *   - 'picker' — the user must choose ONE. open-send-nft-form emits this when
+ *     the NFT name the user said matches several they own; every card carries a
+ *     `prompt` naming that NFT's exact token id + contract, and tapping a card
+ *     sends it as the next turn, which resolves to that single NFT and opens the
+ *     pre-filled send form.
+ *
+ * props: { walletAddress, collectionName, mode,
+ *          nfts: [{ name, tokenId, contractAddress, image, chain, prompt, collectionName }] }
  */
 // Cap how many cards render at once: each SVG card is a WebView, and a wallet
 // could hold a very large number in one collection — mounting hundreds of
 // WebViews would strain memory. The rest are summarised as "+N more".
+//
+// The agent sends EVERY match and leaves paging to us, so "show more" reveals
+// one further PAGE rather than the whole remainder: tapping it on a list of a
+// few hundred NFTs would otherwise mount them all in a single commit.
 const MAX_VISIBLE = 20
 
-const WalletNftList = ({ props }) => {
-  const [expanded, setExpanded] = useState(false)
+const WalletNftList = ({ props, onSend, language }) => {
+  const [limit, setLimit] = useState(MAX_VISIBLE)
 
   const nfts = Array.isArray(props?.nfts) ? props.nfts : []
   if (nfts.length === 0) return null
 
-  const visible = expanded ? nfts : nfts.slice(0, MAX_VISIBLE)
+  const isPicker = props?.mode === 'picker' && typeof onSend === 'function'
+
+  // Every tap sends, including repeats: the cards stay live after a pick so the
+  // user can choose a different NFT (or the same one again) without the picker
+  // locking them out.
+  const onPick = (nft) => {
+    if (!nft.prompt) return
+    // The prompt is composed by the agent and may be synthetic English — pass
+    // the payload's language so the next turn's reply stays in the user's
+    // language, the same way action buttons do.
+    onSend(nft.prompt, language)
+  }
+
+  const visible = nfts.slice(0, limit)
   const extra = nfts.length - visible.length
 
   return (
     <View style={styles.container}>
       <View style={styles.grid}>
         {visible.map((nft, idx) => (
-          <NftCard key={`${nft.contractAddress}-${nft.tokenId}-${nft.chain}-${idx}`} nft={nft} />
+          <NftCard
+            key={`${nft.contractAddress}-${nft.tokenId}-${nft.chain}-${idx}`}
+            nft={nft}
+            onPick={isPicker && nft.prompt ? () => onPick(nft) : undefined}
+          />
         ))}
       </View>
       {extra > 0 && (
-        <TouchableOpacity activeOpacity={0.7} onPress={() => setExpanded(true)}>
+        <TouchableOpacity activeOpacity={0.7} onPress={() => setLimit((n) => n + MAX_VISIBLE)}>
           <MyText variant='small' style={styles.meta}>
-            {`+${extra} more`}
+            {`+${Math.min(extra, MAX_VISIBLE)} more`}
           </MyText>
         </TouchableOpacity>
       )}

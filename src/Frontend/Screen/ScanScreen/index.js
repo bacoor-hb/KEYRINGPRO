@@ -6,8 +6,7 @@ import { isPaymentLink as isWCPaymentLink } from '@reown/walletkit'
 import BaseContainer from 'frontend/Container/BaseContainer'
 import {
   sleep,
-  debugInfo,
-  isURL
+  debugInfo
 } from 'common/function'
 import { connect } from 'react-redux'
 import { check, PERMISSIONS, RESULTS, request, openSettings, requestNotifications } from 'react-native-permissions'
@@ -20,7 +19,7 @@ import { setPendingWcConnect, approveWalletConnectProposal, rejectWalletConnectP
 import WalletConnectConnectModal from 'frontend/Screen/WalletConnect/Component/WalletConnectConnectModal'
 import AddChainPopup from 'frontend/Components/AddChainPopup'
 import { getSdkError } from '@walletconnect/utils'
-import { getConnectorV2, isWalletConnectPattern, redirectBackToDapp } from 'common/walletconnect'
+import { getConnectorV2, getUrlIconWalletConnect, isWalletConnectPattern, redirectBackToDapp } from 'common/walletconnect'
 import { getHeightHeader, getHeightScreen } from 'common/styles'
 import { NavigationActions, navigationRef } from 'src/navigation/NavigationService'
 import WalletConnectPay from 'common/walletConnectPay'
@@ -360,9 +359,11 @@ class ScanScreen extends BaseContainer {
 
       NavigationActions.navigate(NAME_SCREEN.walletConnectPay, {
         payLink: link,
-        paymentOptions
+        paymentOptions,
+        callback: () => {
+          this.setState({ ...INITIAL_STATE, isActiveCamera: true })
+        }
       })
-      this.setState({ ...INITIAL_STATE, isActiveCamera: true })
     } catch (error) {
       // console.log('handleWalletConnectPay unexpected error:', error)
       this.showAlert(I18n.t('WalletConnect.errorConnect'), '', { type: true })
@@ -578,43 +579,6 @@ class ScanScreen extends BaseContainer {
     }
   }
 
-  /**
-   * Scan - Step 3 - 1 - APPROVE the session_proposal.
-   *
-   * New model (v2): connect with the CURRENT account only, across ALL eip155
-   * chains the dApp requests (required + optional). No account/chain picker —
-   * the modal just confirms the dApp. The redux session entry keeps the legacy
-   * shape (so signing / manageRequestScreenV2 keep working) and additionally
-   * stores `accountAddress` so connected dApps can be listed per account.
-   */
-  getUrlIconWalletConnect = (urlIcon, urlSite) => {
-    if (!urlIcon && isURL(urlSite)) {
-      // get site icon from google favicon service
-      // https://miletadulovic.me/blog/get-any-website-favicon-using-free-google-api
-      const url = new URL(urlSite)
-      return `https://www.google.com/s2/favicons?domain=${url.hostname}&sz=64`
-    }
-
-    if (isURL(urlIcon)) {
-      return urlIcon
-    }
-
-    if (urlIcon?.startsWith('ipfs://')) {
-      return urlIcon.replace('ipfs://', 'https://ipfs.io/ipfs/')
-    }
-
-    if (typeof urlIcon === 'string' && isURL(urlSite)) {
-      const url = new URL(urlSite)
-      if (urlIcon?.startsWith('/')) {
-        return url.origin + urlIcon
-      } else {
-        return url.origin + '/' + urlIcon
-      }
-    }
-
-    return urlIcon
-  }
-
   // Route the WC session_proposal to the right place to show the connect drawer.
   //  - MOBILE deep link: stay on the scan screen and open the drawer HERE (no
   //    account context yet — the user picks one in the drawer). After connecting
@@ -625,7 +589,7 @@ class ScanScreen extends BaseContainer {
     let siteIcon = proposal?.params?.proposer?.metadata?.icons?.[0]
     const siteUrl = proposal?.params?.proposer?.metadata?.url
     const siteName = proposal?.params?.proposer?.metadata?.name
-    siteIcon = this.getUrlIconWalletConnect(siteIcon, siteUrl)
+    siteIcon = getUrlIconWalletConnect(siteIcon, siteUrl)
 
     const pending = { proposal, uri: this.state.uri, isFromDeepLink, siteIcon, siteName, siteUrl }
 
@@ -692,8 +656,14 @@ class ScanScreen extends BaseContainer {
       chainIds,
       account,
       urlVerifyState,
-      onClose: () => {
-        this.closeDrawer()
+      onClose: async () => {
+        // Let the sheet finish sliding down BEFORE touching navigation. The drawer
+        // lives inside this screen, so replacing the route mid-animation rips it
+        // off the screen halfway — very visible on tall devices, where the sheet
+        // still covers most of the screen when the transition starts. closeDrawer()
+        // resolves after the 400ms close animation (and returns immediately when
+        // the sheet is already gone, e.g. dismissed by swipe).
+        await this.closeDrawer()
         // Switch to the account that connected, then land on its WalletConnect
         // screen (the list there is filtered by the current account).
         if (account?.address) {
@@ -713,8 +683,11 @@ class ScanScreen extends BaseContainer {
 
   handleRejectConnect = () => {
     this._wcActionTaken = true
-    rejectWalletConnectProposal(this._wcProposal, () => {
-      this.closeDrawer()
+    rejectWalletConnectProposal(this._wcProposal, async () => {
+      // Same as approve: wait out the slide-down so leaving the screen doesn't cut
+      // the drawer animation in half. No-op wait when the user swiped it away —
+      // the sheet's own onClose only fires once the animation has completed.
+      await this.closeDrawer()
       // Mobile deep link: don't leave the user staring at the camera after a
       // reject. Pop the scan screen off the stack (it sits above home) and bounce
       // back to the dApp, matching the deep-link auth-reject flow.

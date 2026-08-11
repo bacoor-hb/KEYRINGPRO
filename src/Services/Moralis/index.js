@@ -3,6 +3,16 @@ import { stringify } from 'query-string'
 import KeysTurbo from 'react-native-keys'
 
 export default class MoralisService {
+  // THROWS on failure — deliberately, unlike the other calls in this class.
+  // Balances are the one response whose failure must stay distinguishable from
+  // "this wallet holds nothing on this chain": TokenListV2 commits whatever it
+  // gets back as the chain's new truth, so an error swallowed into [] wipes the
+  // list (or leaves a freshly imported wallet showing $0 while it actually holds
+  // funds). Callers catch this and fall back to another balance source.
+  //
+  // A partial failure throws too: pages already collected are dropped rather
+  // than returned, because committing half a wallet looks exactly like the other
+  // half being spent.
   static async getTokenBalanceByWallet (walletAddress, blockchain, nextPageCursor, listBalanceFinal = []) {
     const params = {
       method: 'GET',
@@ -21,23 +31,32 @@ export default class MoralisService {
       cursor: nextPageCursor
     }
 
-    try {
-      const response = await (
-        await (fetch(`${Config.SERVICE_MORALIS_API}/wallets/${walletAddress}/tokens?` + stringify(query), params))
-      ).json()
-      listBalanceFinal = listBalanceFinal.concat(response?.result || [])
-      if (response?.cursor) {
-        return this.getTokenBalanceByWallet(walletAddress, blockchain, response.cursor, listBalanceFinal)
-      }
-      return listBalanceFinal.map((item) => {
-        return {
-          blockchain,
-          ...item
-        }
-      })
-    } catch (error) {
-      return []
+    // No try/catch: a network error, a non-2xx status and a malformed body all
+    // have to reach the caller. Only an actually-empty `result` array means the
+    // wallet is empty.
+    const response = await fetch(
+      `${Config.SERVICE_MORALIS_API}/wallets/${walletAddress}/tokens?` + stringify(query),
+      params
+    )
+    if (!response.ok) {
+      throw new Error(`Moralis balances: HTTP ${response.status} on chain ${blockchain}`)
     }
+
+    const json = await response.json()
+    if (!Array.isArray(json?.result)) {
+      throw new Error(`Moralis balances: malformed response on chain ${blockchain}`)
+    }
+
+    listBalanceFinal = listBalanceFinal.concat(json.result)
+    if (json?.cursor) {
+      return this.getTokenBalanceByWallet(walletAddress, blockchain, json.cursor, listBalanceFinal)
+    }
+    return listBalanceFinal.map((item) => {
+      return {
+        blockchain,
+        ...item
+      }
+    })
   }
 
   static async getFullTxHistoryOfWalletByChain (address, blockchain, apiQueryParams = {}, history = []) {

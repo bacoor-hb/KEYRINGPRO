@@ -1,4 +1,4 @@
-import { findNodeHandle, View, KeyboardAvoidingView } from 'react-native'
+import { View, KeyboardAvoidingView } from 'react-native'
 import I18n from 'assets/Lang'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
@@ -260,19 +260,16 @@ const CustomRpc = ({ _this }) => {
               value={rpcCustom}
               onChangeText={onChangeTex}
               onFocus={(event) => {
-                // console.log({ scrollRef: scrollRef.current })
-
                 if (scrollRef.current) {
                   try {
                     setTimeout(() => {
                       if (scrollRef.current) {
                         try {
                           // Approach 1: Scroll straight to the end of ScrollView (input is at the bottom)
+                          // Fallback: if scrollToEnd is unavailable, use scrollTo from the root ScrollView
                           if (typeof scrollRef.current.scrollToEnd === 'function') {
                             scrollRef.current.scrollToEnd({ animated: true })
-                          }
-                          // Fallback: if scrollToEnd is unavailable, use scrollTo from the root ScrollView
-                          else if (scrollRef.current.getScrollResponder) {
+                          } else if (scrollRef.current.getScrollResponder) {
                             scrollRef.current.getScrollResponder().scrollToEnd({ animated: true })
                           }
                         } catch (error) {

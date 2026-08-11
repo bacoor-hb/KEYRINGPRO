@@ -117,6 +117,10 @@ export default class AllChainServices {
       // (BigNumber can't multiply by a BigInt).
       return Number(gas)
     } catch (err) {
+      // The 0 return tells the caller nothing about WHY (revert vs unreachable
+      // RPC vs a malformed param), so log the real reason in dev — every
+      // "this transaction cannot be completed" traces back to here.
+      if (__DEV__) console.log('[estimateGasTxs] failed', { chainIdOrChainType, rawTransaction, message: err?.shortMessage || err?.message, err })
       return 0
     }
   }

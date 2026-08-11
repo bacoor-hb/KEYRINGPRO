@@ -1,12 +1,12 @@
 import { View, TouchableOpacity, TouchableNativeFeedback, Keyboard } from 'react-native'
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import useGetSettingExchange from 'frontend/Hooks/useGetSettingExchange'
 import TitleDrawer from 'frontend/Components/UI/TitleDrawer'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
 import BtnBack from 'frontend/Components/UI/BtnBack'
 import { FlatList } from 'react-native-gesture-handler'
 import MyDotsLoading from 'frontend/Components/UI/MyDotsLoading'
-import { Colors, getHeightHeaderDrawer, PADDING_TOP_CONTAINER_DRAWER, pixelByHeight, pixelByWidth } from 'common/styles'
+import { Colors, getHeightHeaderDrawer, PADDING_TOP_CONTAINER_DRAWER, pixelByHeight, pixelByWidth, width } from 'common/styles'
 import createStyles from './styles'
 import MyIcon from 'frontend/Components/UI/MyIcon'
 import ListActionRow from 'frontend/Components/UI/ListActionRow'
@@ -42,11 +42,20 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
   const [textSearch, setTextSearch] = useState('')
   const [textSearchDebounce, setTextSearchDebounce] = useState('')
   const [heightAnchorHeader, setHeightAnchor] = useState(0)
+  const [tokenOut, setTokenOut] = useState()
 
   const { data: setting, isLoading: loadingSetting } = useGetSettingExchange()
   const { data: listTokensAPI, isLoading: loadingTokensAPI } = useGetTokenSearchByChain(chainIdOut, textSearchDebounce)
   const { data: listBalanceUser, isLoading: loadingListTokensByAddress } = useGetListTokenByChainAndAddress(account?.address, [chainIdOut])
   const styles = createStyles()
+  const querySearchToken = useMemo(() => {
+    if (tokenOut && !tokenOut?.coinGeckoId) {
+      return tokenOut?.address || tokenOut?.contractAddress || zeroAddress
+    }
+    return null
+  }, [tokenOut])
+
+  const { data: tokenSearch, isLoading: loadingTokenSearch } = useGetTokenSearchByChain(chainIdOut, querySearchToken)
 
   const loading = loadingSetting || loadingTokensAPI || loadingListTokensByAddress
 
@@ -56,7 +65,7 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
       const address = lowerCase(balanceToken.contractAddress || balanceToken.address || zeroAddress)
 
       if (!mapTemp[address] && !balanceToken?.isHidden) {
-        const balance = BigNumber(convertWeiToBalance(balanceToken.balance, balanceToken?.decimals || 18)).toString()
+        const balance = BigNumber(convertWeiToBalance(balanceToken.balance || '0', balanceToken?.decimals || 18)).toString()
         const price = BigNumber(balanceToken.priceUSD || '0').toString()
         let isValidToShow = false
 
@@ -71,7 +80,7 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
           isValidToShow = true
         }
 
-        if (isValidToShow) {
+        if (isValidToShow && BigNumber(balance || '0').gt(0)) {
           const tokenTemp = { ...balanceToken }
           tokenTemp.address = address
           tokenTemp.balance = balance
@@ -101,7 +110,7 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
       return []
     }
     const chain = setting?.chainSupport.find(item => item.chainId?.toString() === chainIdOut?.toString())
-    const listToken = chain.featuredTokens
+    const listToken = chain?.featuredTokens || []
     const data = []
     listToken.forEach((token) => {
       const isHaveName = hasCommonChar(token.name, textSearchDebounce)
@@ -145,10 +154,48 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
     return false
   }, [tokenShow, textSearchDebounce])
 
+  useEffect(() => {
+    if (!loadingTokenSearch && tokenOut) {
+      if (tokenSearch?.length > 0) {
+        const tokenMerge = { ...tokenOut, ...tokenSearch[0] }
+        const exitTokenBalance = listBalanceUser?.find(tokenUser => {
+          if (isNativeToken(tokenUser?.contractAddress)) {
+            return zeroAddress === tokenMerge.address
+          }
+          return lowerCase(tokenUser?.contractAddress) === lowerCase(tokenMerge?.address)
+        })
+        if (exitTokenBalance?.symbol) {
+          tokenMerge.symbol = exitTokenBalance.symbol
+        }
+        handleSelectToken(tokenMerge)
+      } else {
+        handleSelectToken(tokenOut)
+      }
+    }
+  }, [loadingTokenSearch, tokenSearch, tokenOut, listBalanceUser])
+
   const handleLoadMore = () => {
     const totalPage = Math.floor(listTokens.length / MAX_SHOW_TOKEN)
     if (pageListToken < totalPage) {
       setPageListToken(prev => prev + 1)
+    }
+  }
+
+  const onSelectToken = (token) => {
+    if (token?.coinGeckoId) {
+      setTokenOut(token)
+    } else {
+      const exitTokenBalance = listBalanceUser?.find(tokenUser => {
+        if (isNativeToken(tokenUser?.contractAddress)) {
+          return zeroAddress === token.address
+        }
+        return lowerCase(tokenUser?.contractAddress) === lowerCase(token?.address)
+      })
+      if (exitTokenBalance) {
+        handleSelectToken(exitTokenBalance)
+      } else {
+        setTokenOut(token)
+      }
     }
   }
 
@@ -164,7 +211,7 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
 
       if (isHaveName || isHaveSymbol || isHaveAddress) {
         data.push({
-          onPress: () => handleSelectToken(token),
+          onPress: () => onSelectToken(token),
           title: token?.name,
 
           rightElement: (nativeCoin || CHAIN_FULL_TOKEN_RECOMMEND_FEE_GAS.includes(chainIdOut?.toString())) && (<MyIcon variant='small' uri={images.UIV2.icons.gas} resizeMode='contain' />),
@@ -216,7 +263,7 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
         keyExtractor={(item, index) => `token-${item?.address || item.name}-${index}`}
         renderItem={({ item }) => {
           return (
-            <Token isSearch={!!textSearchDebounce} key={item?.address || item.name} token={item} onPress={handleSelectToken} />
+            <Token isSearch={!!textSearchDebounce} key={item?.address || item.name} token={item} onPress={onSelectToken} />
           )
         }}
         ListEmptyComponent={isShowEmptySearchToken ? renderEmpty : null}
@@ -296,6 +343,23 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
             <>
               {renderListTokens()}
             </>
+          )
+        }
+        {
+          tokenOut && (
+            <View
+              style={{
+                position: 'absolute',
+                zIndex: 10000,
+                width: width(100),
+                height: '100%',
+                top: 0,
+                backgroundColor: Colors.BG_BACK_DROP_MODAL
+              }}>
+              <View className='flex flex-1 items-center justify-center'>
+                <MyDotsLoading variant='large' />
+              </View>
+            </View>
           )
         }
       </MyViewPage>

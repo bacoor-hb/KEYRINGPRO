@@ -65,7 +65,13 @@ export const STEP_SEND = {
   sending: 1, // broadcasting the tx
   sent: 2, // got the hash, waiting for confirmation
   success: 3,
-  failed: 4
+  failed: 4,
+  // The send never started: it was called off BEFORE anything was signed or
+  // broadcast (NFC turned off / unsupported, the user cancelled the card scan,
+  // wrong card). Nothing failed on-chain, so the timeline must not show a
+  // failed result — the form simply comes back. The reason was already shown
+  // by whoever aborted (e.g. the "NFC is not available" sheet).
+  aborted: 5
 }
 
 // EVM chains whose fee is dominated by an L1 data component; use a finer slider.
@@ -722,6 +728,16 @@ const SendToken = ({ _this }) => {
 
   // -> Submit -----------------------------------------------------------------
   const callbackStep = (nextStep, data) => {
+    // Called off before signing (see STEP_SEND.aborted): rewind the drawer to the
+    // form instead of leaving a "Fail — something went wrong with your network"
+    // result on screen for something that was never a transaction.
+    if (nextStep === STEP_SEND.aborted) {
+      setTableView('enter')
+      setStep(null)
+      setHash('')
+      setError('')
+      return
+    }
     setStep(nextStep)
     if (nextStep === STEP_SEND.sent) setHash(data)
     // Broadcast went out (got a hash) → remember the address-book recipient.
@@ -729,7 +745,14 @@ const SendToken = ({ _this }) => {
     if (nextStep === STEP_SEND.success) {
       // Refresh the V2 token list — drives BOTH this token-detail screen's live
       // balance and HomeScreen's totals (both read accountTokenListRedux reactively).
-      setTimeout(() => refreshAccountTokens(userAddress, { chainIds: [chainId], tokenAddress: token?.contractAddress }), 1500)
+      //
+      // Sending an ERC-20 moves TWO balances: the token, and the native coin the
+      // gas was paid from. Refreshing only the token left the native balance
+      // showing its pre-send figure until something else happened to refetch it.
+      // A native send already covers itself, and asking for it twice would just
+      // read the same target twice.
+      const refreshTargets = isNative ? [zeroAddress] : [token?.contractAddress, zeroAddress]
+      setTimeout(() => refreshAccountTokens(userAddress, { chainIds: [chainId], tokenAddress: refreshTargets }), 1500)
     }
     if (data?.error) setError(typeof data.error === 'string' ? data.error : I18n.t('GlobalError.somethingWrongErr'))
   }

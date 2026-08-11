@@ -1,13 +1,8 @@
-import React, { useContext } from 'react'
-import { View, Text, TouchableOpacity, Image } from 'react-native'
+import React from 'react'
+import { View, TouchableOpacity, Image } from 'react-native'
 import styles from './styles'
-import { Icon } from 'frontend/Components/Common/Icon'
-import { IconType } from 'common/constants/app'
-import Button from 'frontend/Components/Common/Button'
 import images from 'assets/Image'
 import I18n from 'assets/Lang'
-import { ThemeContext } from 'frontend/Contexts/ThemeContext'
-import { getColorIconByTheme } from 'common/function'
 import NfcManager from 'react-native-nfc-manager'
 import MyButton from '../UI/MyButton'
 import MyText from '../UI/MyText'
@@ -15,7 +10,6 @@ import MyIcon from '../UI/MyIcon'
 
 const NFCSettingPopup = props => {
   const { closeModal, callBackBeforeGoSetting, callBackBeforeCloseModal } = props
-  const { modeTheme, styleTheme } = useContext(ThemeContext)
 
   const goToNfcSetting = async () => {
     callBackBeforeGoSetting && callBackBeforeGoSetting()

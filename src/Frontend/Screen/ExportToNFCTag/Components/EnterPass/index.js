@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
 import createStyles from './styles'
 import images from 'assets/Image'
@@ -6,7 +6,6 @@ import TitleDrawer from 'frontend/Components/UI/TitleDrawer'
 import MyKeyboardNumber from 'frontend/Components/UI/MyKeyboardNumber'
 import { View } from 'react-native'
 import I18n from 'assets/Lang'
-import MyText from 'frontend/Components/UI/MyText'
 import { pixelByHeight } from 'common/styles'
 import InputOTP from 'frontend/Components/UI/InputOTP'
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback'
@@ -19,16 +18,6 @@ const EnterPass = ({ _this }) => {
   const [passwordAgain, setPasswordAgain] = useState('')
   const [isShowEnterPassAgain, setIsShowEnterPassAgain] = useState(false)
   const styles = createStyles()
-  const isValidPass = useMemo(() => {
-    if (passwordAgain) {
-      return password === passwordAgain
-    }
-    return true
-  }, [password, passwordAgain])
-
-  const isPassLength = useMemo(() => {
-    return (password?.length || -1) === (passwordAgain?.length || 0)
-  }, [password, passwordAgain])
 
   const onEnterPass = (value, isAgain) => {
     try {

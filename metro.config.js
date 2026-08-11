@@ -11,13 +11,13 @@ const defaultConfig = getDefaultConfig(__dirname)
 const config = {
   resolver: {
     // extraNodeModules: nodeLibs,
-    // 1. Cho phép Metro đọc các export hiện đại
+    // 1. Let Metro resolve modern package `exports`
     unstable_enablePackageExports: true,
-    // 2. Ưu tiên các định dạng file mà viem sử dụng
+    // 2. Accept the module formats viem ships
     sourceExts: [...defaultConfig.resolver.sourceExts, 'cjs', 'mjs'],
-    // Cho phép require() file .lottie (dotlottie-react-native)
+    // Allow require() of .lottie files (dotlottie-react-native)
     assetExts: [...defaultConfig.resolver.assetExts, 'lottie'],
-    // 3. Giải quyết vấn đề tìm kiếm file
+    // 3. Package entry-point lookup order
     resolverMainFields: ['sbmodern', 'react-native', 'browser', 'main'],
     extraNodeModules: {
       crypto: require.resolve('crypto-browserify'),

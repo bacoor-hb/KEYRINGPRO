@@ -81,14 +81,14 @@ const createStyles = () => {
       height: TOKEN_ICON
     },
     amountErrorSpace: {
-      height: pixelByHeight(49),
+      minHeight: pixelByHeight(49),
       justifyContent: 'flex-start'
     },
     hintRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: pixelByWidth(6),
-      marginTop: pixelByHeight(8)
+      gap: pixelByWidth(6)
+      // marginTop: pixelByHeight(8)
     },
     hintIcon: {
       width: getSizeImgSquare('small'),

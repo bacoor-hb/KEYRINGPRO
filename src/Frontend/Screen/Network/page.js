@@ -68,6 +68,7 @@ const NetworkPage = ({ func }) => {
         return
       }
       dispatch(StorageReduxAction.setActiveEvmChainIds(current.filter(c => c !== id)))
+      ReduxService.resetChainIdByAddressScreen(id)
     } else {
       dispatch(StorageReduxAction.setActiveEvmChainIds([...current, id]))
     }

@@ -5,36 +5,53 @@ import { fontSize, pixelByHeight, pixelByWidth, Colors } from 'common/styles'
 // variants. TextInput keeps fontSize here because it has no MyText equivalent.
 // Spacing uses the design-pixel helpers (pixelByWidth / pixelByHeight) rather
 // than the percentage-of-screen width()/height() helpers.
+
+// How far an `interactive` liquid-glass surface may bulge outside its own bounds
+// when pressed. Any scroller/box that clips must leave this much room around a
+// glass child, or the press effect is visibly sliced off.
+const GLASS_BLEED = pixelByWidth(6)
+
 const styles = StyleSheet.create({
   card: { marginTop: pixelByHeight(12) },
 
-  // Boxed background around the form + its submit button.
+  // Boxed background around the form + its submit button. Owns the spacing
+  // between its top-level blocks (header / each field / submit) via `gap`, so
+  // no child carries a vertical margin of its own.
   formBox: {
     backgroundColor: Colors.BG_INPUT_FIELD,
     borderRadius: pixelByWidth(16),
-    padding: pixelByHeight(12)
+    padding: pixelByHeight(12),
+    gap: pixelByHeight(14)
   },
 
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerMeta: { flexDirection: 'row', gap: pixelByWidth(6), paddingVertical: pixelByHeight(3), borderRadius: pixelByWidth(50) },
+  // Header block: title row + the divider under it, spaced as one unit.
+  headerBlock: { gap: pixelByHeight(12) },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: pixelByWidth(8) },
+  headerMeta: { flexDirection: 'row', gap: pixelByWidth(6), borderRadius: pixelByWidth(24) },
   tag: {
-    paddingHorizontal: pixelByWidth(10),
+    paddingHorizontal: pixelByWidth(12),
     paddingVertical: pixelByHeight(3),
-    borderRadius: pixelByWidth(12),
+    borderRadius: pixelByWidth(11),
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
+    backgroundColor: '#09090A'
   },
 
-  divider: { height: 1, marginVertical: pixelByHeight(8) },
+  divider: { height: pixelByHeight(1) },
 
-  fieldLabel: { marginTop: pixelByHeight(10), marginBottom: pixelByHeight(6) },
+  // One label + control pair. Internal spacing is the group's `gap`; the space
+  // to the next block comes from formBox's gap.
+  fieldGroup: { gap: pixelByHeight(8) },
+
+  // A field's label row: the title, plus the amount field's "(~$X)" beside it.
+  // Same spacing as the add-liquidity amount title, so the two forms read alike.
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: pixelByWidth(8) },
 
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: pixelByWidth(50),
-    paddingHorizontal: pixelByWidth(12),
-    marginBottom: pixelByHeight(3)
+    paddingHorizontal: pixelByWidth(12)
   },
   input: { flex: 1, fontSize: fontSize(16.5), paddingVertical: pixelByHeight(10) },
   // Address field wrapper. A long 0x address is multiline so it wraps instead of
@@ -63,8 +80,8 @@ const styles = StyleSheet.create({
 
   // Reserved space for an inline error so showing/hiding it never shifts the
   // layout; the message is positioned absolute inside the slot.
-  errorSlot: { minHeight: pixelByHeight(20) },
-  errorText: { position: 'absolute', top: 0, left: pixelByWidth(4), right: pixelByWidth(4) },
+  errorSlot: { minHeight: pixelByHeight(14) * 1.5 },
+  errorText: { position: 'absolute', top: 0, left: 0 },
 
   // Once the tx is submitted the form stops being something to act on — it's a
   // record of what was signed. Dimming it pushes it visually behind the status
@@ -74,20 +91,49 @@ const styles = StyleSheet.create({
   // backgroundColor: Fabric never flattens it, so it can't flip between
   // flattened/un-flattened mid mount-transaction (which is what crashes with
   // "Attempt to recycle a mounted view"). Keep that background if this moves.
-  formBoxSubmitted: { opacity: 0.5 },
+  formBoxSubmitted: { opacity: 0.7 },
 
-  quickRow: { paddingVertical: pixelByHeight(4), gap: pixelByWidth(8), marginBottom: pixelByHeight(4) },
+  // Quick-pick chips + the spendable line under the amount field, spaced as one
+  // group so neither needs a margin of its own.
+  amountExtras: { gap: pixelByHeight(8) },
+  // "Spendable: <amount>" as a row rather than one wrapping sentence: the label
+  // keeps its intrinsic width and the value takes the rest, so a long balance
+  // scrolls inside the ticker instead of pushing the label off or wrapping.
+  spendableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: pixelByWidth(4)
+  },
+  spendableValue: { flex: 1 },
+  // The chips are `interactive` glass: pressing one makes the surface bulge
+  // BEYOND its own bounds, and a ScrollView clips to its frame — so a chip flush
+  // against the edge gets its press effect sliced off on all four sides. The
+  // scroller is given room to overflow into (padding), then pulled back out by
+  // an equal negative margin so the row occupies exactly the same space as
+  // before. GLASS_BLEED is that overflow allowance.
+  quickScroll: {
+    flexGrow: 0,
+    marginHorizontal: -GLASS_BLEED,
+    marginVertical: -GLASS_BLEED
+  },
+  quickRow: {
+    gap: pixelByWidth(8),
+    paddingHorizontal: GLASS_BLEED,
+    paddingVertical: GLASS_BLEED
+  },
   quickChip: {
     paddingHorizontal: pixelByWidth(12),
     paddingVertical: pixelByHeight(5),
-    borderRadius: pixelByWidth(12),
+    // Fully rounded: a radius past half the chip's height always renders as a
+    // pill, whatever the text or font scale makes it.
+    borderRadius: pixelByWidth(999),
     alignItems: 'center',
     justifyContent: 'center'
   },
 
-  balanceRow: { marginBottom: pixelByHeight(8) },
-
-  submitBtnWrap: { marginTop: pixelByHeight(14) },
+  // The x402 fee line + the submit button, spaced as one block.
+  submitBlock: { gap: pixelByHeight(8) },
+  feeNotice: { textAlign: 'left' },
   submitBtnDisabled: { opacity: 0.45 }
 })
 

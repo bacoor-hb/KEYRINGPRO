@@ -89,7 +89,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode versCode as Integer
-        versionName "6.0.0"
+        versionName "6.1.0"
         missingDimensionStrategy 'react-native-capture-protection', 'base'
     }
     signingConfigs {

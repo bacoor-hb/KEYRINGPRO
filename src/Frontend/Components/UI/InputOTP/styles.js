@@ -34,6 +34,16 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     paddingBottom: pixelByHeight(64 / 3)
   },
+  // Applied on top of pinRow / pinBox for codes longer than 4 digits, so a
+  // 6-digit row still fits the narrowest supported screen (6 x 44 + 5 x 10 = 314).
+  pinRowCompact: {
+    gap: pixelByWidth(10)
+  },
+  pinBoxCompact: {
+    width: pixelByWidth(44),
+    height: pixelByHeight(58),
+    paddingBottom: pixelByHeight(58 / 3)
+  },
   pinDash: {
     width: pixelByWidth(13),
     height: pixelByWidth(2),

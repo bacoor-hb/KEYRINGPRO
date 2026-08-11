@@ -14,6 +14,7 @@ import MyText from 'frontend/Components/UI/MyText'
 import MyButton from 'frontend/Components/UI/MyButton'
 import ScrollViewBlurHeader from 'frontend/Components/UI/ScrollViewBlurHeader'
 import InputCustom from 'frontend/Components/UI/InputCustom'
+import { getDeviceAuthLabel, isFaceBiometryType } from 'common/keychain'
 
 const ChangePassword = (_this) => {
   const { func, state } = _this
@@ -35,6 +36,7 @@ const ChangePassword = (_this) => {
     isTurnFaceId,
     isAgree,
     isBiometricAvailable,
+    biometryType = null,
     biometricEnableMode,
     setPasswordMode
   } = state
@@ -98,11 +100,11 @@ const ChangePassword = (_this) => {
       {isBiometricAvailable && (
         <View style={[styles.containerItem]}>
           <View style={styles.containerLeftItem}>
-            <MyIcon uri={images.UIV2.icons.faceID} />
+            <MyIcon uri={isFaceBiometryType(biometryType) ? images.UIV2.icons.faceID : images.UIV2.security.deviceAuthen} />
           </View>
           <View style={styles.containerContentItem}>
 
-            <MyText className='text-medium '>{I18n.t('v2.security.turnFaceId')}</MyText>
+            <MyText className='text-medium '>{getDeviceAuthLabel(biometryType)}</MyText>
           </View>
           <View className='absolute right-0  h-full items-end justify-center '>
             <MySwitch value={!!isTurnFaceId} onValueChange={handleToggleFaceId} />

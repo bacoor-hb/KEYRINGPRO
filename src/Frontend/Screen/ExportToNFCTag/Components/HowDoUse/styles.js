@@ -1,5 +1,5 @@
 import { StyleSheet } from 'react-native'
-import { getSafeAreaValues, PADDING_TOP_CONTAINER_DRAWER, pixelByHeight } from 'common/styles'
+import { PADDING_TOP_CONTAINER_DRAWER, pixelByHeight } from 'common/styles'
 
 const createStyles = () => {
   return StyleSheet.create({

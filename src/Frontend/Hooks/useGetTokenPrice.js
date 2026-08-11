@@ -2,8 +2,9 @@ import { useQuery } from 'react-query'
 import { REACT_QUERY_KEY } from 'common/constants/reactQuery'
 import { isNativeToken } from 'common/tokens'
 import { isAddress, zeroAddress } from 'viem'
-import { lowerCase } from 'common/function'
+import { lowerCase, sanitizeUrl } from 'common/function'
 import { NATIVE_TOKEN_BY_CHAIN_ID } from 'common/constants/app'
+import { resolveKeyringTokenPriceUSD } from 'src/Services/TokenListV2'
 import Config from 'react-native-config'
 
 const getData = async ({ queryKey }) => {
@@ -24,7 +25,7 @@ const getData = async ({ queryKey }) => {
       }
     }
 
-    const res = await fetch(url)
+    const res = await fetch(sanitizeUrl(url))
 
     const data = await res.json()
 
@@ -33,8 +34,16 @@ const getData = async ({ queryKey }) => {
     const tokenInfo = arr.find(e => {
       return lowerCase(e?.address || zeroAddress) === lowerCase(textSearch)
     })
+    if (!tokenInfo) return null
 
-    return tokenInfo?.price || null
+    // Not `tokenInfo.price` directly: for a share-based yield vault that field is
+    // the UNDERLYING asset's price, not the price of one share the user holds —
+    // the token list already converts it on-chain, so a raw price here would make
+    // every screen using this hook disagree with the list. resolveKeyringTokenPriceUSD
+    // returns the per-SHARE price for those (and the API price unchanged, with no
+    // RPC, for every other token).
+    const priceUSD = await resolveKeyringTokenPriceUSD(chainId, tokenInfo)
+    return priceUSD
   } catch (error) {
     return null
   }

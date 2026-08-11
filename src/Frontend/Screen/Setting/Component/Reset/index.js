@@ -29,7 +29,8 @@ const RestWallet = () => {
 
     clearMoreDataLocal([
       KEYSTORE.HISTORY_BACKUP,
-      KEYSTORE.HISTORY_WC_PAY
+      KEYSTORE.HISTORY_WC_PAY,
+      KEYSTORE.LIST_CHAIN_SUPPORT_EXCHANGE
     ])
   }
 

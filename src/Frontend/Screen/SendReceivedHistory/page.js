@@ -8,26 +8,23 @@ import HistoryItem from './Component/HistoryItem'
 import TitleScreen from 'frontend/Components/UI/TitleScreen'
 import useSendReceivedHistory from 'frontend/Hooks/useSendReceivedHistory'
 import { lowerCase } from 'common/function'
-import { useSelector } from 'react-redux'
 import images from 'assets/Image'
 import MyIcon from 'frontend/Components/UI/MyIcon'
 import { zeroAddress } from 'viem'
 import useGetTokenListHasPrice from 'frontend/Hooks/useGetTokenListHasPrice'
 import LottieRefreshFlatList from 'frontend/Components/UI/LottieRefreshFlatList'
 import MyDotsLoading from 'frontend/Components/UI/MyDotsLoading'
-import { getHeightHeader } from 'common/styles'
-import { getRelevantTransfers } from './helper'
+import { getHeightHeader, pixelByHeight } from 'common/styles'
+import { isNativeToken } from 'common/tokens'
+import { NATIVE_TOKEN_BY_CHAIN_ID_IN_HISTORY } from 'common/constants/app'
 
 const SendReceivedHistoryPage = ({ _this }) => {
   const { typeScreen, state } = _this
   const { chainId } = state
-
-  const { activeAccount } = useSelector(state => state)
-  const { account } = activeAccount
-  const { data: dataAll, refetch, isLoading } = useSendReceivedHistory(chainId)
-  const styles = createStyles()
-  const address = account.address
   const isSend = typeScreen === 'send'
+
+  const { data: dataAll, refetch, isLoading: loadingAllData } = useSendReceivedHistory(chainId, isSend)
+  const styles = createStyles()
 
   const titleScreen = useMemo(() => {
     if (isSend) {
@@ -37,97 +34,78 @@ const SendReceivedHistoryPage = ({ _this }) => {
     }
   }, [isSend])
 
-  // Attach the transfers relevant to this screen (grouped by token, value > 0,
-  // correct from/to address) and keep only transactions that have at least one.
-  // `token swap` rows are handled here too: the leg matching `direction` decides
-  // whether the swap belongs to the send or the receive screen.
-  const dataFilterByTypeScreen = useMemo(() => {
-    if (!Array.isArray(dataAll)) {
-      return []
-    }
-    return dataAll
-      .map(e => ({ ...e, displayTransfers: getRelevantTransfers(e, address, isSend) }))
-      .filter(e => e.displayTransfers.length > 0)
-  }, [dataAll, address, isSend])
-
-
   const querySearchTokenHasPrice = useMemo(() => {
-    if (dataFilterByTypeScreen.length > 0) {
-      const tokenByChainObject = {}
-      const chainIdsObject = {}
-      dataFilterByTypeScreen.forEach(item => {
-        const chainId = item.chainId
+    if (!Array.isArray(dataAll) || dataAll.length === 0) {
+      return { chainIsd: [], options: {} }
+    }
+    const tokenByChainObject = {}
+    const chainIdsObject = {}
 
-        chainIdsObject[chainId] = chainId
-        if (!tokenByChainObject[chainId]) {
-          tokenByChainObject[chainId] = {}
-        }
-
-        // Collect every token surfaced on this screen (a swap can surface more
-        // than one), not just the first transfer, so each gets a price/icon.
-        item.displayTransfers.forEach(tr => {
-          const addressToken = tr.isNative ? zeroAddress : (tr.address || zeroAddress)
-          tokenByChainObject[chainId][lowerCase(addressToken)] = addressToken
-        })
-      })
-
-      Object.keys(tokenByChainObject).forEach(chainId => {
-        tokenByChainObject[chainId] = { contractAddresses: Object.keys(tokenByChainObject[chainId]) }
-        if (tokenByChainObject[chainId].length === 0) {
-          delete tokenByChainObject[chainId]
-        }
-      })
-
-      return {
-        chainIsd: Object.keys(chainIdsObject),
-        options: tokenByChainObject
+    dataAll.forEach(item => {
+      const cId = item.chainId
+      chainIdsObject[cId] = cId
+      if (!tokenByChainObject[cId]) {
+        tokenByChainObject[cId] = {}
       }
-    }
+
+      const contractAddress = item.rawContract?.address || zeroAddress
+      tokenByChainObject[cId][lowerCase(contractAddress)] = contractAddress
+    })
+
+    Object.keys(tokenByChainObject).forEach(cId => {
+      tokenByChainObject[cId] = { contractAddresses: Object.keys(tokenByChainObject[cId]) }
+      if (tokenByChainObject[cId].contractAddresses.length === 0) {
+        delete tokenByChainObject[cId]
+      }
+    })
+
     return {
-      chainIsd: [],
-      options: {}
+      chainIsd: Object.keys(chainIdsObject),
+      options: tokenByChainObject
     }
-  }, [dataFilterByTypeScreen])
+  }, [dataAll])
 
   const { data: tokenListHasPrice, isLoading: loadingTokenListHasPrice } = useGetTokenListHasPrice(querySearchTokenHasPrice.chainIsd, querySearchTokenHasPrice.options)
 
   // Spam filter: an ERC20 transfer is kept only when the token resolves to a
   // priced entry (also gives us its icon). Native transfers are inherently
-  // trusted, so they pass through untouched. A transaction survives only if it
-  // still has at least one display transfer afterwards.
+  // trusted, so they pass through untouched.
   const tokenHistoryFilterHasPrice = useMemo(() => {
-    return dataFilterByTypeScreen
-      .map(tokenHistory => {
-        const displayTransfers = tokenHistory.displayTransfers
-          .map(tr => {
-            if (tr.isNative) {
-              return tr
-            }
-            const token = tokenListHasPrice.find(tokenPrice => {
-              return lowerCase(tokenPrice.address || zeroAddress) === lowerCase(tr.address || zeroAddress) && Number(tokenPrice.chainId) === Number(tokenHistory.chainId)
-            })
-            if (!token) {
-              return null
-            }
-            return { ...tr, icon_image: token.icon_image || tr.token_logo }
-          })
-          .filter(Boolean)
-        return { ...tokenHistory, displayTransfers }
-      })
-      .filter(tokenHistory => tokenHistory.displayTransfers.length > 0)
-  }, [tokenListHasPrice, dataFilterByTypeScreen])
+    if (!Array.isArray(dataAll)) {
+      return []
+    }
+    return dataAll.filter(item => {
+      const addressToken = item.rawContract?.address
+      const isNative = !addressToken
+      const isNativeTokenConvertZeroAddress = NATIVE_TOKEN_BY_CHAIN_ID_IN_HISTORY[item.chainId] === lowerCase(addressToken)
+      if (isNative || (isNativeTokenConvertZeroAddress && addressToken)) {
+        const token = tokenListHasPrice.find(tokenPrice => {
+          return isNativeToken(tokenPrice.address)
+        })
+        item.icon_image = token?.icon_image
+        return true
+      }
 
-  // Initial load: nothing to show yet and a query is running.
-  const isInitialLoading = (isLoading || loadingTokenListHasPrice) && tokenHistoryFilterHasPrice.length === 0
+      const contractAddr = lowerCase(item.rawContract?.address || zeroAddress)
+      const token = tokenListHasPrice.find(tokenPrice => {
+        return lowerCase(tokenPrice.address || zeroAddress) === contractAddr && Number(tokenPrice.chainId) === Number(item.chainId)
+      })
+
+      if (!token) {
+        return false
+      }
+
+      item.icon_image = token.icon_image
+      return true
+    })
+  }, [tokenListHasPrice, dataAll])
+
+  const isInitialLoading = (loadingAllData || loadingTokenListHasPrice) && tokenHistoryFilterHasPrice.length === 0
 
   const doRefresh = useCallback(() => {
-    // react-query owns the fetch state via `isFetching`; just kick the refetch and
-    // the Lottie spinner stays up for as long as `isFetching === true`.
     refetch()
   }, [refetch])
 
-  // Loading and empty share the same slot (ListEmptyComponent) so the dots sit in
-  // the exact spot the "No history" state would — below the title, not centered.
   const renderEmpty = () => {
     if (isInitialLoading) {
       return (
@@ -135,7 +113,6 @@ const SendReceivedHistoryPage = ({ _this }) => {
           <View style={styles.emptySpacer} className='items-center'>
             <MyDotsLoading variant='large' />
           </View>
-
         </View>
       )
     }
@@ -151,25 +128,33 @@ const SendReceivedHistoryPage = ({ _this }) => {
 
   return (
     <MyViewPage style={styles.container}>
-      <LottieRefreshFlatList
-        blurHeader
-        topOffset={getHeightHeader(true)}
-        refreshing={false}
-        onRefresh={doRefresh}
-        showWhileRefreshing={false}
-        data={tokenHistoryFilterHasPrice}
-        keyExtractor={(t, idx) => `${t.metaKey}-${idx}`}
-        renderItem={({ item, index }) => (
-          <HistoryItem isFirst={index === 0} chainId={chainId} isSend={typeScreen === 'send'} key={item.id} item={item} />
-        )}
-        showsVerticalScrollIndicator={false}
-        ListHeaderComponent={(
-          <TitleScreen title={titleScreen} />
-        )}
-        ListEmptyComponent={renderEmpty}
-        // ListFooterComponent={renderFooter}
-        contentContainerStyle={styles.listContent}
-      />
+      {
+        (loadingAllData || loadingTokenListHasPrice) ? (
+          <View style={{ marginTop: getHeightHeader() + pixelByHeight(100), alignItems: 'center' }}>
+            <MyDotsLoading variant='large' />
+          </View>
+        ) : (
+          <LottieRefreshFlatList
+            blurHeader
+            topOffset={getHeightHeader(true)}
+            refreshing={false}
+            onRefresh={doRefresh}
+            showWhileRefreshing={false}
+            data={tokenHistoryFilterHasPrice}
+            keyExtractor={(t, idx) => `${t.uniqueId || t.hash}-${idx}`}
+            renderItem={({ item, index }) => (
+              <HistoryItem isFirst={index === 0} chainId={chainId} isSend={isSend} item={item} />
+            )}
+            showsVerticalScrollIndicator={false}
+            ListHeaderComponent={(
+              <TitleScreen title={titleScreen} />
+            )}
+            ListEmptyComponent={renderEmpty}
+            contentContainerStyle={styles.listContent}
+          />
+        )
+      }
+
     </MyViewPage>
   )
 }

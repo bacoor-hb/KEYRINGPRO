@@ -8,7 +8,7 @@ import StorageReduxAction from 'controller/Redux/actions/storageAction'
 
 class AddressBookService {
   static addressBookClient = new AddressBook({
-    rpcUrl: settings().web3Link[10].linkProvider // optimism
+    rpcUrl: settings().rpcUrlByChainId[10] // optimism
   })
 
   static async resolveByAddress (address) {

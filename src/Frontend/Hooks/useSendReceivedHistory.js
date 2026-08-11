@@ -1,86 +1,43 @@
-import { SUPPORTED_CHAINS_BY_SERVICE_MORALIS } from 'common/constants/chain'
+import { ALCHEMY_ENDPOINT } from 'common/constants/alchemy'
+import { KEYSTORE } from 'common/constants/redux'
 import { REACT_QUERY_KEY } from 'common/constants/reactQuery'
-import { useMemo } from 'react'
+import ReduxService from 'common/redux'
+import { getDataFromAsyncStorage, storeDataToAsyncStorage } from 'common/storage/asyncStorage'
+import AlchemyApi from 'frontend/Services/alchemy'
 import { useQuery } from 'react-query'
 import { useSelector } from 'react-redux'
-import MoralisService from 'src/Services/Moralis'
+import ViemWeb3 from 'src/Web3/ViemWeb3'
+
+const getBlockTimestamp = async (item) => {
+  try {
+    if (!item?.blockNum) {
+      return null
+    }
+    const client = ViemWeb3.getPublicClient(item.chainId)
+    const block = await client.getBlock({ blockNumber: BigInt(item.blockNum) })
+    return new Date(Number(block.timestamp) * 1000).toISOString()
+  } catch (error) {
+    return null
+  }
+}
 
 const getData = async ({ queryKey }) => {
   try {
-    const [, activeAccount, chain] = queryKey
+    const [, activeAccount, chainId, isSendData] = queryKey
+    const blockchainListRedux = ReduxService.getReduxDataByKey('blockchainListRedux')
+
+    const chain = blockchainListRedux?.[chainId]
     const { account } = activeAccount
-    if (!account) {
-      return []
-    }
-    // let data = []
-    // const arrChainSupport = Object.values(blockchainListRedux).filter(chain => SUPPORTED_CHAINS_BY_SERVICE_MORALIS[chain.chainId])
-
-    // if (arrChainSupport.length === 0) {
-    //   return []
-    // }
-    if (!SUPPORTED_CHAINS_BY_SERVICE_MORALIS[chain.chainId]) {
+    if (!account || !chain) {
       return []
     }
 
-    // const funcCall = arrChainSupport.map(async chain => {
-    //   const chainMoralis = SUPPORTED_CHAINS_BY_SERVICE_MORALIS[chain.chainId]
-    //   let data = await MoralisService.getHistoryByAddress(account.address, chainMoralis)
-    //   data = data.filter(history => {
-    //     if (
-    //       history?.category === 'receive' ||
-    //       history?.category === 'send' ||
-    //       history?.category === 'token send' ||
-    //       history?.category === 'token receive'
-    //     ) {
-    //       if (
-    //         history?.erc20_transfers?.length > 0 ||
-    //         history?.native_transfers?.length > 0
-    //       ) {
-    //         return true
-    //       }
-    //     }
-    //     return false
-    //   })
+    if (!ALCHEMY_ENDPOINT[chain.chainId]) {
+      return []
+    }
 
-    //   return data.map(e => {
-    //     return {
-    //       ...e,
-    //       chainId: chain.chainId,
-    //       iconChain: chain.icon,
-    //       nameChain: chain.name
-    //     }
-    //   })
-    // })
-
-    // data = await Promise.all(funcCall)
-
-    // data = data.filter(e => e.length > 0)
-    // data = data.flat()
-
-    const chainMoralis = SUPPORTED_CHAINS_BY_SERVICE_MORALIS[chain.chainId]
-    let data = await MoralisService.getHistoryByAddress(account.address, chainMoralis, {
-      limit: 50
-    })
-
-    data = data.filter(history => {
-      if (
-        history?.category === 'receive' ||
-        history?.category === 'token swap' ||
-        history?.category === 'send' ||
-        history?.category === 'token send' ||
-        history?.category === 'token receive'
-      ) {
-        if (
-          history?.erc20_transfers?.length > 0 ||
-          history?.native_transfers?.length > 0
-        ) {
-          return true
-        }
-      }
-      return false
-    })
-
-    return data.map(e => {
+    let data = await AlchemyApi.getHistoryTransferByAddress(chain.chainId, account.address, isSendData)
+    data = data.map(e => {
       return {
         ...e,
         chainId: chain.chainId,
@@ -88,25 +45,71 @@ const getData = async ({ queryKey }) => {
         nameChain: chain.name
       }
     })
+
+    // Per (account, chain, direction) namespace so switching chain/account never pollutes others
+    const cacheContextKey = `${account.address}_${chainId}_${isSendData ? 'send' : 'received'}`
+    let dataLocal = await getDataFromAsyncStorage(KEYSTORE.SEND_RECEIVED_HISTORY_BLOCK_TIMESTAMP, {})
+
+    // init dataLocal
+    if (!dataLocal) {
+      dataLocal = {}
+    }
+
+    const cache = dataLocal[cacheContextKey] || {}
+
+    const hashesInData = new Set(data.map(item => item.hash))
+
+    // Prune: drop cached hashes no longer present in the AlchemyApi result to keep storage lean
+    const cacheFiltered = {}
+    Object.keys(cache).forEach(hash => {
+      if (hashesInData.has(hash)) {
+        cacheFiltered[hash] = cache[hash]
+      }
+    })
+
+    data = await Promise.all(data.map(async item => {
+      if (item.metadata?.blockTimestamp) {
+        return item
+      }
+      // Reuse cached timestamp when possible; blockTimestamp is immutable, so fetch via RPC only once
+      let blockTimestamp = cacheFiltered[item.hash]
+      if (!blockTimestamp) {
+        blockTimestamp = await getBlockTimestamp(item)
+        if (blockTimestamp) {
+          cacheFiltered[item.hash] = blockTimestamp
+        }
+      }
+      if (!blockTimestamp) {
+        return item
+      }
+      return {
+        ...item,
+        metadata: {
+          ...item.metadata,
+          blockTimestamp
+        }
+      }
+    }))
+
+    if (Object.keys(cache).length > 0 || Object.keys(cacheFiltered).length > 0) {
+      dataLocal[cacheContextKey] = cacheFiltered
+      await storeDataToAsyncStorage(KEYSTORE.SEND_RECEIVED_HISTORY_BLOCK_TIMESTAMP, dataLocal)
+    }
+
+    return data
   } catch (error) {
     return []
   }
 }
 
-const useSendReceivedHistory = (chainId) => {
-  const { blockchainListRedux, activeAccount } = useSelector(state => state)
-  const { data, ...restData } = useQuery([REACT_QUERY_KEY.getSendReceivedHistory, activeAccount, blockchainListRedux[chainId]], getData)
-
-  const dataCurrent = useMemo(() => {
-    if (!data) return []
-    if (chainId && chainId !== 'ALL') {
-      return data.filter(e => e.chainId === chainId)
-    }
-    return data
-  }, [chainId, data])
+const useSendReceivedHistory = (chainId, isSendData) => {
+  const { activeAccount, blockchainListRedux } = useSelector(state => state)
+  const { data, ...restData } = useQuery([REACT_QUERY_KEY.getSendReceivedHistory, activeAccount, chainId, isSendData], getData, {
+    enabled: !!activeAccount?.account?.address && !!chainId && !!blockchainListRedux?.[chainId]
+  })
 
   return {
-    data: dataCurrent,
+    data: data || [],
     ...restData
   }
 }

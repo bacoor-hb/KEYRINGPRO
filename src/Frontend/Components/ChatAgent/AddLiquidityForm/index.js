@@ -6,7 +6,7 @@ import {
   ScrollView
 } from 'react-native'
 import BigNumber from 'bignumber.js'
-import { Colors, pixelByWidth } from 'common/styles'
+import { Colors, pixelByHeight, pixelByWidth } from 'common/styles'
 import I18n, { resolveLocale } from 'assets/Lang'
 import MyText from 'frontend/Components/UI/MyText'
 import GlassView from 'frontend/Components/UI/GlassView'
@@ -267,174 +267,215 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
 
       <View style={styles.formBox}>
         {/* Pool header */}
-        <View className='flex flex-row' style={styles.poolHeader}>
-          <View className='flex-1'>
-            <MyTextTicker variant='subTitle' fontWeight={700}>
-              {tokenLabel(pool)}
+        <View
+          style={{
+            gap: pixelByHeight(12)
+          }}>
+          <View className='flex flex-row' style={styles.poolHeader}>
+            <View className='flex-1'>
+              <MyTextTicker variant='subTitle' fontWeight={700}>
+                {tokenLabel(pool)}
+              </MyTextTicker>
+            </View>
+
+            <View style={styles.poolMeta}>
+              <View style={styles.tag}>
+                <MyText variant='small' className='text-medium'>{chain?.name}</MyText>
+              </View>
+              {!!feeLabel && (
+                <View style={styles.tag}>
+                  <MyText variant='small' className='text-medium'>{feeLabel}</MyText>
+                </View>
+              )}
+            </View>
+          </View>
+
+          <View style={styles.divider} className='bg-box-small' />
+        </View>
+
+        {/* Current price */}
+        <View
+          style={[styles.row, {
+            gap: pixelByWidth(8)
+          }]}>
+          <MyText fontWeight='700'>{t('currentPrice')}</MyText>
+          <View
+            style={{
+              flex: 1,
+              alignItems: 'flex-end'
+            }}
+          >
+            <MyTextTicker className='text-medium'>
+              {fmt(pool?.currentPrice)}{' '}
+              <MyText className='text-medium'>
+                {pool?.token1?.symbol}/{pool?.token0?.symbol}
+              </MyText>
             </MyTextTicker>
           </View>
 
-          <View style={styles.poolMeta}>
-            <GlassView style={styles.tag}>
-              <MyText variant='small' className='text-medium'>{chain?.name}</MyText>
-            </GlassView>
-            {!!feeLabel && (
-              <GlassView style={styles.tag}>
-                <MyText variant='small' className='text-medium'>{feeLabel}</MyText>
-              </GlassView>
-            )}
-          </View>
-        </View>
-
-        <View style={styles.divider} className='bg-box-small' />
-
-        {/* Current price */}
-        <View style={styles.row}>
-          <MyText variant='small'>{t('currentPrice')}</MyText>
-          <MyText variant='small' className='font-medium'>
-            {fmt(pool?.currentPrice)}{' '}
-            <MyText variant='small' className='text-medium'>
-              {pool?.token1?.symbol}/{pool?.token0?.symbol}
-            </MyText>
-          </MyText>
         </View>
 
         {/* Range section */}
-        <MyText variant='small' className='font-semibold' style={styles.sectionTitle}>{t('priceRange')} ({t('tokenBPerTokenA')})</MyText>
+        <View
+          style={{
+            gap: pixelByWidth(8)
+          }}>
 
-        {/* Price range rows: Max on top, Min below */}
-        <View style={styles.rangeRow}>
-          <MyText variant='small' className='font-semibold' style={styles.rangeRowLabel}>{t('max')}</MyText>
-          <GlassView effect='clear' style={styles.rangeRowInput}>
-            <TextInput
-              style={styles.rangeRowInputText}
-              className='text-white font-medium'
-              value={maxPriceInput}
-              onChangeText={onChangeMaxPrice}
-              keyboardType='decimal-pad'
-              placeholder={t('enterAmount')}
-              placeholderTextColor={Colors.TEXT_LOW}
-            />
-          </GlassView>
-          <MyText className='text-medium' style={styles.rangeArrow}>↑</MyText>
-          <GlassView effect='clear' style={styles.rateChip}>
-            <TextInput
-              style={styles.rateChipText}
-              className='text-white font-medium'
-              value={maxRateInput}
-              onChangeText={onChangeMaxRate}
-              keyboardType='numbers-and-punctuation'
-              placeholder={t('rate')}
-              placeholderTextColor={Colors.TEXT_LOW}
-            />
-          </GlassView>
-          <MyText variant='small' className='text-medium'>%</MyText>
-        </View>
+          <MyText fontWeight='700'>{t('priceRange')} ({t('tokenBPerTokenA')})</MyText>
 
-        <View style={styles.rangeRow}>
-          <MyText variant='small' className='font-semibold' style={styles.rangeRowLabel}>{t('min')}</MyText>
-          <GlassView effect='clear' style={styles.rangeRowInput}>
-            <TextInput
-              style={styles.rangeRowInputText}
-              className='text-white font-medium'
-              value={minPriceInput}
-              onChangeText={onChangeMinPrice}
-              keyboardType='decimal-pad'
-              placeholder={t('enterAmount')}
-              placeholderTextColor={Colors.TEXT_LOW}
-            />
-          </GlassView>
-          <MyText className='text-medium' style={styles.rangeArrow}>↓</MyText>
-          <GlassView effect='clear' style={styles.rateChip}>
-            <TextInput
-              style={styles.rateChipText}
-              className='text-white font-medium'
-              value={minRateInput}
-              onChangeText={onChangeMinRate}
-              keyboardType='numbers-and-punctuation'
-              placeholder={t('rate')}
-              placeholderTextColor={Colors.TEXT_LOW}
-            />
-          </GlassView>
-          <MyText variant='small' className='text-medium'>%</MyText>
-        </View>
-
-        <View style={styles.errorSlot}>
-          {!!displayedRangeError && (
-            <MyText variant='small' className='text-red-text' style={styles.errorText}>{displayedRangeError}</MyText>
-          )}
-        </View>
-
-        {/* Amount input */}
-        <View style={[styles.sectionTitle]} className='flex flex-row'>
-          <MyText variant='small' className='font-semibold'>
-            {t('amountOf', { symbol: inputToken?.symbol || '' })}
-          </MyText>
-          {usdAmount != null && (
-            <MyText
-              variant='small'
-              className='text-low'
-              style={{
-                paddingLeft: pixelByWidth(4)
-              }}>
-              (~${toFixedDown(usdAmount, 2)})
-            </MyText>
-          )}
-        </View>
-        <GlassView effect='clear' style={styles.inputRow}>
-          <TextInput
-            style={styles.amountInput}
-            className='text-white font-semibold'
-            value={amount}
-            onChangeText={(v) => setAmount(sanitizePrice(v))}
-            keyboardType='decimal-pad'
-            placeholder='0.0'
-            placeholderTextColor={Colors.TEXT_LOW}
-          />
-          <MyText className='text-medium font-medium'>
-            {inputToken?.symbol}
-          </MyText>
-        </GlassView>
-        <View style={styles.errorSlot}>
-          {exceedsBalance && (
-            <MyText variant='small' className='text-red-text' style={styles.errorText}>
-              {t('insufficientBalance')}
-            </MyText>
-          )}
-        </View>
-
-        {/* Quick-pick chips */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.quickRow}
-        >
-          {(inputToken?.quickRates || []).map((r) => (
-            <TouchableOpacity
-              key={r.percent}
-              activeOpacity={0.7}
-              onPress={() => setAmount(toAmountDown(r.amount))}
-            >
-              <GlassView interactive style={styles.quickChip}>
-                <MyText variant='small' className='font-semibold'>{r.percent}%</MyText>
+          <View
+            style={{
+              gap: pixelByHeight(8)
+            }}
+          >
+            {/* Price range rows: Max on top, Min below */}
+            <View style={styles.rangeRow}>
+              <MyText style={styles.rangeRowLabel}>{t('max')}</MyText>
+              <GlassView effect='clear' style={styles.rangeRowInput}>
+                <TextInput
+                  style={styles.rangeRowInputText}
+                  className='text-white font-medium'
+                  value={maxPriceInput}
+                  onChangeText={onChangeMaxPrice}
+                  keyboardType='decimal-pad'
+                  placeholder={t('enterAmount')}
+                  placeholderTextColor={Colors.TEXT_LOW}
+                />
               </GlassView>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+              <MyText className='text-medium' style={styles.rangeArrow}>↑</MyText>
+              <GlassView effect='clear' style={styles.rateChip}>
+                <TextInput
+                  style={styles.rateChipText}
+                  className='text-white font-medium'
+                  value={maxRateInput}
+                  onChangeText={onChangeMaxRate}
+                  keyboardType='numbers-and-punctuation'
+                  placeholder={t('rate')}
+                  placeholderTextColor={Colors.TEXT_LOW}
+                />
+              </GlassView>
+              <MyText variant='small' className='text-medium'>%</MyText>
+            </View>
+
+            <View style={styles.rangeRow}>
+              <MyText variant='small' className='font-semibold' style={styles.rangeRowLabel}>{t('min')}</MyText>
+              <GlassView effect='clear' style={styles.rangeRowInput}>
+                <TextInput
+                  style={styles.rangeRowInputText}
+                  className='text-white font-medium'
+                  value={minPriceInput}
+                  onChangeText={onChangeMinPrice}
+                  keyboardType='decimal-pad'
+                  placeholder={t('enterAmount')}
+                  placeholderTextColor={Colors.TEXT_LOW}
+                />
+              </GlassView>
+              <MyText className='text-medium' style={styles.rangeArrow}>↓</MyText>
+              <GlassView effect='clear' style={styles.rateChip}>
+                <TextInput
+                  style={styles.rateChipText}
+                  className='text-white font-medium'
+                  value={minRateInput}
+                  onChangeText={onChangeMinRate}
+                  keyboardType='numbers-and-punctuation'
+                  placeholder={t('rate')}
+                  placeholderTextColor={Colors.TEXT_LOW}
+                />
+              </GlassView>
+              <MyText variant='small' className='text-medium'>%</MyText>
+            </View>
+
+            <View style={styles.errorSlot}>
+              {!!displayedRangeError && (
+                <MyText variant='small' className='text-red-text' style={styles.errorText}>{displayedRangeError}</MyText>
+              )}
+            </View>
+
+          </View>
+          <View
+            style={{
+              gap: pixelByHeight(8)
+            }}>
+            {/* Amount input */}
+            <View
+              style={{
+                gap: pixelByHeight(8)
+              }}
+              className='flex flex-row items-center'>
+              <View>
+                <MyText fontWeight='700'>
+                  {t('amountOf', { symbol: inputToken?.symbol || '' })}
+                </MyText>
+              </View>
+              <View
+                style={{
+                  flex: 1
+                }}>
+                {usdAmount != null && (
+                  <MyTextTicker
+                    variant='small'
+                    className='text-low'
+                  >
+                    (~${toFixedDown(usdAmount, 2)})
+                  </MyTextTicker>
+                )}
+              </View>
+
+            </View>
+            <GlassView effect='clear' style={styles.inputRow}>
+              <TextInput
+                style={styles.amountInput}
+                className='text-white font-semibold'
+                value={amount}
+                onChangeText={(v) => setAmount(sanitizePrice(v))}
+                keyboardType='decimal-pad'
+                placeholder='0.0'
+                placeholderTextColor={Colors.TEXT_LOW}
+              />
+              <MyText className='text-medium font-medium'>
+                {inputToken?.symbol}
+              </MyText>
+            </GlassView>
+            <View style={styles.errorSlot}>
+              {exceedsBalance && (
+                <MyText variant='small' className='text-red-text' style={styles.errorText}>
+                  {t('insufficientBalance')}
+                </MyText>
+              )}
+            </View>
+            {/* Quick-pick chips */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.quickScroll}
+              contentContainerStyle={styles.quickRow}
+            >
+              {(inputToken?.quickRates || []).map((r) => (
+                <TouchableOpacity
+                  key={r.percent}
+                  activeOpacity={0.7}
+                  onPress={() => setAmount(toAmountDown(r.amount))}
+                >
+                  <GlassView interactive style={styles.quickChip}>
+                    <MyText variant='small' className='font-semibold'>{r.percent}%</MyText>
+                  </GlassView>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
 
         {/* Balance info */}
         <View style={styles.balanceRow}>
-          <MyText variant='small' className='text-medium'>
-            {t('spendable')}:{' '}
-            <MyText variant='small' className='font-medium'>
+          <MyText className='text-medium'>{t('spendable')}:</MyText>
+          <View style={styles.spendableValue}>
+            <MyTextTicker className='text-medium'>
               {fmt(inputToken?.spendable)} {inputToken?.symbol}
-            </MyText>
-            {inputToken?.spendableUsd != null && (
-              <MyText variant='small' className='text-low'>
-                {' '}(~${toFixedDown(inputToken.spendableUsd, 2)})
-              </MyText>
-            )}
-          </MyText>
+              {inputToken?.spendableUsd != null && (
+                <MyText variant='small' className='text-low'> (~${toFixedDown(inputToken.spendableUsd, 2)})</MyText>
+              )}
+            </MyTextTicker>
+          </View>
         </View>
 
         {/* Warning */}

@@ -17,7 +17,9 @@ export default function useNotifications () {
       if (Array.isArray(data)) {
         dispatch(StorageReduxAction.setNotificationList(data))
       }
-    } catch (_) {}
+    } catch (_) {
+      // Keep the previous list; the next focus/refresh retries
+    }
   }, [dispatch])
 
   useEffect(() => {

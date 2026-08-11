@@ -13,6 +13,7 @@ import { KEYSTORE } from './constants/redux'
 import { getDataFromSecureStorage } from './storage/secureStorage'
 import messaging from '@react-native-firebase/messaging'
 import { Minimizer } from './NativeModules/Minimizer'
+import { isURL } from './function'
 
 let walletconnectV2Core
 let walletKit
@@ -165,6 +166,34 @@ export const handleWCv2PushNotifications = async (notification) => {
   } catch (error) {
     // do nothing
   }
+}
+
+export const getUrlIconWalletConnect = (urlIcon, urlSite) => {
+  if (!urlIcon && isURL(urlSite)) {
+    // get site icon from google favicon service
+    // https://miletadulovic.me/blog/get-any-website-favicon-using-free-google-api
+    const url = new URL(urlSite)
+    return `https://www.google.com/s2/favicons?domain=${url.hostname}&sz=64`
+  }
+
+  if (isURL(urlIcon)) {
+    return urlIcon
+  }
+
+  if (urlIcon?.startsWith('ipfs://')) {
+    return urlIcon.replace('ipfs://', 'https://ipfs.io/ipfs/')
+  }
+
+  if (typeof urlIcon === 'string' && isURL(urlSite)) {
+    const url = new URL(urlSite)
+    if (urlIcon?.startsWith('/')) {
+      return url.origin + urlIcon
+    } else {
+      return url.origin + '/' + urlIcon
+    }
+  }
+
+  return urlIcon
 }
 
 export const redirectBackToDapp = async (showAlertRefFunc, delayForRedirect = 1000) => {

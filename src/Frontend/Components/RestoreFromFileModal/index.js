@@ -15,7 +15,7 @@ import StorageReduxAction from 'controller/Redux/actions/storageAction'
 import { decryptBackupFileContent, jsonStr2Obj, lowerCase, isObject, deepRemoveFields } from 'common/function'
 import { storeDataToSecureStorage } from 'common/storage/secureStorage'
 import { KEYSTORE } from 'common/constants/redux'
-import { migrateAccountListToV2 } from 'common/wallet'
+import { hasKeyCardFlags, migrateAccountListToV2 } from 'common/wallet'
 import { detectBackupFormat, parseBackupV2 } from 'common/backup'
 import { refreshAccountTokens } from 'src/Services/TokenListV2'
 import { STANDARD_CHAIN } from 'common/constants/app'
@@ -124,6 +124,21 @@ const RestoreFromFileModal = ({ onSuccess, initialFileName = '', initialFileCont
       rawAccountList.forEach((account) => {
         const addressLowerCase = lowerCase(account?.address || '')
         if (!addressLowerCase || listPrivateKeyByAddress[addressLowerCase] || !account?.privateKey) return
+        // A COLD account's key lives on its NFC card and must never be written to
+        // this device — restoring it would turn the card into a UI formality with
+        // the key already in secure storage. Old backup files predate `accountType`
+        // but stamp `isFromKeyCard` on every entry of a keycard account (EVM, BTC
+        // and Solana alike), so they are covered too.
+        //
+        // This drops the legacy BTC/Solana keys of such an account as well, on
+        // purpose: they are derived from the same card key (holding them IS holding
+        // it), and V2 keeps those chains display-only, so nothing signs with them.
+        //
+        // Deliberately the flags-only check: the full isAccountFromKeyCard() would also
+        // consult THIS device's account list, which at this point still describes
+        // the wallet being replaced — a hot account restored onto an address that
+        // happens to be a keycard here would lose its key and arrive unusable.
+        if (hasKeyCardFlags(account)) return
         listPrivateKeyByAddress[addressLowerCase] = shouldEncrypt
           ? vaultEncryptPrivateKey(account.privateKey)
           : account.privateKey
@@ -132,9 +147,11 @@ const RestoreFromFileModal = ({ onSuccess, initialFileName = '', initialFileCont
       // Same V2 migration as App.js init (collapse EVM duplicates, collect chainIds).
       const { migratedList, activeEvmChainIds } = migrateAccountListToV2(rawAccountList)
 
-      if (isObject(listPrivateKeyByAddress, true)) {
-        storeDataToSecureStorage(KEYSTORE.LIST_PRIVATE_KEY_BY_ADDRESS, listPrivateKeyByAddress)
-      }
+      // Unconditional, even when the map is empty: a restore REPLACES the wallet, so
+      // writing it is also what clears the previous wallet's keys (resetWalletData
+      // ForRestore doesn't touch this store). After the keycard filter above, a
+      // backup holding only NFC accounts produces exactly that empty map.
+      storeDataToSecureStorage(KEYSTORE.LIST_PRIVATE_KEY_BY_ADDRESS, listPrivateKeyByAddress)
 
       // Tear down any WalletConnect sessions from the previous wallet before we
       // swap in the restored accounts — otherwise old dApp sessions linger and

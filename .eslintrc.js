@@ -14,6 +14,7 @@ module.exports = {
     requireConfigFile: false
   },
   rules: {
+    'no-case-declarations': 'off',
     'react-hooks/rules-of-hooks': 'error',
     'react-hooks/exhaustive-deps': 'warn',
     'react/display-name': 'off',
@@ -75,6 +76,7 @@ module.exports = {
     imagesloaded: true,
     Modernizr: true,
     ISIOS: false,
+    ISMAC: false,
     __DEV__: true,
     BigInt: true
   },

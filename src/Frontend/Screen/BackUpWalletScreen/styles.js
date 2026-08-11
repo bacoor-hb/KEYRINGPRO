@@ -73,7 +73,7 @@ const createStyles = () => {
       fontSize: fontSize('small')
     },
     emptySpacer: {
-      paddingVertical: pixelByHeight(50)
+      paddingVertical: pixelByHeight(32)
     },
     emptyIcon: {
       marginBottom: pixelByHeight(8)

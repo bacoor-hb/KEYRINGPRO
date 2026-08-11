@@ -18,10 +18,12 @@ import StorageReduxAction from 'controller/Redux/actions/storageAction'
 import BaseAPI from 'controller/API/BaseAPI'
 import AllChainServices from 'controller/AllChainServices'
 import settings from 'controller/settings'
+import ViemWeb3 from 'src/Web3/ViemWeb3'
 import {
   CHAINS_SUPPORT_LIQUIDITY_POOL_UNISWAP,
   LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_PANCAKESWAP,
   LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_UNISWAP,
+  MULTICALL3_CHAIN_IDS,
   typeLiquidityPool
 } from 'common/constants/chain'
 import styles from './styles'
@@ -35,7 +37,56 @@ import { ACCOUNT_TYPE } from 'common/constants/account'
 import { pixelByHeight } from 'common/styles'
 
 const MAX_ADDRESS_LENGTH = 42
-const limit = pLimit(10)
+
+// Rate limits are per-RPC-endpoint, and every chain has its own endpoint — so the
+// concurrency caps below are PER CHAIN. Chains still fan out fully in parallel;
+// throttling across them would only slow the check down without protecting any
+// single endpoint.
+//
+// Each limiter is created on first use for a chainId and reused after that.
+const CONCURRENT_READS_PER_CHAIN = 10
+const CONCURRENT_BATCHES_PER_CHAIN = 5
+
+const chainReadLimiters = new Map()
+const chainBatchLimiters = new Map()
+
+const getLimiter = (limiters, chainId, concurrency) => {
+  const key = Number(chainId)
+  if (!limiters.has(key)) limiters.set(key, pLimit(concurrency))
+  return limiters.get(key)
+}
+
+// viem splits a multicall into chunks of `batchSize` bytes of calldata (default
+// 1024) and fires them all with Promise.allSettled — no throttle of its own. For
+// a wallet with many positions that is a burst of simultaneous eth_calls at one
+// endpoint, so we chunk the calls ourselves and meter the batches per chain.
+//
+// 50 is well inside what the RPCs accept (200 calls in one request still succeeds
+// on mainnet/Base/Optimism) while keeping each response small enough to parse
+// cheaply on Hermes and limiting how much work a single failed batch loses.
+// viem's 1024-byte default would re-split these, so batchSize is disabled below
+// and this value is the only chunking that applies.
+const MULTICALL_CALLS_PER_BATCH = 50
+
+const chunkArray = (items, size) => {
+  const chunks = []
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+  return chunks
+}
+
+// Runs pre-chunked multicall batches under this chain's batch limiter and flattens
+// the results back into one array. Promise.all preserves order, so the flattened
+// result still lines up index-for-index with `calls`.
+const readMulticallChunked = async (chainId, calls) => {
+  const batchLimit = getLimiter(chainBatchLimiters, chainId, CONCURRENT_BATCHES_PER_CHAIN)
+  const batches = chunkArray(calls, MULTICALL_CALLS_PER_BATCH)
+  const results = await Promise.all(
+    // batchSize: 0 → viem sends each chunk as one request instead of re-splitting
+    // it, so MULTICALL_CALLS_PER_BATCH is the real request size.
+    batches.map((batch) => batchLimit(() => ViemWeb3.readMulticall(chainId, batch, { batchSize: 0 })))
+  )
+  return results.flat()
+}
 
 // The register flow is a small state machine — one `status` instead of juggling
 // overlapping isLoading / isChecked / isSuccess booleans. A single "Register"
@@ -46,9 +97,75 @@ const REGISTER_STATUS = {
   SUCCESS: 'success' // registered
 }
 
+// Minimal position-manager ABI for the multicall path. Only the two paged reads
+// are needed — `balanceOf` stays a single call since it gates everything after it.
+const POSITION_MANAGER_MULTICALL_ABI = [
+  { inputs: [{ internalType: 'address', name: 'owner', type: 'address' }, { internalType: 'uint256', name: 'index', type: 'uint256' }], name: 'tokenOfOwnerByIndex', outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [{ internalType: 'uint256', name: 'tokenId', type: 'uint256' }], name: 'positions', outputs: [{ internalType: 'uint96', name: 'nonce', type: 'uint96' }, { internalType: 'address', name: 'operator', type: 'address' }, { internalType: 'address', name: 'token0', type: 'address' }, { internalType: 'address', name: 'token1', type: 'address' }, { internalType: 'uint24', name: 'fee', type: 'uint24' }, { internalType: 'int24', name: 'tickLower', type: 'int24' }, { internalType: 'int24', name: 'tickUpper', type: 'int24' }, { internalType: 'uint128', name: 'liquidity', type: 'uint128' }, { internalType: 'uint256', name: 'feeGrowthInside0LastX128', type: 'uint256' }, { internalType: 'uint256', name: 'feeGrowthInside1LastX128', type: 'uint256' }, { internalType: 'uint128', name: 'tokensOwed0', type: 'uint128' }, { internalType: 'uint128', name: 'tokensOwed1', type: 'uint128' }], stateMutability: 'view', type: 'function' }
+]
+
+// `positions` returns a tuple — viem gives an array, so liquidity is index 7.
+const POSITION_LIQUIDITY_INDEX = 7
+
+// Multicall path: 2 batched round-trips (token ids, then positions) instead of
+// 2N individual RPC calls. Only used on chains where Multicall3 is deployed —
+// see checkAddressHasLPToken. Returns true as soon as any position has liquidity.
+const checkAddressHasLPTokenMulticall = async (chainId, contractAddress, address, balance) => {
+  const idCalls = Array.from({ length: balance }, (_, index) => ({
+    address: contractAddress,
+    abi: POSITION_MANAGER_MULTICALL_ABI,
+    functionName: 'tokenOfOwnerByIndex',
+    args: [address, BigInt(index)]
+  }))
+  const idResults = await readMulticallChunked(chainId, idCalls)
+
+  // allowFailure: true → skip the entries that reverted rather than failing the batch.
+  const positionCalls = idResults
+    .filter((item) => item?.status === 'success' && item?.result != null)
+    .map((item) => ({
+      address: contractAddress,
+      abi: POSITION_MANAGER_MULTICALL_ABI,
+      functionName: 'positions',
+      args: [item.result]
+    }))
+  if (!positionCalls.length) return false
+
+  const positionResults = await readMulticallChunked(chainId, positionCalls)
+  return positionResults.some((item) => {
+    if (item?.status !== 'success') return false
+    const liquidity = item?.result?.[POSITION_LIQUIDITY_INDEX]
+    return liquidity != null && new BigNumber(liquidity.toString()).isGreaterThan(0)
+  })
+}
+
+// Sequential path: one RPC call per token id / position, metered by this chain's
+// read limiter. Works on every chain, so it's the fallback for chains without
+// Multicall3.
+const checkAddressHasLPTokenSequential = async (chainId, contractAddress, address, balance) => {
+  const limit = getLimiter(chainReadLimiters, chainId, CONCURRENT_READS_PER_CHAIN)
+  // balance = n > 0 → resolve token ids for index 0..n-1, then their positions.
+  const tokenId = await Promise.all(
+    Array.from({ length: balance }, (_, index) =>
+      limit(() => AllChainServices.getTokenOfOwnerByInitByChain(chainId, contractAddress, address, index))
+    )
+  )
+  const positions = await Promise.all(
+    tokenId.map((item) =>
+      limit(() => AllChainServices.getPositionsByChain(chainId, contractAddress, item))
+    )
+  )
+
+  return positions.some((item) => item?.liquidity && new BigNumber(item?.liquidity?.toString() || 0).isGreaterThan(0))
+}
+
 // EVM-only: verify the address holds at least one position NFT with liquidity > 0
 // on the given chain / DEX (Uniswap or Pancakeswap V3). Mirrors the legacy
 // RegisterAddressDetail check, minus the Solana/Raydium path.
+//
+// Chains with Multicall3 deployed batch the reads; the rest (e.g. Robinhood /
+// 4663, where Multicall3 isn't officially supported yet) keep the sequential
+// per-call path. A multicall failure also falls back rather than failing the
+// check, so a bad batch never blocks a legitimate registration.
 const checkAddressHasLPToken = async (address, chainId = 1, type = typeLiquidityPool.uniswap) => {
   try {
     if (!address) return false
@@ -56,25 +173,23 @@ const checkAddressHasLPToken = async (address, chainId = 1, type = typeLiquidity
     const contractAddress = type === typeLiquidityPool.uniswap
       ? LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_UNISWAP[chainId]
       : LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_PANCAKESWAP[chainId]
+    if (!contractAddress) return false
 
     const balance = await AllChainServices.getTokenBalanceOfPositionByChain(chainId, contractAddress, address)
     if (!balance || new BigNumber(balance?.toString()).isLessThanOrEqualTo(0)) {
       return false
     }
 
-    // balance = n > 0 → resolve token ids for index 0..n-1, then their positions.
-    const tokenId = await Promise.all(
-      Array.from({ length: balance }, (_, index) =>
-        limit(() => AllChainServices.getTokenOfOwnerByInitByChain(chainId, contractAddress, address, index))
-      )
-    )
-    const positions = await Promise.all(
-      tokenId.map((item) =>
-        limit(() => AllChainServices.getPositionsByChain(chainId, contractAddress, item))
-      )
-    )
+    const total = Number(balance)
+    if (MULTICALL3_CHAIN_IDS.has(Number(chainId))) {
+      try {
+        return await checkAddressHasLPTokenMulticall(chainId, contractAddress, address, total)
+      } catch (error) {
+        // Batch failed (RPC limit, unexpected revert) → retry the reliable path.
+      }
+    }
 
-    return positions.some((item) => item?.liquidity && new BigNumber(item?.liquidity?.toString() || 0).isGreaterThan(0))
+    return await checkAddressHasLPTokenSequential(chainId, contractAddress, address, total)
   } catch (error) {
     return false
   }

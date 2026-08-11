@@ -1,7 +1,6 @@
 import React, { useCallback } from 'react'
 import { WebView as WebViewProvider } from 'react-native-webview'
 import { Linking, View, ActivityIndicator } from 'react-native'
-import { height } from 'common/styles'
 
 const WebView = ({
   url,
@@ -43,10 +42,16 @@ const WebView = ({
       onMessage={handleMessage}
       onShouldStartLoadWithRequest={handleNavigationRequest}
       javaScriptEnabled
-      style={[{ flex: 1, paddingBottom: height(0) }, style]}
+      style={{ flex: 1, paddingBottom: 0 }}
       domStorageEnabled
       startInLoadingState
       hideKeyboardAccessoryView
+      nestedScrollEnabled
+      overScrollMode='never'
+      injectedJavaScript={`
+    document.body.style.overflow = 'scroll';
+ 
+  `}
       renderLoading={() => (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
           <ActivityIndicator size='large' />

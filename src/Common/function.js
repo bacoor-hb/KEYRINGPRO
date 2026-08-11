@@ -7,7 +7,7 @@ import crypto from 'crypto-js'
 import ReduxService from 'common/redux'
 import { APP_VERSION, MODE_THEME, AFFILIATE_FEE_RECIPIENT, LOCALE, STANDARD_CHAIN, CURRENCY_DATA } from 'common/constants/app'
 import { ACCOUNT_TYPE } from 'common/constants/account'
-import { Colors, DarkColors, height, width } from './styles'
+import { Colors, DarkColors } from './styles'
 import { Ndef } from 'react-native-nfc-manager'
 // generate lib
 import { ethers } from 'ethers'
@@ -182,8 +182,8 @@ export const handleOpenUrl = (url) => {
       if (supported) {
         return Linking.openURL(url)
       }
-    }).catch((err) => {
-      // console.log('An error occurred', err)
+    }).catch(() => {
+      // Nothing to recover: the URL simply can't be opened on this device
     })
   }
 }
@@ -663,7 +663,7 @@ export async function getTokenName (protocolLink, contractAddress) {
 export const getRpcUrlByChain = (targetChainTypeOrChainId) => {
   try {
     const chainId = targetChainTypeOrChainId
-    let rpcUrl = settings().web3Link?.[chainId]?.linkProvider
+    let rpcUrl = settings().rpcUrlByChainId?.[chainId]
 
     if (!rpcUrl) {
       const rpcInfo = getChainInfo(targetChainTypeOrChainId)
@@ -775,6 +775,10 @@ export const getAffiliateAddress = () => {
   return AFFILIATE_FEE_RECIPIENT
 }
 
+// Slug for app.uniswap.org's `?chain=` param. The interface also accepts a raw
+// numeric chainId, which is what newer chains fall back to below — a wrong slug
+// is worse than a number, because Uniswap silently resolves an unknown slug to
+// Ethereum mainnet and the user is shown someone else's pool.
 export const convertChainIdToUniswap = (chainId) => {
   switch (chainId) {
     case 1:
@@ -800,6 +804,9 @@ export const convertChainIdToUniswap = (chainId) => {
 
     case 130:
       return 'unichain'
+
+    case 4663:
+      return 'robinhood'
 
     default:
       return 'mainnet'
@@ -910,46 +917,46 @@ export const removeSensitiveKeysFromString = (text) => {
 }
 
 /**
- * Convert pixel to height screen: pixel size in design figma
- * @param {number} pixel - The pixel value to convert
- * @param {boolean} noConvert - Whether to convert the pixel value
- * @returns {number} The height value in pixels
+ * User-facing text for an error coming out of the web3 stack.
+ *
+ * NEVER surface viem's `error.message`: it splices in `metaMessages`, which is
+ * the full RPC URL — including the API key in the path of a paid endpoint — plus
+ * the entire signed request body, none of which belongs on screen (screenshots
+ * and support tickets would carry it).
+ *
+ * `details` (the node's own reason, e.g. "intrinsic gas too low") and
+ * `shortMessage` (viem's one-liner) carry the part worth showing and neither
+ * contains the URL. A plain non-viem Error has neither, and its `message` is
+ * usually our own copy — worth keeping, hence the fallback.
+ *
+ * Everything still goes through removeSensitiveKeysFromString: that only strips
+ * long key-shaped blobs (>= 64 hex), so it is a backstop, NOT the defence here —
+ * an RPC API key is far shorter than that and would sail straight through it.
+ *
+ * @param {any} error     a viem error, a plain Error, or a string
+ * @param {string} fallback shown when nothing usable could be extracted
+ * @returns {string}
  */
-export const pixelByHeight = (pixel, noConvert = false) => {
-  if (noConvert) {
-    return pixel
-  }
+export const formatWeb3Error = (error, fallback = '') => {
+  // String-only picks. removeSensitiveKeysFromString does `(text || '').replace(...)`,
+  // which THROWS on a truthy non-string — and this runs inside catch blocks, where
+  // an exception would escape as an unhandled rejection and strand the UI mid-send.
+  // A thrown object with a non-string `message`/`details` is unlikely but cheap to
+  // rule out entirely.
+  const pick = (value) => (typeof value === 'string' ? value : '')
 
-  if (pixel === 4) {
-    return height(0.5)
-  }
+  if (typeof error === 'string') return removeSensitiveKeysFromString(error) || fallback
 
-  if (pixel === 6) {
-    return height(0.75)
-  }
+  // `message` stays ahead of `error.error`, matching BOTH call sites this replaced,
+  // so nothing but the viem case changes shape. A viem error never reaches it:
+  // `details`/`shortMessage` are always set on BaseError and short-circuit first,
+  // which is what keeps the RPC URL out.
+  const text = pick(error?.details) ||
+    pick(error?.shortMessage) ||
+    pick(error?.message) ||
+    pick(error?.error)
 
-  if (pixel === 8) {
-    return height(1)
-  }
-
-  if (pixel === 12) {
-    return height(1.5)
-  }
-
-  return height(pixel / 8.12)
-}
-
-/**
- * Convert pixel to width screen: pixel size in design figma
- * @param {number} pixel - The pixel value to convert
- * @param {boolean} noConvert - Whether to convert the pixel value
- * @returns {number} The width value in pixels
- */
-export const pixelByWidth = (pixel, noConvert = false) => {
-  if (noConvert) {
-    return pixel
-  }
-  return width(pixel / 4.13793)
+  return removeSensitiveKeysFromString(text) || fallback
 }
 
 export const cloneData = (data) => {
@@ -959,33 +966,19 @@ export const cloneData = (data) => {
     return data
   }
 }
-
 /**
- * Convert pixel to width screen: pixel size in design figma
- * @param {number} pixel - The pixel value to convert
- * @param {boolean} noConvert - Whether to convert the pixel value
- * @returns {number} The width value in pixels
+ * Removes duplicate slashes from a URL path while preserving the protocol prefix (e.g., http:// or https://).
+ *
+ * @param {string} url - The raw URL string to be cleaned.
+ * @returns {string} The sanitized URL with normalized slashes, or an empty string if input is falsy.
+ *
+ * @example
+ * // returns "https://wallet-api.pantograph.app/token-list/all?chainId=8453"
+ * sanitizeUrl("https://wallet-api.pantograph.app//token-list/all?chainId=8453");
  */
-export const fontSize = (pixel, noConvert = false) => {
-  if (noConvert) {
-    return pixel
-  }
-  switch (pixel) {
-    // style MyAssetDetail: txtTotalValueSize
-    case 20:
-      return width(6)
-    case 18:
-      return width(5.5)
-    // style MyAssetDetail: txtPriceLightmode
-    case 16:
-      return width(4.7)
-    // style MyAssetDetail: titleTokenDetailLightmode
-    case 14:
-      return width(4) - 2
-
-    default:
-      return width(pixel / 8.12)
-  }
+export function sanitizeUrl (url) {
+  if (!url) return ''
+  return url.replace(/([^:]\/)\/+/g, '$1')
 }
 
 export function formatInputNumberDecimal (value, decimal = 18) {

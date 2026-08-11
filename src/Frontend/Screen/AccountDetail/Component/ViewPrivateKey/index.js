@@ -5,7 +5,7 @@ import StatusMessage from 'frontend/Components/UI/StatusMessage'
 import { Colors, pixelByHeight } from 'common/styles'
 import MyButton from 'frontend/Components/UI/MyButton'
 import MyText from 'frontend/Components/UI/MyText'
-import { View, AppState, Platform } from 'react-native'
+import { View, AppState } from 'react-native'
 import TitleDrawer from 'frontend/Components/UI/TitleDrawer'
 import images from 'assets/Image'
 // import RNScreenshotPrevent from 'react-native-screenshot-prevent'
@@ -21,22 +21,8 @@ const ViewPrivateKey = ({ privateKey }) => {
   const [isHidden, setIsHidden] = useState(false)
 
   useEffect(() => {
-    try {
-      // Android: FLAG_SECURE → screenshot & screen recording show completely black screen
-      if (Platform.OS === 'android') {
-        // RNScreenshotPrevent.enabled(true)
-      }
-
-      // iOS: place UITextField (isSecureTextEntry=true) as full-screen overlay
-      // → iOS automatically blanks all content in screenshots and screen recordings
-      if (Platform.OS === 'ios') {
-        // RNScreenshotPrevent.enableSecureView()
-      }
-
-      // Hide text on task-switcher / background (both platforms)
-    } catch (error) {
-
-    }
+    // Black out screenshots, screen recordings and the app-switcher snapshot
+    // while the key is on screen
     CaptureProtection.prevent({
       record: {
         backgroundColor: Colors.BLACK
@@ -56,17 +42,6 @@ const ViewPrivateKey = ({ privateKey }) => {
     })
 
     return () => {
-      try {
-        // if (Platform.OS === 'android') {
-        //   RNScreenshotPrevent.enabled(false)
-        // }
-        // if (Platform.OS === 'ios') {
-        //   RNScreenshotPrevent.disableSecureView()
-        // }
-
-      } catch (error) {
-
-      }
       CaptureProtection.allow({
         appSwitcher: true,
         record: true,

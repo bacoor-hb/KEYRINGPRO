@@ -4,23 +4,28 @@ import settings from 'controller/settings'
 import Keys from 'react-native-keys'
 
 // Build the core's top-level rpcUrls map ({ '<chainId hex>': '<rpc>' }) from the
-// app's QuickNode endpoints in settings().web3Link, so the agent core uses the
-// same authenticated RPCs as the rest of the app instead of public fallbacks.
+// app's QuickNode endpoints in settings().rpcUrlByChainId, so the agent core uses
+// the same authenticated RPCs as the rest of the app instead of public fallbacks.
 // The core lowercases keys and resolves by hex chainId (e.g. '0x1', '0xa').
 const buildRpcUrls = () => {
-  const web3Link = settings().web3Link || {}
-  return Object.values(web3Link).reduce((acc, link) => {
-    if (link && link.chainId && link.linkProvider) {
-      acc[`0x${Number(link.chainId).toString(16)}`] = link.linkProvider
+  const rpcUrlByChainId = settings().rpcUrlByChainId || {}
+  return Object.entries(rpcUrlByChainId).reduce((acc, [chainId, rpcUrl]) => {
+    if (rpcUrl) {
+      acc[`0x${Number(chainId).toString(16)}`] = rpcUrl
     }
     return acc
   }, {})
 }
 
+// Is the lending subagent routable? Exported because the init-suggestion tree
+// hides its "lending" pill when it isn't — tapping it would send a turn nothing
+// can serve. Flip this one flag to enable both.
+export const LENDING_ENABLED = false
+
 const DEFAULT_CONFIG = {
   maxIterations: 8,
   maxHistoryMessages: 20,
-  debug: true,
+  debug: __DEV__,
   storage: AsyncStorage,
   storageKey: 'keyring-agent-history',
   persistHistory: false,
@@ -43,7 +48,8 @@ const DEFAULT_CONFIG = {
     token: true,
     nft: true,
     ai: true,
-    nfc: true
+    nfc: true,
+    lending: LENDING_ENABLED
   },
 
   // Swap and buy are not done in chat — the app has its own screens for them.

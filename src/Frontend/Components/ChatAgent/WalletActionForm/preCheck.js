@@ -36,8 +36,15 @@ const toChainId = (chainId) => {
   return Number.isFinite(n) ? n : chainId
 }
 
-// Truncate for display so an 18-decimal balance doesn't fill the error line.
-const fmt = (n) => BigNumber(n).decimalPlaces(6, BigNumber.ROUND_DOWN).toFixed()
+// Show the balance in full — the exact figure the wallet holds, every decimal
+// of it. It is the number the user weighs "do I have enough?" against, so a
+// truncated `1.234567` beside a real `1.2345678` reads as wrong. `toFixed()`
+// with no argument prints all decimals and never switches to exponential
+// notation (unlike toString on very small numbers).
+const fmt = (n) => {
+  const bn = BigNumber(n)
+  return bn.isFinite() ? bn.toFixed() : '0'
+}
 
 /**
  * Native send: the balance must cover the amount. Only the amount — the network

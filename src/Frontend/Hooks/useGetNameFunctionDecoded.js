@@ -1,5 +1,6 @@
 import { getWalletconnectRequestMethodName } from 'common/chain'
-import { decodeDataTxAndGetMethodName, isArrayWithData } from 'common/function'
+import { decodeDataTxAndGetMethodName, isArrayWithData, lowerCase } from 'common/function'
+import { resolveOnchainSymbolFor } from 'src/Services/TokenListV2/symbolOnchain'
 import ReduxService from 'common/redux'
 import { useMemo } from 'react'
 import { useQuery } from 'react-query'
@@ -48,20 +49,32 @@ const getApproveTokenInfo = async ({ queryKey }) => {
   const tokenInfoFromKeyringApiRes = await BaseAPI.getData(`keyrings/tokens/all/${Number(chainId)}?addresses=${to}`).catch(() => null)
   const tokenInfoFromKeyringApiList = tokenInfoFromKeyringApiRes?.items || []
 
+  let tokenInfoFromKeyring
   if (isArrayWithData(tokenInfoFromKeyringApiList)) {
-    const tokenInfoFromKeyring = tokenInfoFromKeyringApiList.find(item => item?.address?.toLowerCase() === to?.toLowerCase() || item?.contractAddress?.toLowerCase() === to?.toLowerCase())
+    tokenInfoFromKeyring = tokenInfoFromKeyringApiList.find(item => lowerCase(item?.address) === lowerCase(to) || lowerCase(item?.contractAddress) === lowerCase(to))
     if (tokenInfoFromKeyring) {
       tokenApproveDecimals = tokenInfoFromKeyring?.decimals
-      tokenApproveSymbol = tokenInfoFromKeyring?.auditGoplus?.token_symbol || tokenInfoFromKeyring?.symbol
+      // The user is about to grant a spending allowance, so the ticker shown must
+      // be the CONTRACT's own — a listing symbol that disagrees with the token
+      // being approved is exactly the confusion this prompt has to rule out.
+      tokenApproveSymbol = tokenInfoFromKeyring?.symbolOnchain || tokenInfoFromKeyring?.auditGoplus?.token_symbol || tokenInfoFromKeyring?.symbol
       tokenApproveIcon = tokenInfoFromKeyring?.icon_image
     }
   }
 
   if (!tokenApproveDecimals || !tokenApproveSymbol || !tokenApproveIcon) {
-    [tokenApproveSymbol, tokenApproveDecimals] = await Promise.all([
+    // getTokenSymbol reads `symbol()` from the contract, so this branch already
+    // produces the on-chain ticker — no resolver call needed on this path.
+    //
+    // It resolves to '' (not null) when the contract can't answer, so both
+    // results are only taken when they actually carry a value — otherwise a
+    // failed read would blank out a symbol the API had already supplied.
+    const [onchainSymbol, onchainDecimals] = await Promise.all([
       AllChainServices.getTokenSymbol(chainId, to),
       AllChainServices.getTokenDecimal(chainId, to)
     ]).catch(() => [null, null])
+    tokenApproveSymbol = onchainSymbol || tokenApproveSymbol
+    tokenApproveDecimals = onchainDecimals ?? tokenApproveDecimals
 
     const coingeckoTokenInfo = await CoinGeckoAPI.searchCoingeckoId({ chain: chainCoingecko, address: to, symbol: tokenApproveSymbol }).catch(() => ({}))
 
@@ -69,6 +82,12 @@ const getApproveTokenInfo = async ({ queryKey }) => {
       const approveTokenInfoFromCoinGecko = await CoinGeckoAPI.getTokenInfoById(coingeckoTokenInfo.id).catch(() => ({}))
       tokenApproveIcon = approveTokenInfoFromCoinGecko?.image?.small
     }
+  } else {
+    // The API row answered for decimals/icon. If it also carried `symbolOnchain`
+    // the ticker above is already the contract's; otherwise it's still a listing
+    // symbol, so resolve it. `resolveOnchainSymbolFor` short-circuits on the
+    // former, so it costs no RPC in that case.
+    tokenApproveSymbol = (await resolveOnchainSymbolFor(chainId, to, tokenInfoFromKeyring?.symbolOnchain)) ?? tokenApproveSymbol
   }
 
   const tokenApproveAmount = formatUnits(decodedInputs[1], tokenApproveDecimals)

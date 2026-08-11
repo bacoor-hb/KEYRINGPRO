@@ -1,5 +1,5 @@
-import { TurboModuleRegistry, Platform, NativeModules } from 'react-native'
-import Reactotron, { networking } from 'reactotron-react-native'
+import { TurboModuleRegistry } from 'react-native'
+import Reactotron from 'reactotron-react-native'
 import { reactotronRedux } from 'reactotron-redux'
 
 const scriptURL = TurboModuleRegistry.getEnforcing('SourceCode').getConstants().scriptURL

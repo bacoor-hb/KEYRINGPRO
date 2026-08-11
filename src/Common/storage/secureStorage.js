@@ -106,3 +106,7 @@ export const getDataFromSecureStorage = (key, defaultData = null) => {
     return defaultData
   }
 }
+
+export const getDataByKeyStore = (keyStoreId) => {
+  return Keys.secureFor(keyStoreId)
+}

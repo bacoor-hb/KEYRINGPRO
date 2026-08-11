@@ -4,7 +4,7 @@ import { fontSize, getFontFamily, DECIMAL_DOWN_PIXEL } from 'common/styles'
 import { cn, mergeStyle } from 'common/tailwind'
 // Base size + default weight per variant. A custom `fontSize` prop overrides the
 // base size only — lineHeight (×1.5) and fontFamily wiring stay the same.
-const VARIANT_CONFIG = {
+export const VARIANT_CONFIG = {
   small: { size: 14, weight: 400 },
   subTitle: { size: 18, weight: 700 },
   title: { size: 30, weight: 700 },

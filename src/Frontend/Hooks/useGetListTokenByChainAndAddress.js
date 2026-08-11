@@ -29,7 +29,16 @@ const getData = async ({ queryKey }) => {
         return filterListToken(listTokenInApp, true)
       }
 
-      const dataAPi = await fetchChainTokens(chainId, address, true)
+      // fetchChainTokens now rejects when the price list came back incomplete
+      // (so a refresh won't mistake unpriced-by-accident for worthless). Here we
+      // only need a selectable list, so drop that one chain instead of failing
+      // every other chain's result with it.
+      let dataAPi = []
+      try {
+        dataAPi = await fetchChainTokens(chainId, address, true)
+      } catch {
+        return []
+      }
 
       return filterListToken(dataAPi)
     }))

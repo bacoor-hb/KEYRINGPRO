@@ -96,6 +96,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: pixelByWidth(13),
     paddingVertical: pixelByHeight(10)
   },
+  // Dots with no row margins/padding — for tight hosts like the round
+  // jump-to-bottom button, which centers the content itself.
+  typingBare: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
   typingDot: {
     width: pixelByWidth(7),
     height: pixelByWidth(7),

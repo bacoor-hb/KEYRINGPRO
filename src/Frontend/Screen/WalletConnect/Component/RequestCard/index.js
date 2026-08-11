@@ -330,11 +330,19 @@ const RequestCard = (props) => {
                     </TouchableOpacity>
                   </View>
                   <View style={styles.amountRow}>
-                    <ImageRender uri={approveTokenInfo.icon} style={styles.tokenIcon} resizeMode='contain' />
-                    <MyTextTicker style={styles.amountText}>
-                      {customApproveAmount || (approveTokenInfo.isUnlimited ? I18n.t('WalletConnect.approveUnlimited') : approveTokenInfo.amount)}
-                    </MyTextTicker>
-                    <MyText className='text-medium'>{approveTokenInfo.symbol}</MyText>
+                    <View>
+                      <ImageRender uri={approveTokenInfo.icon} style={styles.tokenIcon} resizeMode='contain' />
+                    </View>
+                    <View
+                      style={{
+                        flex: 1
+                      }}>
+                      <MyTextTicker style={styles.amountText}>
+                        {customApproveAmount || (approveTokenInfo.isUnlimited ? I18n.t('WalletConnect.approveUnlimited') : approveTokenInfo.amount)}
+                        <MyText className='text-medium'>{' '}{approveTokenInfo.symbol}</MyText>
+                      </MyTextTicker>
+                    </View>
+
                   </View>
                 </>
               ) : null}

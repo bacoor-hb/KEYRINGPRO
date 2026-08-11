@@ -279,6 +279,8 @@ const images = {
         customRPC: require('./UIV2/Icon/Settings/customRPCDarkmode.png'),
         language: require('./UIV2/Icon/Settings/languageDarkmode.png'),
         information: require('./UIV2/Icon/Settings/informationDarkmode.png'),
+        twitter: require('./UIV2/Icon/Settings/twitter.png'),
+        github: require('./UIV2/Icon/Settings/github.png'),
         currency: require('./UIV2/Icon/Settings/currencyDarkmode.png'),
         reset: require('./UIV2/Icon/Settings/resetDarkmode.png')
       },

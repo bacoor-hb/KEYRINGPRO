@@ -1,10 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, TextInput, TouchableOpacity, Keyboard, Platform, ScrollView, Dimensions } from 'react-native'
+import { View, Text, TextInput, TouchableOpacity, Keyboard, Platform, Dimensions } from 'react-native'
+// ScrollView from react-native-gesture-handler: it scrolls inside the gorhom sheet on
+// Android (a plain RN ScrollView doesn't) AND, unlike gorhom's BottomSheetScrollView, its
+// ref is a normal RN ScrollView with working scrollTo/scrollToEnd (needed for the keyboard
+// auto-scroll below).
+import { ScrollView } from 'react-native-gesture-handler'
 
 import { useSelector } from 'react-redux'
 import { useQuery } from 'react-query'
 import BigNumber from 'bignumber.js'
 import Clipboard from '@react-native-clipboard/clipboard'
+import MyBalance from 'frontend/Components/UI/MyBalance'
 
 import createStyles, { FIELD_VPAD, FIELD_MIN_HEIGHT } from './styles'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
@@ -30,12 +36,12 @@ import useGetBalanceToken from 'frontend/Hooks/useGetBalanceToken'
 import useGasPrice from 'frontend/Hooks/useGasPrice'
 import useGetDecimalToken from 'frontend/Hooks/useGetDecimalToken'
 import useDebounceValue from 'frontend/Hooks/useDebounceValue'
-import { zeroAddress } from 'viem'
-import { KeyboardProvider, KeyboardController, KeyboardEvents, AndroidSoftInputModes } from 'react-native-keyboard-controller'
+import { isAddress, zeroAddress } from 'viem'
+import { KeyboardController, AndroidSoftInputModes } from 'react-native-keyboard-controller'
 
 import images from 'assets/Image'
 import I18n from 'assets/Lang'
-import { Colors, fontSize, pixelByHeight, pixelByWidth, getFontFamily, getSizeImgSquare, getHeightHeaderDrawer } from 'common/styles'
+import { Colors, fontSize, pixelByHeight, pixelByWidth, getFontFamily, getSizeImgSquare } from 'common/styles'
 import {
   convertBalanceToWei,
   convertWeiToBalance,
@@ -49,7 +55,7 @@ import { NavigationActions } from 'src/navigation/NavigationService'
 import InputCustom from 'frontend/Components/UI/InputCustom'
 import AutoFitAmountInput from '../Exchange/Components/AutoFitAmountInput'
 import { sanitizeAmountText } from '../Exchange/helpers'
-import { STEP_EXCHANGE, DEFAULT_GAS_LIMIT, MAX_DECIMAL_2USD, TYPE_VIEW_EXPLORER } from '../Exchange'
+import { STEP_EXCHANGE, DEFAULT_GAS_LIMIT, MAX_DECIMAL_2USD, TYPE_VIEW_EXPLORER, MAX_DECIMAL_2USD_GAS_FEE } from '../Exchange'
 import { cn, mergeStyle } from 'common/tailwind'
 import BtnBack from 'frontend/Components/UI/BtnBack'
 import SwapAndSend from '../SwapAndSend'
@@ -126,7 +132,9 @@ const SwapAndSendSubmit = ({ _this }) => {
     tokenIn,
     chainOut,
     amountIn: amountInDefault,
-    recipientAddress: recipientAddressDefault
+    recipientAddress: recipientAddressDefault,
+    nameAddressBook: nameAddressBookDefault,
+    addressBookInfo: addressBookInfoDefault
   } = state.swapAndSend
 
   const chainIdOut = chainOut?.chainId || tokenIn?.chainId
@@ -134,7 +142,7 @@ const SwapAndSendSubmit = ({ _this }) => {
   const userAddress = activeAccount?.account?.address
 
   const locale = useSelector((s) => s.localeRedux)
-  const [addrTwoLineHeight, setAddrTwoLineHeight] = useState(0)
+  const [addrTwoLineHeight] = useState(0)
   const fieldHeight = addrTwoLineHeight > 0
     ? Math.max(FIELD_MIN_HEIGHT, Math.ceil(addrTwoLineHeight) + FIELD_VPAD * 2 + 2)
     : null
@@ -147,36 +155,34 @@ const SwapAndSendSubmit = ({ _this }) => {
 
   const scrollRef = useRef(null)
   const scrollOffsetRef = useRef(0)
-  const scrollToY = (y) => {
-    scrollRef.current?.scrollTo?.({ y: y - getHeightHeaderDrawer(false) * 2, animated: true })
-  }
+  const scrollToY = (y) => scrollRef.current?.scrollTo?.({ y, animated: true })
   const [kbPad, setKbPad] = useState(0)
 
   useEffect(() => {
-    const show = KeyboardEvents.addListener('keyboardWillShow', (e) => {
-      const kbHeight = e.height ?? 0
-      setKbPad(kbHeight)
+    const isIOS = Platform.OS === 'ios'
+    const showEvt = isIOS ? 'keyboardWillShow' : 'keyboardDidShow'
+    const hideEvt = isIOS ? 'keyboardWillHide' : 'keyboardDidHide'
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      const keyboardTop = e.endCoordinates?.screenY ?? 0
+      setKbPad(e.endCoordinates?.height ?? 0)
       const focused = TextInput.State?.currentlyFocusedInput?.()
       if (!focused?.measureInWindow) return
       focused.measureInWindow((_x, y, _w, h) => {
-        const visibleHeight = Dimensions.get('window').height - kbHeight
-        const targetY = visibleHeight * 0.35
-        const inputCenter = y + h / 2
-        const delta = inputCenter - targetY
-        if (delta <= 0) return
-        setTimeout(() => { scrollToY(scrollOffsetRef.current + delta) }, 50)
+        const overlap = (y + h + pixelByHeight(40)) - keyboardTop
+        if (overlap <= 0) return
+        setTimeout(() => {
+          scrollToY(scrollOffsetRef.current + overlap)
+        }, 50)
       })
     })
-    const hide = KeyboardEvents.addListener('keyboardWillHide', () => {
-      setKbPad(0)
-    })
-    return () => { show.remove(); hide.remove() }
+    const hideSub = Keyboard.addListener(hideEvt, () => setKbPad(0))
+    return () => { showSub.remove(); hideSub.remove() }
   }, [])
 
   const [recipientAddress, setRecipientAddress] = useState(recipientAddressDefault)
   const [isAddressErr, setIsAddressErr] = useState(false)
-  const [txtAddressBookAlias, setTxtAddressBookAlias] = useState('')
-  const [addressBookInfo, setAddressBookInfo] = useState(null)
+  const [txtAddressBookAlias, setTxtAddressBookAlias] = useState(nameAddressBookDefault)
+  const [addressBookInfo, setAddressBookInfo] = useState(addressBookInfoDefault)
   const [isAddressBookNotFound, setIsAddressBookNotFound] = useState(false)
   const [amountIn, setAmountIn] = useState(amountInDefault)
   const [amountOut, setAmountOut] = useState('')
@@ -216,6 +222,10 @@ const SwapAndSendSubmit = ({ _this }) => {
 
   const isCheckingRecipient = !!recipientAddress && !isAddressErr && !isOwnAccount && (isLoadingHistory || isLoadingContract || isLoadingMalicious)
 
+  const isValidAddressRecipient = useMemo(() => {
+    return isAddress(recipientAddress)
+  }, [recipientAddress])
+
   const addressTokenIn = useMemo(() => {
     let addressIn = tokenIn?.contractAddress === 'native' ? zeroAddress : lowerCase(tokenIn?.contractAddress)
     if (isNativeToken(addressIn, tokenIn?.chainId)) {
@@ -236,7 +246,7 @@ const SwapAndSendSubmit = ({ _this }) => {
   const { data: decimalTokenIn, isLoading: loadingDecimalTokenIn } = useGetDecimalToken(tokenIn?.chainId, addressTokenIn)
   const { data: decimalTokenOut, isLoading: loadingDecimalTokenOut } = useGetDecimalToken(chainIdOut, addressTokenOut)
   const { data: gasWeiPriceDefault, isLoading: loadingGasPriceDefault } = useGasPrice(tokenIn?.chainId)
-  const { data: balanceTokenIn } = useGetBalanceToken(tokenIn?.chainId, userAddress, tokenIn?.contractAddress)
+  const { data: balanceTokenIn } = useGetBalanceToken(tokenIn?.chainId, userAddress, addressTokenIn)
   const { data: balanceNative, isLoading: loadingBalanceNative } = useGetBalanceToken(tokenIn?.chainId, userAddress, zeroAddress)
 
   const isNativeTokenInput = isNativeToken(tokenIn?.contractAddress)
@@ -272,6 +282,23 @@ const SwapAndSendSubmit = ({ _this }) => {
     return tokenIn?.chainId?.toString() !== chainIdOut?.toString()
   }, [tokenIn, chainIdOut])
 
+  // Plain-USD values computed from OUR price API (amount × price) — NOT the Relay quote's
+  // amountUsd. Kept at FULL precision (no rounding); FiatBalance applies the fiat rate +
+  // symbol and formats it for display, so pass plain USD here — never a pre-rounded value.
+  const amountInUsd = useMemo(() => {
+    if (!priceTokenIn || !BigNumber(amountIn || 0).gt(0)) {
+      return null
+    }
+    return BigNumber(amountIn).multipliedBy(priceTokenIn).toString()
+  }, [amountIn, priceTokenIn])
+
+  const amountOutUsd = useMemo(() => {
+    if (!priceTokenOut || !BigNumber(amountOut || 0).gt(0)) {
+      return null
+    }
+    return BigNumber(amountOut).multipliedBy(priceTokenOut).toString()
+  }, [amountOut, priceTokenOut])
+
   const isValidAddress = (address) => {
     try {
       return address.startsWith('0x') && address.length === 42 && !!address.match(/^[0-9a-zA-Z]+$/)
@@ -286,12 +313,10 @@ const SwapAndSendSubmit = ({ _this }) => {
       if (!focused?.measureInWindow) return
       focused.measureInWindow((_x, y, _w, h) => {
         const kbHeight = kbPad || 300
-        const visibleHeight = Dimensions.get('window').height - kbHeight
-        const targetY = visibleHeight * 0.35
-        const inputCenter = y + h / 2
-        const delta = inputCenter - targetY
-        if (delta <= 0) return
-        scrollToY(scrollOffsetRef.current + delta)
+        const keyboardTop = Dimensions.get('window').height - kbHeight
+        const overlap = (y + h + pixelByHeight(40)) - keyboardTop
+        if (overlap <= 0) return
+        scrollToY(scrollOffsetRef.current + overlap)
       })
     }, 100)
   }
@@ -300,6 +325,14 @@ const SwapAndSendSubmit = ({ _this }) => {
     const address = isFromScan ? getAddressFromQR(newAddress) : newAddress
     setRecipientAddress(address)
     setTxtAddressBookAlias('')
+    onChangeValueExchange(
+      {
+        recipientAddress: address,
+        nameAddressBook: '',
+        addressBookInfo: null
+      },
+      false
+    )
     setAddressBookInfo(null)
     setIsAddressBookNotFound(false)
     const valid = address.length > 0 && isValidAddress(address)
@@ -309,12 +342,24 @@ const SwapAndSendSubmit = ({ _this }) => {
       if (info?.info) {
         setAddressBookInfo(info)
         setTxtAddressBookAlias(info.info.nickname || info.info.email || '')
+        onChangeValueExchange(
+          {
+            addressBookInfo: info,
+            nameAddressBook: info.info.nickname || info.info.email || ''
+          },
+          false
+        )
       }
     }
   }
 
   const onInputAddressBookAlias = (text) => {
     setTxtAddressBookAlias(text)
+    onChangeValueExchange({
+      nameAddressBook: text,
+      recipientAddress: '',
+      addressBookInfo: null
+    }, false)
     setRecipientAddress('')
     setAddressBookInfo(null)
     setIsAddressBookNotFound(false)
@@ -329,11 +374,27 @@ const SwapAndSendSubmit = ({ _this }) => {
       setIsAddressBookNotFound(false)
       setRecipientAddress(info.info.address)
       setIsAddressErr(false)
+      onChangeValueExchange(
+        {
+          recipientAddress: info.info.address,
+          nameAddressBook: info.info.nickname || info.info.email || '',
+          addressBookInfo: info
+        },
+        false
+      )
     } else {
       setAddressBookInfo(null)
       setIsAddressBookNotFound(true)
       setRecipientAddress('')
       setIsAddressErr(false)
+      onChangeValueExchange(
+        {
+          recipientAddress: '',
+          nameAddressBook: '',
+          addressBookInfo: null
+        },
+        false
+      )
     }
   }
 
@@ -344,6 +405,11 @@ const SwapAndSendSubmit = ({ _this }) => {
     setIsAddressErr(false)
     const entryAddress = isValidAddress(entry?.info?.address) ? entry.info.address : ''
     setRecipientAddress(entryAddress)
+    onChangeValueExchange({
+      recipientAddress: entryAddress,
+      addressBookInfo: entry,
+      nameAddressBook: entry?.info?.nickname || entry?.info?.email || ''
+    }, false)
   }
 
   const openAddressBookManager = () => {
@@ -496,6 +562,9 @@ const SwapAndSendSubmit = ({ _this }) => {
   }
 
   const handleMax = () => {
+    if (!isValidAddressRecipient) {
+      return
+    }
     const feeTx = feeGas
     let balanceUser = BigNumber(balanceTokenIn || 0).decimalPlaces(decimalTokenIn, BigNumber.ROUND_DOWN).toFixed()
     if (isNativeTokenInput) {
@@ -528,7 +597,7 @@ const SwapAndSendSubmit = ({ _this }) => {
     if (!isTokenOut && amountIn && priceTokenIn) {
       return BigNumber(amountIn).multipliedBy(priceTokenIn).toFixed()
     }
-    return '0'
+    return 0
   }
 
   const callbackStep = (nextStep, data) => {
@@ -581,6 +650,8 @@ const SwapAndSendSubmit = ({ _this }) => {
         raw.value = rawTransaction?.tx.value
         raw.valueNoConvert = rawTransaction?.tx.value
       }
+      raw.rawTransactionApi = rawTransaction?.tx
+
       await handleSubmitExchange(raw, callbackStep, 'swapAndSend')
     }
   }
@@ -621,6 +692,22 @@ const SwapAndSendSubmit = ({ _this }) => {
     handleExecute()
   }
 
+  const getImpactPercent = () => {
+    let impactPercent = 0
+
+    if (amountInUsd && amountOutUsd) {
+      impactPercent = BigNumber(amountInUsd || 0).gt(0)
+        ? BigNumber(amountOutUsd || 0)
+          .minus(amountInUsd)
+          .dividedBy(amountInUsd)
+          .multipliedBy(100)
+          .toNumber()
+        : 0
+    }
+
+    return impactPercent
+  }
+
   const renderAddressStatus = () => {
     if (isAddressErr) return <StatusRow className='text-red' text={I18n.t('Content.invalidAddr')} />
     if (!recipientAddress) return null
@@ -658,7 +745,7 @@ const SwapAndSendSubmit = ({ _this }) => {
           variant='default'
           disableLiquidGlass
           isLoading={loadingGetQuote}
-          isDisable={!canSend}
+          isDisable={!canSend || step >= STEP_EXCHANGE.approving}
           label={I18n.t('Initial.ExchangeApprove')}
           onPress={onSend}
         />
@@ -668,7 +755,7 @@ const SwapAndSendSubmit = ({ _this }) => {
       <MyButton
         variant='primary'
         isLoading={loadingGetQuote}
-        isDisable={!canSend || !!hash?.exchange}
+        isDisable={!canSend || step >= STEP_EXCHANGE.exchanging}
         label={I18n.t('Initial.send')}
         onPress={onSend}
       />
@@ -705,10 +792,10 @@ const SwapAndSendSubmit = ({ _this }) => {
             <Text
               key={locale}
               style={{ position: 'absolute', left: 0, top: 0, opacity: 0, padding: 0, fontFamily: getFontFamily(), fontSize: 16 }}
-              onLayout={(e) => {
-                const h = e.nativeEvent?.layout?.height || 0
-                if (h && Math.abs(h - addrTwoLineHeight) > 0.5) setAddrTwoLineHeight(h)
-              }}
+              // onLayout={(e) => {
+              //   const h = e.nativeEvent?.layout?.height || 0
+              //   if (h && Math.abs(h - addrTwoLineHeight) > 0.5) setAddrTwoLineHeight(h)
+              // }}
             >
               {'0\n0'}
             </Text>
@@ -782,16 +869,17 @@ const SwapAndSendSubmit = ({ _this }) => {
               {I18n.t('v2.sendToken.quantityToSend')}
             </MyText>
             <Field
-              style={{ minHeight: pixelByHeight(62) }}
+              style={{ minHeight: pixelByHeight(62), opacity: !isValidAddressRecipient ? 0.5 : 1 }}
               leftIcon={<TokenIconWithChain tokenIconUri={tokenIn?.iconUrl} chainId={chainId} style={styles.tokenIcon} />}
               rightButton={<CircleButton label={I18n.t('v2.common.max')} onPress={handleMax} />}
             >
               <AutoFitAmountInput
+                disabled={!isValidAddressRecipient}
                 value={amountIn}
                 onChangeText={onChangeAmountIn}
                 keyboardType='numeric'
                 minScale={0}
-                placeholder={I18n.t('Initial.amount')}
+                placeholder={I18n.t('v2.sendToken.amountToSend')}
                 placeholderStyle={styles.amountPlaceholder}
                 textStyle={styles.amountInput}
                 onFocus={scrollToFocusedInput}
@@ -804,11 +892,14 @@ const SwapAndSendSubmit = ({ _this }) => {
                   <View style={{ width: getSizeImgSquare('large'), alignItems: 'center' }}>
                     <MyIcon uri={images.UIV2.icons.goArrowDownMedium} />
                   </View>
-                  <FiatBalance fractionDigits={MAX_DECIMAL_2USD} className='text-medium' valueUSD={getAmountToUSD(false)} />
+                  <View style={{ opacity: getAmountToUSD(false) ? 1 : 0 }}>
+                    <FiatBalance fractionDigits={MAX_DECIMAL_2USD} className='text-medium' valueUSD={getAmountToUSD(false)} />
+
+                  </View>
 
                 </View>
                 <Field
-                  style={{ minHeight: pixelByHeight(62) }}
+                  style={{ minHeight: pixelByHeight(62), opacity: !isValidAddressRecipient ? 0.5 : 1 }}
                   leftIcon={(
                     <TokenIconWithChain
                       chainId={chainIdOut}
@@ -819,30 +910,51 @@ const SwapAndSendSubmit = ({ _this }) => {
                   )}
                 >
                   <AutoFitAmountInput
+                    disabled={!isValidAddressRecipient}
                     value={amountOut}
                     onChangeText={onChangeAmountOut}
                     keyboardType='numeric'
                     minScale={0}
-                    placeholder={I18n.t('Initial.amount')}
+                    placeholder={I18n.t('v2.sendToken.amountToBeReceived')}
                     placeholderStyle={styles.amountPlaceholder}
                     textStyle={styles.amountInput}
                     onFocus={scrollToFocusedInput}
                   />
                 </Field>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: pixelByWidth(12) }}>
-                  <View style={{ width: getSizeImgSquare('large'), alignItems: 'center' }} />
-                  <MyTextTicker>
-                    <FiatBalance fractionDigits={MAX_DECIMAL_2USD} className='text-medium' valueUSD={getAmountToUSD(true)} />
-                  </MyTextTicker>
+                <View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: pixelByWidth(12) }}>
+                    <View style={{ width: getSizeImgSquare('large'), alignItems: 'center' }} />
+                    <View style={{ opacity: getAmountToUSD(true) ? 1 : 0 }}>
+                      <MyTextTicker>
+                        <FiatBalance fractionDigits={MAX_DECIMAL_2USD} className='text-medium' valueUSD={getAmountToUSD(true)} />
+                        {
+                          !!getImpactPercent() && (
+                            <MyBalance
+                              variant='small'
+                              className='text-medium'
+                              style={{ position: 'relative' }}
+                              value={getImpactPercent()}
+                              fractionDigits={2}
+                              fixedDecimals
+                              signed
+                              prefix=' ('
+                              suffix='%)'
+                            />
+                          )
+                        }
+
+                      </MyTextTicker>
+                    </View>
+
+                  </View>
+                  <View style={styles.amountErrorSpace}>
+                    {!!error && (
+                      <HintRow className='text-red' text={error} />
+                    )}
+                  </View>
                 </View>
               </>
             )}
-
-            <View style={styles.amountErrorSpace}>
-              {!!error && (
-                <HintRow className='text-red' text={error} />
-              )}
-            </View>
 
             <View style={styles.footer}>
               <View style={styles.footerRow}>
@@ -854,7 +966,7 @@ const SwapAndSendSubmit = ({ _this }) => {
                 <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end' }}>
                   <MyTextTicker className='text-medium' variant='small'>
 
-                    <FiatBalance className='text-white' fractionDigits={18} valueUSD={feeFiat} />
+                    <FiatBalance className='text-white' fractionDigits={MAX_DECIMAL_2USD_GAS_FEE} valueUSD={feeFiat} />
                   </MyTextTicker>
                 </View>
 
@@ -986,6 +1098,10 @@ const SwapAndSendSubmit = ({ _this }) => {
           title={I18n.t('Initial.success')}
           titleConfig={{ className: 'text-green', variant: 'subTitle' }}
           style={styles.statusResult}
+          message={amountOutAfterSwap ? I18n.t('v2.exchange.receivedAmountOut', {
+            amount: BigNumber(amountOutAfterSwap).decimalPlaces(6).toFormat(),
+            symbol: tokenOut?.symbol
+          }) : ''}
         />
       )}
 
@@ -1011,11 +1127,9 @@ const SwapAndSendSubmit = ({ _this }) => {
   )
 
   return (
-    <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
-      <MyViewPage style={styles.container}>
-        {renderEnter()}
-      </MyViewPage>
-    </KeyboardProvider>
+    <MyViewPage style={styles.container}>
+      {renderEnter()}
+    </MyViewPage>
   )
 }
 

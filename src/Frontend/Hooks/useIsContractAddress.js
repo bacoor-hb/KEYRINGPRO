@@ -30,8 +30,12 @@ const useIsContractAddress = (address, { enabled = true } = {}) => {
   const activeEvmChainIdsRedux = useSelector((s) => s.activeEvmChainIdsRedux)
   const chainIds = (activeEvmChainIdsRedux || []).map(Number)
 
+  // `enabled` is deliberately NOT in the key: it says whether this caller wants
+  // the check run, not what the answer is. Keying on it split each address into
+  // two unrelated entries, so a caller that mounted disabled and later enabled
+  // landed on an empty key and re-fetched instead of reusing the known answer.
   const { data } = useQuery(
-    [QUERY_KEY, (address || '').toLowerCase(), chainIds, enabled],
+    [QUERY_KEY, (address || '').toLowerCase(), chainIds],
     checkIsContract,
     {
       enabled: enabled && isAddress(address) && chainIds.length > 0,

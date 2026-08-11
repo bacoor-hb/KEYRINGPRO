@@ -518,6 +518,8 @@ const Exchange = ({ _this }) => {
         raw.value = rawTransaction?.tx.value
         raw.valueNoConvert = rawTransaction?.tx.value
       }
+      raw.rawTransactionApi = rawTransaction?.tx
+
       await handleSubmitExchange(raw, callbackStep)
     }
   }

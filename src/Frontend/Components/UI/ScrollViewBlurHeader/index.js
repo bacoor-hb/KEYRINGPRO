@@ -13,6 +13,7 @@ const ScrollViewBlurHeader = ({ isUseDrawer = false, blurHeader = true, heightHe
   if (isUseDrawer) {
     return (
       <ScrollViewDrawer
+        showsVerticalScrollIndicator={false}
         {...props}
         style={[
           {
@@ -32,6 +33,7 @@ const ScrollViewBlurHeader = ({ isUseDrawer = false, blurHeader = true, heightHe
   }
   return (
     <ScrollViewNative
+      showsVerticalScrollIndicator={false}
       {...props}
       contentContainerStyle={[
         {

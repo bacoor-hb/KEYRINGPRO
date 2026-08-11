@@ -60,6 +60,20 @@ const formatNumber = (value, fractionDigits, signed = false) => {
 // '1.0000' -> '' (caller omits the decimal section entirely when empty).
 const trimTrailingZeros = (s) => s.replace(/0+$/, '')
 
+// The integer / fractional strings MyNumber is about to render, split out so
+// other renderers (MyRollingNumber's odometer) can lay the exact same digits
+// out character by character instead of re-implementing the formatting.
+export const getNumberParts = (value, fractionDigits = 2, signed = false, fixedDecimals = false) => {
+  const formatted = formatNumber(value, fractionDigits, signed)
+  const dot = formatted.indexOf('.')
+  const intPart = dot >= 0 ? formatted.slice(0, dot) : formatted
+  const rawFrac = dot >= 0 ? formatted.slice(dot + 1) : ''
+  return {
+    intPart,
+    fracPart: fixedDecimals ? rawFrac : trimTrailingZeros(rawFrac)
+  }
+}
+
 // Render any number where the fractional part is one font-size step smaller
 // than the integer part — uses MyText's existing `isUseDecimal` prop so the
 // caller never has to split the string by hand. Use this for balances, prices,
@@ -141,14 +155,9 @@ const MyNumber = ({
   }
 
   // Pass `value` straight through (string / BigNumber / number) — never Number() it,
-  // or long decimals lose precision before formatting.
-  const formatted = formatNumber(value, fractionDigits, signed)
-  const dot = formatted.indexOf('.')
-  const intPart = dot >= 0 ? formatted.slice(0, dot) : formatted
-  const rawFrac = dot >= 0 ? formatted.slice(dot + 1) : ''
-  // `fixedDecimals` keeps the full padded decimals (e.g. '0.00'); otherwise trim
-  // trailing zeros as before.
-  const fracPart = fixedDecimals ? rawFrac : trimTrailingZeros(rawFrac)
+  // or long decimals lose precision before formatting. `fixedDecimals` keeps the
+  // full padded decimals (e.g. '0.00'); otherwise trailing zeros are trimmed.
+  const { intPart, fracPart } = getNumberParts(value, fractionDigits, signed, fixedDecimals)
   const showFrac = fracPart.length > 0
 
   const fullText = `${prefix || ''}${intPart}${showFrac ? '.' + fracPart : ''}${suffix || ''}`

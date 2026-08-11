@@ -1,6 +1,7 @@
 import BaseContainer from 'frontend/Container/BaseContainer'
 import I18n from 'assets/Lang'
 import React from 'react'
+import { AppState } from 'react-native'
 import Page from './page'
 import { connect } from 'react-redux'
 import { bindActionCreators } from 'redux'
@@ -10,7 +11,7 @@ import {
   hasBiometricPassword,
   savePasswordWithBiometric,
   clearBiometricPassword,
-  checkCanImplyAuthentication,
+  getDeviceAuthInfo,
   getBiometricPassword
 } from 'common/keychain'
 import StorageReduxAction from 'controller/Redux/actions/storageAction'
@@ -32,7 +33,10 @@ class SecurityScreen extends BaseContainer {
       passwordNewConfirm: '',
       isTurnFaceId: false,
       isAgree: false,
+      // What the device can do right now: null biometryType = nothing enrolled.
+      // Drives both whether the device-auth row shows and how it is labelled.
       isBiometricAvailable: false,
+      biometryType: null,
       // When true, PasswordModal acts as a single-step "enter current password"
       // prompt — used when enabling biometric auth (need plaintext pw).
       biometricEnableMode: false,
@@ -45,17 +49,44 @@ class SecurityScreen extends BaseContainer {
   componentDidMount () {
     super.componentDidMount && super.componentDidMount()
     this.initBiometricState()
+    // Biometry can be enrolled / removed in the system settings while the app is
+    // backgrounded — re-read it on foreground so the row doesn't go stale.
+    this.appStateSubscription = AppState.addEventListener('change', this.onAppStateChange)
+  }
+
+  componentWillUnmount () {
+    super.componentWillUnmount && super.componentWillUnmount()
+    this.isUnmounted = true
+    this.appStateSubscription && this.appStateSubscription.remove()
+  }
+
+  onAppStateChange = (appState) => {
+    if (appState === 'active') this.refreshDeviceAuthAvailability()
   }
 
   initBiometricState = async () => {
-    const [canBiometric, biometricOn] = await Promise.all([
-      checkCanImplyAuthentication(),
+    const [deviceAuth, biometricOn] = await Promise.all([
+      getDeviceAuthInfo(),
       hasBiometricPassword()
     ])
-    this.setState({
-      isBiometricAvailable: !!canBiometric,
+    this.setModalState({
+      isBiometricAvailable: deviceAuth.isAvailable,
+      biometryType: deviceAuth.biometryType,
       isTurnFaceId: !!biometricOn
     })
+  }
+
+  // Foreground re-check. Deliberately refreshes ONLY what the device supports, not
+  // isTurnFaceId: iOS sends the app to 'inactive'/'active' around a Face ID prompt,
+  // so re-reading the keychain flag here would race with an in-flight enable/disable
+  // and flip the switch back. The toggle handlers own that flag.
+  // setModalState (not setState) so a re-check while the password drawer is open
+  // also refreshes the snapshot the drawer renders from.
+  refreshDeviceAuthAvailability = async () => {
+    const { isAvailable, biometryType } = await getDeviceAuthInfo()
+    if (this.isUnmounted) return
+    if (isAvailable === this.state.isBiometricAvailable && biometryType === this.state.biometryType) return
+    this.setModalState({ isBiometricAvailable: isAvailable, biometryType })
   }
 
   resetChangePasswordState = () => {

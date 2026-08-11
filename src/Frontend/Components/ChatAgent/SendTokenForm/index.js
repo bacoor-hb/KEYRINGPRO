@@ -2,6 +2,12 @@ import React from 'react'
 import WalletActionForm from '../WalletActionForm'
 import { buildTokenTransferTx } from '../WalletActionForm/buildTx'
 import { checkTokenBalance } from '../WalletActionForm/preCheck'
+import { X402_PATH } from '../WalletActionForm/x402Gate'
+
+// The agent resolves the token's decimals; 18 is the ERC-20 default when it
+// couldn't (the amount field caps its precision to the same).
+const decimalsOf = (parameters) =>
+  parameters?.decimals != null ? Number(parameters.decimals) : 18
 
 /**
  * Send an ERC-20 token. The agent resolves `contract_address` from a symbol
@@ -18,8 +24,25 @@ export default function SendTokenForm ({ props, language, ...txProps }) {
       props={props}
       language={language}
       spendable={props?.parameters?.spendable}
+      spendableUsd={props?.parameters?.spendableUsd}
       spendableSymbol={symbol}
       quickPercents={[25, 50, 75, 100]}
+      x402Path={X402_PATH.sendToken}
+      // What this send is about to move. The x402 approval sheet sets it aside
+      // before judging whether the fee is covered, for the case where the fee is
+      // charged in the very token being sent — sending your whole USDC balance
+      // leaves nothing for a USDC fee, however healthy `balanceOf` still looks
+      // at that moment.
+      //
+      // The amount stays HUMAN here on purpose. The sheet scales it by the fee
+      // token's real on-chain decimals, which it has and this form does not:
+      // `parameters.decimals` is the agent's, and its 18 fallback would
+      // overstate a 6-decimal token by a factor of a trillion.
+      spend={({ values, chainId }) => ({
+        chainId,
+        assetAddress: values.contract_address,
+        amount: values.amount
+      })}
       fields={[
         {
           key: 'contract_address',
@@ -46,7 +69,7 @@ export default function SendTokenForm ({ props, language, ...txProps }) {
           placeholder: (t) => t('walletActionEnterAddress')
         }
       ]}
-      submitLabel={(t) => 'Send Token'}
+      submitLabel={(t) => t('walletActionSendToken')}
       // First check: ask the token contract itself whether this wallet holds
       // enough. The contract address is user-editable here, so the agent's
       // `spendable` may not even describe the token actually being sent.
@@ -64,9 +87,7 @@ export default function SendTokenForm ({ props, language, ...txProps }) {
           contractAddress: values.contract_address,
           toAddress: values.to_address,
           amount: values.amount,
-          // The agent resolves the token's decimals; 18 is the ERC-20 default
-          // when it couldn't (the amount field caps its precision to the same).
-          decimals: parameters.decimals != null ? Number(parameters.decimals) : 18
+          decimals: decimalsOf(parameters)
         })}
     />
   )

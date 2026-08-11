@@ -18,11 +18,12 @@ import { ImageRender } from 'frontend/Components/Common/ImageRender'
 import AppLockedOverlay from 'frontend/Components/AppLockedOverlay'
 import ReduxService from 'common/redux'
 import I18nWithLinks from 'frontend/Components/UI/I18nWithLinks'
+import { isFaceBiometryType } from 'common/keychain'
 
 const UnlockPage = (_this) => {
   const { func, state } = _this
   const { onChangePassword, onPressFaceId, onUnlock } = func
-  const { password = '', isLoading = false, isError = false, isAutoAuthing = false, isFaceIdEnabled = false, isLocked = false, attemptsLeft = null } = state
+  const { password = '', isLoading = false, isError = false, isAutoAuthing = false, isFaceIdEnabled = false, isLocked = false, attemptsLeft = null, biometryType = null } = state
 
   const errMessage = isError
     ? (attemptsLeft != null
@@ -110,7 +111,9 @@ const UnlockPage = (_this) => {
                 errorSpaceHeight={pixelByHeight(42)}
                 rightIcon={isFaceIdEnabled ? (
                   <TouchableOpacity activeOpacity={0.7} onPress={onPressFaceId}>
-                    <MyIcon uri={images.UIV2.icons.faceID} variant='small' />
+                    {/* Face icon only when the device really authenticates by face —
+                        fingerprint / passcode devices get the generic device-auth icon. */}
+                    <MyIcon uri={isFaceBiometryType(biometryType) ? images.UIV2.icons.faceID : images.UIV2.security.deviceAuthen} variant='small' />
                   </TouchableOpacity>
                 ) : undefined}
               />

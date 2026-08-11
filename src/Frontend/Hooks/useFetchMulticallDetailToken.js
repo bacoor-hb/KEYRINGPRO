@@ -3,6 +3,7 @@ import { getDataFromAsyncStorage, storeDataToAsyncStorage } from 'common/storage
 import BaseAPI from 'controller/API/BaseAPI'
 import { useQuery } from 'react-query'
 import usePersistedQueryData from 'frontend/Hooks/usePersistedQueryData'
+import { resolveOnchainSymbols } from 'src/Services/TokenListV2/symbolOnchain'
 
 export const STORAGE_KEY = 'LIST_DATA_TOKEN_LIQUIDITY_DETAIL'
 export const QUERY_KEY = 'getDataMuticall'
@@ -11,7 +12,21 @@ export const QUERY_KEY = 'getDataMuticall'
 const getDataTokenDetailByChain = async (chainId, addresses) => {
   if (!addresses?.length) return []
   const res = await BaseAPI.getData(`keyrings/tokens/all/${Number(chainId?.toString())}?addresses=${addresses.join(',')}`)
-  return res?.items ?? []
+  const items = res?.items ?? []
+
+  // These rows feed the LP pair label ("WETH/USDC"), which reads `symbolOnchain`
+  // first (see PoolList). Fill that field in for the rows the API didn't answer
+  // for, so the label shows the contract's own ticker either way. `symbol` and
+  // `auditGoplus` come back exactly as the API returned them.
+  //
+  // Rows key the address as `address`; the resolver reads `contractAddress`, so
+  // it's mapped in and dropped again to keep this flow's row shape.
+  const resolved = await resolveOnchainSymbols(
+    chainId,
+    items.map((token) => ({ ...token, contractAddress: token?.address })),
+    { keepSymbol: true }
+  )
+  return resolved.map(({ contractAddress, ...token }) => token)
 }
 
 const getDataMuticall = async ({ queryKey }) => {

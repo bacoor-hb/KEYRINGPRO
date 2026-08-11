@@ -7,7 +7,7 @@ import images from 'assets/Image'
 import createStyles from './styles'
 import TitleScreen from 'frontend/Components/UI/TitleScreen'
 import MyIcon from 'frontend/Components/UI/MyIcon'
-import { getSizeImgSquare, pixelByHeight, pixelByWidth, sizeImageSquare } from 'common/styles'
+import { getSizeImgSquare, pixelByHeight, sizeImageSquare } from 'common/styles'
 import MyRowItem from 'frontend/Components/UI/MyRowItem'
 import InputCustom from 'frontend/Components/UI/InputCustom'
 

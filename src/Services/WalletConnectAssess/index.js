@@ -2,6 +2,7 @@ import { WebsiteTrustKeyringAgent } from 'keyring-agent-core'
 import { REVIEW_URL_STATUS } from 'common/constants/app'
 import { getWalletconnectSiteOfficalStatus } from 'common/chain'
 import ReduxService from 'common/redux'
+import Keys from 'react-native-keys'
 
 // The five UI states the connect modal can render for the URL-safety section.
 // They map 1:1 to the Figma designs (see WalletConnectConnectModal):
@@ -66,7 +67,11 @@ const getAgentLanguage = () => {
  */
 export const assessUrlByAI = async (url, isMarkOfficial = false) => {
   const agent = new WebsiteTrustKeyringAgent({
-    llm: { model: 'gemini-2.5-flash' }
+    llm: {
+      model: 'gemini-2.5-flash',
+      apiKey: Keys.secureFor('AGENT_CORE_GEMINI_API_KEY')
+    },
+    secretKey: Keys.secureFor('AGENT_CORE_SECRET_KEY')
   })
   const res = await agent.chat({ url, isMarkOfficial, language: getAgentLanguage() })
   return {

@@ -3,7 +3,7 @@ import React from 'react'
 import { connect } from 'react-redux'
 import Page from './page'
 import InfoAccountHeader from 'frontend/Components/UI/InfoAccountHeader'
-import { cloneData, sleep, lowerCase } from 'common/function'
+import { cloneData, sleep, lowerCase, formatWeb3Error } from 'common/function'
 import { getHeightHeader, pixelByHeight, getHeightScreen } from 'common/styles'
 import Exchange, { STEP_EXCHANGE } from './Component/Exchange'
 import SelectChainOut from './Component/SelectChainOut'
@@ -16,14 +16,20 @@ import { getPrivateKeyByAddress, isAccountFromKeyCard, remove0xFromPrivateKey } 
 import AllChainServices from 'controller/AllChainServices'
 import I18n from 'assets/Lang'
 import { LIST_DEFAULT_CHAIN_ID } from 'common/constants/chain'
-import { createPublicClient, decodeEventLog, erc20Abi, fallback, http, zeroAddress } from 'viem'
+import { zeroAddress } from 'viem'
 import StorageReduxAction from 'controller/Redux/actions/storageAction'
-import { refreshAccountTokens, buildViemChain } from 'src/Services/TokenListV2'
+import { refreshAccountTokens } from 'src/Services/TokenListV2'
+import { resolveOnchainSymbolFor } from 'src/Services/TokenListV2/symbolOnchain'
 import { isNativeToken } from 'common/tokens'
-import ViemWeb3 from 'src/Web3/ViemWeb3'
+import ViemWeb3, { TX_TRACK_CANCELLED, TX_TRACK_REVERTED } from 'src/Web3/ViemWeb3'
 import BigNumber from 'bignumber.js'
 import SwapAndSend from './Component/SwapAndSend'
 import { SwapServiceFactory } from 'src/Services/SwapServices'
+
+// How long to keep polling for a send's receipt. Long enough for slow L1 blocks,
+// short enough that a tx which never lands stops costing RPC calls — the poll is
+// also cancelled outright when the drawer closes (see cancelSendTracking).
+const SEND_TX_TRACK_TIMEOUT = 90000
 
 const INIT_STATE = {
   exchange: {
@@ -52,6 +58,22 @@ class TokenDetailScreen extends BaseContainer {
     super(props)
     this.page = Page
     this.state = { ...INIT_STATE }
+    // Read by the receipt poll between attempts (see handleSubmitSend). The poll
+    // is a bare promise chain with no lifecycle of its own, so this flag is the
+    // only thing that can stop it once the UI it reports to is gone.
+    this.sendTrackingCancelled = false
+  }
+
+  componentWillUnmount () {
+    super.componentWillUnmount()
+    this.cancelSendTracking()
+  }
+
+  // Stop polling for a send's receipt. Called when the Send drawer closes and on
+  // unmount: leaving the screen used to leave the poll running against the RPC
+  // for its whole timeout, still hitting the network from the Home screen.
+  cancelSendTracking = () => {
+    this.sendTrackingCancelled = true
   }
 
   onSend = () => {
@@ -70,6 +92,9 @@ class TokenDetailScreen extends BaseContainer {
       // sheet). 'extend' holds it at its detent; SendToken sets the Android window to
       // ADJUST_NOTHING (nothing moves) and scrolls its own content to reveal the focused input.
       keyboardBehavior: 'extend',
+      // The result timeline lives in this drawer; once it is dismissed there is
+      // nothing left to render a receipt into, so stop polling for one.
+      onClose: this.cancelSendTracking,
       children: (
         <SendToken _this={this} />
       )
@@ -100,6 +125,9 @@ class TokenDetailScreen extends BaseContainer {
   // Mirrors handleSubmitExchange: drives the SendToken drawer via `callback`.
   handleSubmitSend = async (payload, callback) => {
     try {
+      // A previous send in this same screen may have left the flag set (drawer
+      // closed mid-confirmation). Clear it so this send's poll is allowed to run.
+      this.sendTrackingCancelled = false
       callback(STEP_SEND.sending)
 
       const chainId = this.state.exchange.tokenIn.chainId
@@ -109,6 +137,16 @@ class TokenDetailScreen extends BaseContainer {
       let privateKey = ''
       if (isAccountFromKeyCard(address)) {
         privateKey = await this.nfcProxy.getPrivateKeyFromNFC(address)
+        // No key back from the card means the scan never happened or was called
+        // off: NFC is off/unsupported, the user cancelled, or the card didn't
+        // match. The proxy has ALREADY told the user why (its own alert / the
+        // "NFC is not available" sheet), and nothing was signed or broadcast —
+        // so rewind to the form instead of reporting a failed transaction, which
+        // would blame the network for something that isn't a tx failure at all.
+        if (!privateKey) {
+          callback(STEP_SEND.aborted)
+          return
+        }
       } else {
         privateKey = getPrivateKeyByAddress(address)
       }
@@ -127,30 +165,42 @@ class TokenDetailScreen extends BaseContainer {
       // gets stuck on "Waiting for confirmation". Always await the receipt.
       const callbackAfterSendDone = async (hash) => {
         try {
-          // Ordered RPC list (paid linkProvider first for stability). Works for
-          // ANY chain via Redux metadata (blockchainListRedux) — including custom
-          // networks — so we poll the real RPC instead of bailing to success
-          // before the tx is mined.
-          const listRpc = ViemWeb3.getListRpc(chainId)
-          if (!listRpc.length) {
-            callback(STEP_SEND.success)
-            return
-          }
-          const client = createPublicClient({
-            chain: buildViemChain(chainId),
-            transport: fallback(listRpc.map(url => http(url)), { rank: false, retryCount: 3, retryDelay: 150 })
-          })
-          const receipt = await client.waitForTransactionReceipt({ hash, confirmations: 1, pollingInterval: 1000 })
-          callback(receipt.status === 'success' ? STEP_SEND.success : STEP_SEND.failed)
-        } catch (error) {
+          // trackingTx uses the ordered RPC list (paid linkProvider first) via
+          // ViemWeb3.getPublicClient, so it works for ANY chain in Redux metadata
+          // (blockchainListRedux) — including custom networks.
+          //
+          // It replaces viem's waitForTransactionReceipt, which was a bad fit
+          // here on two counts: it watches every block with emitMissed and, while
+          // the receipt is missing, pulls each FULL block to hunt for a
+          // replacement tx (~2 heavy requests per block, hundreds per send); and
+          // it cannot be cancelled, so it kept hammering the RPC for its entire
+          // 3-minute timeout after the user had closed the drawer and walked away.
+          await ViemWeb3.trackingTx(chainId, hash, SEND_TX_TRACK_TIMEOUT, () => this.sendTrackingCancelled)
           callback(STEP_SEND.success)
+        } catch (error) {
+          // The drawer is gone — nothing left to report to, and callback() would
+          // only push state into an unmounted tree.
+          if (error?.message === TX_TRACK_CANCELLED) return
+
+          // A revert is a genuine on-chain failure — the default `txFailed` copy
+          // says exactly that. Anything else (timeout, no RPC reachable) means we
+          // could NOT confirm, so say we could not reach the network instead of
+          // claiming the transfer went through: reporting those as success is
+          // exactly how a black-hole RPC that accepted txs and never forwarded
+          // them stayed invisible. Either way the hash row above stays on screen,
+          // so the user can still open the explorer and see what became of it.
+          callback(STEP_SEND.failed, {
+            error: error?.message === TX_TRACK_REVERTED
+              ? I18n.t('v2.sendToken.txFailed')
+              : I18n.t('Initial.connectErr')
+          })
         }
       }
 
       const hash = await AllChainServices.sendEthTokenTxs(chainId, payload, privateKey, callbackAfterSendDone)
       callback(STEP_SEND.sent, hash)
     } catch (error) {
-      callback(STEP_SEND.failed, { error: error?.message || error?.error || I18n.t('GlobalError.somethingWrongErr') })
+      callback(STEP_SEND.failed, { error: formatWeb3Error(error, I18n.t('GlobalError.somethingWrongErr')) })
     }
   }
 
@@ -161,6 +211,42 @@ class TokenDetailScreen extends BaseContainer {
         tokenIn: this.state.exchange.tokenIn
       }
     })
+  }
+
+  // Read the chosen token's on-chain `symbol()` and patch it into the selection.
+  //
+  // The picker list doesn't render a ticker for tokens the user doesn't hold, so
+  // its rows are deliberately NOT symbol-resolved — a search can return hundreds
+  // and reading `symbol()` for every one would be wasted RPC. The read happens
+  // here instead, for the ONE token actually chosen.
+  //
+  // Fire-and-forget: the selection is committed by the caller first, so picking a
+  // token never waits on the network. A failed read leaves the listing symbol in
+  // place, which is exactly what the picker row already showed.
+  // `chainOut` is passed in rather than read from state: the caller commits it
+  // via setState, which hasn't flushed yet when this runs, so state would still
+  // hold the PREVIOUS chain and the read would hit the wrong network.
+  resolveTokenOutSymbol = (token, isExchange, chainOut) => {
+    const branch = isExchange ? 'exchange' : 'swapAndSend'
+    const address = token?.address || token?.contractAddress
+    if (!address) return
+
+    // Out-chain: the one the user picked, else the token's own, else the
+    // in-token's — the same order Exchange uses to derive `chainIdOut`.
+    const state = this.state[branch]
+    const chainId = (chainOut ?? state?.chainOut)?.chainId || token?.chainId || state?.tokenIn?.chainId
+
+    resolveOnchainSymbolFor(chainId, address, token?.symbolOnchain)
+      .then((symbol) => {
+        if (!symbol || symbol === token?.symbol) return
+        // Re-read from state rather than closing over `token`: the user may have
+        // picked a different token while the read was in flight.
+        const current = this.state[branch]?.tokenOut
+        const currentAddress = current?.address || current?.contractAddress
+        if (lowerCase(currentAddress) !== lowerCase(address)) return
+        this.onChangeValueExchange({ tokenOut: { ...current, symbol, symbolOnchain: symbol } }, isExchange)
+      })
+      .catch(() => {})
   }
 
   handleSelectTokenOut = (isExchange = true) => {
@@ -174,6 +260,7 @@ class TokenDetailScreen extends BaseContainer {
     const handleSelectToken = (token) => {
       this.onChangeValueExchange({ tokenOut: token }, isExchange)
       onBack()
+      this.resolveTokenOutSymbol(token, isExchange)
     }
 
     this.openDrawer({
@@ -184,7 +271,7 @@ class TokenDetailScreen extends BaseContainer {
     })
   }
 
-  handleSelectChain = (isExchange = true, callback = () => {}) => {
+  handleSelectChain = (isExchange = true, onDone = () => {}) => {
     const onBack = () => {
       if (isExchange) {
         this.onExchange()
@@ -192,15 +279,18 @@ class TokenDetailScreen extends BaseContainer {
         this.onSwapAndSend()
       }
     }
-    const handleChangeChain = (chainOut) => {
-      this.onChangeValueExchange({ tokenOut: null, chainOut, amountOut: '', amountOut2USD: '' }, isExchange)
+    const handleChangeChain = (chainOut, tokenOut) => {
+      this.onChangeValueExchange({ tokenOut, chainOut, amountOut: '', amountOut2USD: '' }, isExchange)
       onBack()
-      callback?.('')
+      onDone?.('')
+      // Switching chain picks a token off the same unresolved search list, so it
+      // needs the same one-token read as choosing directly.
+      if (tokenOut) this.resolveTokenOutSymbol(tokenOut, isExchange, chainOut)
     }
     this.openDrawer({
       addDrawer: true,
       children: (
-        <SelectChainOut handleChangeChain={handleChangeChain} _this={this} handleBack={onBack} />
+        <SelectChainOut isExchange={isExchange} handleChangeChain={handleChangeChain} _this={this} handleBack={onBack} />
       )
     })
   }
@@ -267,7 +357,7 @@ class TokenDetailScreen extends BaseContainer {
       const hash = await AllChainServices.postBaseSendTxsForSwap(chainId, privateKey, rawTransaction)
       callback(STEP_EXCHANGE.approve, hash)
     } catch (error) {
-      callback(STEP_EXCHANGE.failed, { error: error?.details || error?.message || error?.error || error })
+      callback(STEP_EXCHANGE.failed, { error: formatWeb3Error(error, I18n.t('GlobalError.somethingWrongErr')) })
     }
   }
 
@@ -282,6 +372,7 @@ class TokenDetailScreen extends BaseContainer {
       let chainOut = cloneData(sourceState.chainOut || {})
 
       const requestId = rawTransaction?.requestId
+      const rawTransactionApi = rawTransaction?.rawTransactionApi
       const chainIdIn = sourceState.tokenIn.chainId
       const chainIdOut = chainOut?.chainId || chainOut?.id || chainIdIn
       const isCrossChain = Number(chainIdIn?.toString()) !== Number(chainIdOut?.toString())
@@ -293,6 +384,8 @@ class TokenDetailScreen extends BaseContainer {
       const swapService = await SwapServiceFactory.getService(chainIdIn, chainIdOut)
 
       delete rawTransaction?.requestId
+      delete rawTransaction?.rawTransactionApi
+
       if (isNativeToken(addressIn, chainIdIn)) {
         addressIn = zeroAddress
       }
@@ -343,23 +436,25 @@ class TokenDetailScreen extends BaseContainer {
 
       await sleep(1000)
 
-      const infoResult = await swapService.getInfoDetailTx({ requestId, hash })
-      if (infoResult?.status === 'FAILED' || !infoResult?.data) {
+      const infoResult = await swapService.getInfoDetailTx({ requestId, hash, chainId: chainIdIn, rawTransactionApi })
+      if (infoResult?.status === 'FAILED') {
         throw new Error('Transaction failed')
       }
 
       await sleep(3000)
       if (isCrossChain) {
+        const arrAddressIn = [addressIn, zeroAddress].filter((url, index, arr) => arr.indexOf(url) === index)
         await refreshAccountTokens(address, {
           chainIds: [chainIdIn],
-          tokenAddress: [addressIn]
+          tokenAddress: arrAddressIn
         })
         await sleep(500)
         await refreshAccountTokens(address, { chainIds: [chainIdOut], tokenAddress: [addressOut] })
       } else {
+        const arrAddress = [addressIn, addressOut, zeroAddress].filter((url, index, arr) => arr.indexOf(url) === index)
         await refreshAccountTokens(address, {
           chainIds: [chainIdIn],
-          tokenAddress: [addressIn, addressOut]
+          tokenAddress: arrAddress
         })
       }
 
@@ -377,7 +472,7 @@ class TokenDetailScreen extends BaseContainer {
 
       // callback(STEP_EXCHANGE.failed, { error: 'Error Exchange' })
     } catch (error) {
-      callback(STEP_EXCHANGE.failed, { error: error?.details || error?.message || error?.error || error })
+      callback(STEP_EXCHANGE.failed, { error: formatWeb3Error(error, I18n.t('GlobalError.somethingWrongErr')) })
     }
   }
 

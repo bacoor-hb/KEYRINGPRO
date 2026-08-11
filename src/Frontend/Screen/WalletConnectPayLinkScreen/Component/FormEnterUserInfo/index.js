@@ -1,7 +1,7 @@
 import { pixelByHeight, width } from 'common/styles'
 import WebView from 'frontend/Components/WebView'
 import React from 'react'
-import { View } from 'react-native'
+import { ScrollView, View } from 'react-native'
 import I18n from 'assets/Lang'
 import { BORDER_RADIUS_TOP_DRAWER } from 'frontend/Components/UI/MyDrawer/ui'
 
@@ -27,14 +27,17 @@ const FormEnterUserInfo = ({
   return (
     <View style={{ height: '100%', width: width(100) }}>
       <View style={{ width: width(100), height: pixelByHeight(64), position: 'absolute', top: 0, zIndex: 10 }} />
-      <View style={{ flex: 1, width: width(100), overflow: 'hidden', ...BORDER_RADIUS_TOP_DRAWER }}>
-        <WebView
-          onComplete={onComplete}
-          onError={onError}
-          onMessage={onMessageWebView}
-          url={url}
-        />
-      </View>
+      <ScrollView contentContainerStyle={{ flex: 1 }} style={{ flex: 1 }}>
+        <View style={{ flex: 1, width: width(100), overflow: 'hidden', ...BORDER_RADIUS_TOP_DRAWER }}>
+          <WebView
+            onComplete={onComplete}
+            onError={onError}
+            onMessage={onMessageWebView}
+            url={url}
+          />
+        </View>
+      </ScrollView>
+
     </View>
   )
 }

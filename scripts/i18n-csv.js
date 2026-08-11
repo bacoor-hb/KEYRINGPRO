@@ -28,8 +28,8 @@ const LANG_DIR = process.env.LANG_DIR || path.join(__dirname, '..', 'src', 'Asse
 function loadTranslations (lang) {
   const file = path.join(LANG_DIR, `Translations${lang}.js`)
   if (!fs.existsSync(file)) return {} // new language with no file yet -> merge onto empty base
-  let src = fs.readFileSync(file, 'utf8')
-    .replace(/^\/\/.*\n/, '')            // drop a leading banner comment if present
+  const src = fs.readFileSync(file, 'utf8')
+    .replace(/^\/\/.*\n/, '') // drop a leading banner comment if present
     .replace(/export\s+default\s*/, 'module.exports = ')
   const m = { exports: {} }
   new Function('module', 'exports', src)(m, m.exports) // eslint-disable-line no-new-func

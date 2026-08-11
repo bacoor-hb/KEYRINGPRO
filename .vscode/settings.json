@@ -4,8 +4,8 @@
     "source.fixAll": "explicit",
     "source.fixAll.eslint": "explicit"
   },
-  "files.eol": "\n", // ␊ là LF
-  "editor.formatOnSave": false, // ❌ không dùng formatter riêng
+  "files.eol": "\n", // LF line endings
+  "editor.formatOnSave": false, // no separate formatter — ESLint fixes on save
   "eslint.validate": [
     "javascript",
     "typescript",

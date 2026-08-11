@@ -15,7 +15,7 @@ export const BORDER_RADIUS_TOP_DRAWER = {
   borderTopRightRadius: 32
 }
 
-// --- COMPONENT NỘI DUNG CÓ ANIMATION ---
+// --- ANIMATED CONTENT COMPONENT ---
 const AnimatedContent = ({ children, animation }) => {
   const zoomAnim = useSharedValue(0)
 

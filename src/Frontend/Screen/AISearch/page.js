@@ -26,9 +26,10 @@ import MyText from 'frontend/Components/UI/MyText'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
 import { getAiMessages, setAiMessages, makeMessageId } from 'common/aiSearchHistory'
 import useInitSuggestions from 'frontend/Hooks/useInitSuggestions'
+import useX402Fees from 'frontend/Hooks/useX402Fees'
 import useSuggestionTree from 'frontend/Hooks/useSuggestionTree'
 import InitSuggestions from 'frontend/Components/ChatAgent/InitSuggestions'
-import { AI_SUGGESTIONS } from 'frontend/Components/ChatAgent/InitSuggestions/suggestionTree'
+import { getRootSuggestions } from 'frontend/Components/ChatAgent/InitSuggestions/suggestionTree'
 import GlassView from 'frontend/Components/UI/GlassView'
 import FlatListBlurHeader from 'frontend/Components/UI/FlatListBlurHeader'
 
@@ -47,6 +48,17 @@ const HAPTIC_OPTIONS = { enableVibrateFallback: true, ignoreAndroidSystemSetting
 // selection menu (Select All / Copy / Look Up / Share), but plain text (no
 // Markdown). false → rendered Markdown (bold / lists / links). Flip as desired.
 const MESSAGE_SELECTABLE = true
+
+// Same keys, same primitive values? Used to drop no-op `txState` writes without
+// hard-coding any one widget's field names — each tx widget persists its own
+// shape (a single status/hash, or a two-leg approve+supply pair).
+const shallowEqual = (a, b) => {
+  if (a === b) return true
+  if (!a || !b) return false
+  const keys = Object.keys(a)
+  if (keys.length !== Object.keys(b).length) return false
+  return keys.every((k) => a[k] === b[k])
+}
 
 const AISearchContent = (_this) => {
   const { props, state } = _this
@@ -229,6 +241,16 @@ const AISearchContent = (_this) => {
     session: sessionKey,
     navigation: props?.navigation
   })
+  // Which root pill set this entry point opens on. Sessions without their own
+  // fall back to the default agent tree.
+  const rootSuggestions = useMemo(() => getRootSuggestions(sessionKey), [sessionKey])
+  // The x402 price list, so the paid pills can print what the action will
+  // actually cost. Fetched once per session and cached; the pills read it out of
+  // the tree's module cache and repaint themselves when it lands, so this only
+  // has to be MOUNTED — nothing here consumes its return value. Until the prices
+  // arrive the pills render their no-fee copy.
+  useX402Fees()
+
   // sendMessage is a stable callback (empty deps), so it reaches the latest
   // dismiss through a ref rather than closing over it.
   const dismissInitSuggestionsRef = useRef(dismissInitSuggestions)
@@ -397,7 +419,7 @@ const AISearchContent = (_this) => {
       const detail = err?.message || String(err)
       setMessages((prev) => [...prev, {
         role: 'assistant',
-        content: __DEV__ ? `⚠️ ${detail}` : 'Xin lỗi, đã có lỗi xảy ra khi xử lý yêu cầu. Vui lòng thử lại.',
+        content: __DEV__ ? `⚠️ ${detail}` : 'Sorry, an error occurred while processing your request. Please try again.',
         timestamp: Date.now(),
         // Still link it to the question, but mark it an error so the question is
         // treated as unanswered and retried on the next open.
@@ -557,8 +579,19 @@ const AISearchContent = (_this) => {
       const action = msg.uiActions?.[actionIdx]
       if (!action) return prev
       // No-op if nothing changed, so we don't churn state/persistence.
+      //
+      // Compared field-agnostically: widgets persist DIFFERENT shapes — the
+      // wallet-action forms send `{status, txHash, …}` while the supply card
+      // sends `{step, approveHash, supplyHash, …}` for its two-transaction
+      // flow. Naming `status`/`txHash` here made every supply update compare
+      // `undefined === undefined` and get dropped as a no-op, so its timeline
+      // never survived a remount.
+      //
+      // Comparing every key also matters for fields that move while status and
+      // hash both stand still: `x402Paid` is set during GATING with no hash yet,
+      // and dropping that write would let a retry charge the user's fee twice.
       const cur = action.props?.txState
-      if (cur && cur.status === txState.status && cur.txHash === txState.txHash) return prev
+      if (cur && shallowEqual(cur, txState)) return prev
 
       const nextActions = msg.uiActions.map((a, i) =>
         i === actionIdx ? { ...a, props: { ...a.props, txState } } : a
@@ -569,11 +602,13 @@ const AISearchContent = (_this) => {
     })
   }, [])
 
-  // Copy a tx hash and surface the app's standard "copied" toast.
+  // Copy a tx hash and surface the app's standard "copied" toast — same call
+  // shape as the send-token flow (message first, `type: 'toast'`) so the two
+  // screens show the identical toast instead of a default alert.
   const handleCopyHash = useCallback((value) => {
     if (!value) return
     Clipboard.setString(value)
-    _this.func.showAlert(null, I18n.t('Initial.copyDone', { value: I18n.t('v2.common.hash') }))
+    _this.func.showAlert?.(I18n.t('Initial.copyDone', { value: I18n.t('v2.common.hash') }), '', { type: 'toast' })
   }, [_this])
 
   // The list renders INVERTED (see the FlatList below): it is flipped upside
@@ -615,10 +650,14 @@ const AISearchContent = (_this) => {
           onPersist={handleWidgetPersist}
           onSelectSuggestion={selectSuggestion}
           selectable={MESSAGE_SELECTABLE}
+          // The screen container, so a widget nested in this bubble can open a
+          // real app drawer (this.openDrawer) — its own MyDrawerUI would be
+          // positioned against the bubble, not the screen.
+          screenRef={_this.func}
         />
       </View>
     ),
-    [sendMessage, handleCopyHash, handleWidgetPersist, selectSuggestion]
+    [sendMessage, handleCopyHash, handleWidgetPersist, selectSuggestion, _this.func]
   )
 
   // Lift the floating footer (and the jump-to-bottom button riding above it) by
@@ -676,10 +715,12 @@ const AISearchContent = (_this) => {
         ListHeaderComponent={(
           <View style={{ paddingBottom: footerHeight + keyboardHeight + pixelByHeight(20) }}>
             {isThinking ? <TypingIndicator /> : null}
-            {/* The ROOT pills only. Every deeper level renders inside the reply
+            {/* The ROOT pills only, and the root the SESSION asked for (a
+                feature entry point opens on its own set — see
+                getRootSuggestions). Every deeper level renders inside the reply
                 that produced it (see MessageBubble's suggestionPath), which is
                 what keeps earlier levels on screen and tappable. */}
-            {showSuggestions && <InitSuggestions options={AI_SUGGESTIONS} onSelect={selectSuggestion} />}
+            {showSuggestions && <InitSuggestions options={rootSuggestions} onSelect={selectSuggestion} />}
           </View>
         )}
         ListFooterComponent={(
@@ -731,9 +772,15 @@ const AISearchContent = (_this) => {
           pointerEvents='box-none'
         >
           <TouchableOpacity activeOpacity={0.8} onPress={handleScrollToBottom}>
-            <GlassView interactive effect='clear' style={styles.scrollDownBtn}>
-              <MyIcon uri={images.UIV2.icons.goArrowDownLow} style={styles.scrollDownIcon} />
-            </GlassView>
+            {isThinking ? (
+              <GlassView interactive effect='clear' style={styles.scrollDownBtnThinking}>
+                <TypingIndicator bare />
+              </GlassView>
+            ) : (
+              <GlassView interactive effect='clear' style={styles.scrollDownBtn}>
+                <MyIcon uri={images.UIV2.icons.goArrowDownLow} style={styles.scrollDownIcon} />
+              </GlassView>
+            )}
           </TouchableOpacity>
         </Reanimated.View>
       )}
@@ -796,7 +843,12 @@ const AISearchContent = (_this) => {
       </Reanimated.View>
 
       {/* x402 payment approval — surfaced while the core awaits a signature. */}
-      <X402SignModal request={x402Req} walletAddress={walletAddress} onResolve={handleX402Resolve} />
+      <X402SignModal
+        request={x402Req}
+        walletAddress={walletAddress}
+        onResolve={handleX402Resolve}
+        screenRef={_this.func}
+      />
     </MyViewPage>
   )
 }

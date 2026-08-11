@@ -7,6 +7,9 @@ import AllChainServices from 'controller/AllChainServices'
 import { sleep } from 'common/function'
 import Config from 'react-native-config'
 
+// Key filter all data in relay
+const REFERRER_KEY = 'bacoor.io'
+
 const convertChainId = (chainId) => {
   if (chainId === 7565164) {
     return 792703809
@@ -125,6 +128,7 @@ export default class RelayAdapter extends BaseSwapService {
          destinationCurrency: dstTokenAddress,
          amount: srcTokenAmount,
          recipient: recipientAddress || senderAddress,
+         referrer: REFERRER_KEY, // this is a any referrer text or domain string
          tradeType,
          appFees: isHasAffiliate ? [{
            recipient: this.affiliateFeeRecipient || AFFILIATE_FEE_RECIPIENT,
@@ -392,47 +396,42 @@ export default class RelayAdapter extends BaseSwapService {
    * Helper method to make Relay API requests
    */
    async _makeRelayRequest (endpoint, params, headers = {}, method = 'POST') {
-     try {
-       const url = `${this.apiBaseUrl}${endpoint}`
+     const url = `${this.apiBaseUrl}${endpoint}`
 
-       const options = {
-         method: method,
-         headers: {
-           'Content-Type': 'application/json',
-           ...headers
-         }
+     const options = {
+       method: method,
+       headers: {
+         'Content-Type': 'application/json',
+         ...headers
        }
+     }
 
-       // Add body for POST requests
-       if (method === 'POST' && params) {
-         options.body = JSON.stringify(params)
-       } else if (method === 'GET' && params) {
-         // Build query string for GET requests
-         const queryString = Object.keys(params)
-           .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
-           .join('&')
-         const fullUrl = `${url}?${queryString}`
+     // Add body for POST requests
+     if (method === 'POST' && params) {
+       options.body = JSON.stringify(params)
+     } else if (method === 'GET' && params) {
+       // Build query string for GET requests
+       const queryString = Object.keys(params)
+         .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+         .join('&')
+       const fullUrl = `${url}?${queryString}`
 
-         const response = await fetch(fullUrl, options)
-         if (!response.ok) {
-           const errorData = await response.json().catch(() => ({}))
-           throw new Error(errorData.message || `HTTP ${response.status}`)
-         }
-         return await response.json()
-       }
-
-       const response = await fetch(url, options)
-
+       const response = await fetch(fullUrl, options)
        if (!response.ok) {
          const errorData = await response.json().catch(() => ({}))
          throw new Error(errorData.message || `HTTP ${response.status}`)
        }
-
-       return await response.json()
-     } catch (error) {
-       // console.log('RelayAdapter _makeRelayRequest error:', error)
-       throw error
+       return response.json()
      }
+
+     const response = await fetch(url, options)
+
+     if (!response.ok) {
+       const errorData = await response.json().catch(() => ({}))
+       throw new Error(errorData.message || `HTTP ${response.status}`)
+     }
+
+     return response.json()
    }
 
    /**
@@ -455,25 +454,58 @@ export default class RelayAdapter extends BaseSwapService {
      }
    }
 
-   async getInfoDetailTx (params, maxRequestAgain = 5) {
+   async indexingTransactions (requestId, chainId, hash, rawTransaction = {}) {
      try {
-       const requestId = params?.requestId || params?.id
+       const rawTxFormat = {
+         ...rawTransaction,
+         txHash: hash
+       }
+
+       delete rawTxFormat.noEstimateGas
+
+       await Promise.allSettled([
+         this._makeRelayRequest('/transactions/index', {
+           chainId: `${chainId}`,
+           txHash: hash
+         }, {}, 'POST'),
+         this._makeRelayRequest('/transactions/single', {
+           requestId: requestId,
+           chainId: `${chainId}`,
+           referrer: REFERRER_KEY,
+           tx: JSON.stringify(rawTxFormat)
+         }, {}, 'POST')
+       ])
+     } catch (error) {
+       // Silent catch
+     }
+   }
+
+   async getInfoDetailTx (params, maxRequestAgain = 3, requestAgainStatus = 30) {
+     try {
        const pollInterval = 1500
 
-       delete params.requestId
-       delete params.id
+       const requestId = params?.requestId || params?.id
+       const chainId = params?.chainId
+       const hash = params?.hash
+       const rawTransactionApi = params?.rawTransactionApi
 
-       if (requestId) {
-         const trackResult = await this.trackTransaction({
-           requestIdOrTxHash: requestId
-         })
+       // indexing transaction when first call
+       if (maxRequestAgain === 3 && requestAgainStatus === 30) {
+         await this.indexingTransactions(requestId, chainId, hash, rawTransactionApi)
+       }
 
+       // Tracking transaction status when it is pending: 1 minutes
+       if (requestId && requestAgainStatus > 0) {
+         let requestAgain = requestAgainStatus
+         let trackResult = await this.trackTransaction({ requestIdOrTxHash: requestId })
          let status = trackResult?.status
 
-         while (status === 'PENDING') {
-           await sleep(pollInterval)
-           const result = await this.trackTransaction({ requestIdOrTxHash: requestId })
-           status = result?.status
+         while (status === 'PENDING' && requestAgain >= 0) {
+           // sleep 2s when request again is small
+           await sleep(pollInterval + 500)
+           trackResult = await this.trackTransaction({ requestIdOrTxHash: requestId })
+           status = trackResult?.status
+           requestAgain--
          }
 
          if (status === 'FAILED') {
@@ -482,15 +514,15 @@ export default class RelayAdapter extends BaseSwapService {
        }
        await sleep(pollInterval)
 
-       const res = await this._makeRelayRequest('/requests/v2', params, {}, 'GET')
+       const res = await this._makeRelayRequest('/requests/v2', { hash }, {}, 'GET')
        let data = res?.requests || null
 
        if (!data || (Array.isArray(data) && data.length === 0)) {
          if (maxRequestAgain >= 0) {
            await sleep(pollInterval)
-           return this.getInfoDetailTx(params, maxRequestAgain - 1)
+           return this.getInfoDetailTx(params, maxRequestAgain - 1, 0)
          }
-         return { data: null, status: 'FAILED' }
+         return { data: null, status: 'COMPLETED' }
        }
 
        if (Array.isArray(data) && data.length > 0) {
@@ -499,7 +531,7 @@ export default class RelayAdapter extends BaseSwapService {
 
        return {
          data,
-         status: 'success'
+         status: 'COMPLETED'
        }
      } catch (error) {
        return {

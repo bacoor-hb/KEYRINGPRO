@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { View, TouchableOpacity, Animated, InteractionManager } from 'react-native'
 import { useSelector } from 'react-redux'
+import { useFocusEffect } from '@react-navigation/native'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
 import MyText from 'frontend/Components/UI/MyText'
 import MyIcon from 'frontend/Components/UI/MyIcon'
@@ -35,6 +36,14 @@ const SWIPE_HIDE_WIDTH = pixelByWidth(64)
 // loading flips off as soon as the fast chains land) doesn't cut the slide-in
 // animation mid-way.
 const GIF_MIN_VISIBLE_MS = 900
+// Hard ceiling on how long the balance animation may be held back waiting for
+// the screen transition to finish. See rowsVisible.
+const ROWS_VISIBLE_FALLBACK_MS = 1000
+// How long a just-arrived token stays flagged for its attention spin. Long
+// enough to outlast the spin plus its colour hold, short enough that a row
+// scrolled out of view and re-mounted afterwards doesn't play it a second time.
+const ARRIVAL_WINDOW_MS = 4000
+const NO_ARRIVALS = new Set()
 
 export const filterTokenToShow = (token, filterHidden = true) => {
   if (filterHidden) {
@@ -98,6 +107,80 @@ const TokenListPage = (_this) => {
     const t = setTimeout(() => setShowGif(false), remaining)
     return () => clearTimeout(t)
   }, [loading])
+
+  // The balance odometer is held while this screen isn't the visible one, and
+  // released when it is. A native stack keeps this screen mounted behind Send /
+  // Exchange, so the post-transaction balance reload would otherwise animate out
+  // of sight and be over before the user navigates back.
+  //
+  // Released only after the transition settles — `useIsFocused` flips at the
+  // START of the animation, which would spend the spin under a moving screen.
+  //
+  // The timer is a floor, not a nicety: while held, a row keeps showing the
+  // balance the user last saw. If a leaked interaction handle stopped
+  // runAfterInteractions from ever firing, that stale figure would stay on
+  // screen indefinitely — unacceptable for a balance, and worth far more than
+  // the animation. Whichever fires first wins.
+  const [rowsVisible, setRowsVisible] = useState(false)
+  useFocusEffect(
+    useCallback(() => {
+      const task = InteractionManager.runAfterInteractions(() => setRowsVisible(true))
+      const fallback = setTimeout(() => setRowsVisible(true), ROWS_VISIBLE_FALLBACK_MS)
+      return () => {
+        task.cancel()
+        clearTimeout(fallback)
+        setRowsVisible(false)
+      }
+    }, [])
+  )
+
+  // Tokens that have just turned up in the wallet, so their row can spin once to
+  // announce itself. A row cannot work this out alone: it mounts fresh both when
+  // a token is genuinely new AND when it is simply scrolled back into view, and
+  // only the screen can tell those apart.
+  //
+  // Diffed against `tokens` — the FULL list — not the filtered one. Filtering by
+  // chain or unhiding a token makes rows appear without anything new arriving,
+  // and diffing the visible list would announce those too.
+  const seenTokenKeys = useRef(null)
+  const [arrivedKeys, setArrivedKeys] = useState(NO_ARRIVALS)
+
+  useEffect(() => {
+    const keys = tokens.map((t) => t.metaKey)
+    // The first populated list is the baseline: everything already in the wallet
+    // is not an arrival. Without this the whole list would announce itself on
+    // first load.
+    if (seenTokenKeys.current === null) {
+      if (!keys.length) return
+      seenTokenKeys.current = new Set(keys)
+      return
+    }
+    // An empty list carries no information — `entry` can be briefly absent, and
+    // `tokens` then falls back to []. Learning from that would wipe the baseline
+    // and announce the entire wallet when it comes back.
+    if (!keys.length) return
+
+    const fresh = keys.filter((k) => !seenTokenKeys.current.has(k))
+    // REPLACE the set rather than adding to it, and do it even when nothing is
+    // new: a token that has LEFT has to be forgotten. Send all of token A away
+    // and it drops out of the list; receive it back and it should register as an
+    // arrival again. Only adding meant `seen` remembered A forever, so it was
+    // announced only if the screen had been torn down and rebuilt in between —
+    // which is exactly the difference between refreshing in place and going out
+    // to Home and back.
+    seenTokenKeys.current = new Set(keys)
+    if (!fresh.length) return
+    setArrivedKeys(new Set(fresh))
+  }, [tokens])
+
+  // Clear the flags, but only once the rows are actually on screen — a token
+  // received while the user is off in Send would otherwise have its moment
+  // expire unseen.
+  useEffect(() => {
+    if (!arrivedKeys.size || !rowsVisible) return
+    const t = setTimeout(() => setArrivedKeys(NO_ARRIVALS), ARRIVAL_WINDOW_MS)
+    return () => clearTimeout(t)
+  }, [arrivedKeys, rowsVisible])
 
   const doRefresh = useCallback(() => {
     if (!address) return
@@ -281,7 +364,23 @@ const TokenListPage = (_this) => {
         // RefreshControl used via progressViewOffset).
         topOffset={getHeightHeader(true)}
         data={filteredTokens}
-        keyExtractor={(t, idx) => `${t.metaKey}-${idx}`}
+        // Android defaults this to TRUE (FlatList.js: `?? Platform.OS === 'android'`)
+        // and it detaches descendants whose bounds fall outside the clipping rect.
+        // A spinning balance puts a ~30-line reel — hundreds of dp tall — inside a
+        // column clipped to one line, so most of that child's box sits outside the
+        // row and Android is entitled to drop it: the column then paints nothing.
+        // That is the "random digits missing while the green animation runs, fine
+        // again once it stops" report, and it matches the shape exactly — at rest
+        // there is no oversized child for the pass to find.
+        removeClippedSubviews={false}
+        // metaKey alone, WITHOUT the index. The service re-sorts by valueUSD on
+        // every refresh, so an index in the key means a token that changes rank
+        // gets a new key and React remounts its row instead of moving it. That
+        // throws away everything the row was holding — including a balance
+        // change parked to be animated on return, which is exactly the case a
+        // send creates. metaKey is `chainId:address` and the service already
+        // treats it as a unique map key.
+        keyExtractor={(t) => t.metaKey}
         renderItem={({ item }) => (
           <Swipeable
             renderRightActions={(_progress, dragX) => {
@@ -312,9 +411,15 @@ const TokenListPage = (_this) => {
           >
             <TokenRow
               token={item}
-              isViewOnly={isViewOnly}
-              // View-only accounts can't view token detail (it exposes signable actions).
-              onPress={isViewOnly ? null : () => NavigationActions.navigate('tokenDetail', { token: item, address })}
+              // Holds the balance animation until this screen is actually on
+              // screen — see rowsVisible.
+              active={rowsVisible}
+              // One-shot spin for a token that has just arrived — see arrivedKeys.
+              spinOnAppear={arrivedKeys.has(item.metaKey)}
+              // View-only accounts CAN open the detail screen — it's read-only
+              // info. The signable actions (send / swap / exchange) are disabled
+              // there instead of blocking the whole screen.
+              onPress={() => NavigationActions.navigate('tokenDetail', { token: item, address })}
             />
           </Swipeable>
         )}

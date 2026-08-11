@@ -13,6 +13,7 @@ import SendNativeForm from './SendNativeForm'
 import SendTokenForm from './SendTokenForm'
 import SendNftForm from './SendNftForm'
 import ApproveTokenForm from './ApproveTokenForm'
+import SupplyUsdcForm from './SupplyUsdcForm'
 import WalletNftList from './WalletNftList'
 import InitSuggestions from './InitSuggestions'
 import { getOptionsAt } from './InitSuggestions/suggestionTree'
@@ -108,15 +109,18 @@ const usePopIn = (message, isUser) => {
   return style
 }
 
-const UIWidget = ({ action, onSend, onResult, onStatusChange, onCopyHash, onPersist }) => {
+const UIWidget = ({ action, onSend, onResult, onStatusChange, onCopyHash, onPersist, screenRef, messageTimestamp }) => {
   const language = action.language
   // Tx lifecycle plumbing shared by every widget that signs and broadcasts.
-  const txProps = { onResult, onStatusChange, onCopyHash, onPersist }
+  // screenRef rides along so a widget can open a screen-level drawer.
+  const txProps = { onResult, onStatusChange, onCopyHash, onPersist, screenRef }
   switch (action.component) {
     case 'AddLiquidityForm':
       return <AddLiquidityForm props={action.props} onSend={onSend} language={language} />
     case 'ConfirmAddLiquidityTx':
-      return <ConfirmAddLiquidityTx props={action.props} {...txProps} language={language} />
+      // messageTimestamp: when the agent built this quote. The widget expires
+      // itself once a failed attempt lands too long after it (see EXPIRY_MS).
+      return <ConfirmAddLiquidityTx props={action.props} {...txProps} language={language} messageTimestamp={messageTimestamp} />
     // Wallet-action forms. Each collects what the agent could not resolve, then
     // signs and broadcasts the transaction itself — the agent is not asked to
     // confirm.
@@ -128,14 +132,21 @@ const UIWidget = ({ action, onSend, onResult, onStatusChange, onCopyHash, onPers
       return <SendNftForm props={action.props} {...txProps} language={language} />
     case 'ApproveTokenForm':
       return <ApproveTokenForm props={action.props} {...txProps} language={language} />
+    // Supplying USDC into a lending market. Like the forms above it signs and
+    // broadcasts locally — but as an approve → deposit sequence, decided from
+    // the market's current allowance at submit time.
+    case 'SupplyUsdcForm':
+      return <SupplyUsdcForm props={action.props} {...txProps} language={language} />
     case 'WalletNftList':
-      return <WalletNftList props={action.props} />
+      // onSend is only used in picker mode ('which of these NFTs?'), where
+      // tapping a card submits that NFT's prompt as the next turn.
+      return <WalletNftList props={action.props} onSend={onSend} language={language} />
     default:
       return null
   }
 }
 
-const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, onPersist, onSelectSuggestion, selectable }) => {
+const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, onPersist, onSelectSuggestion, selectable, screenRef }) => {
   const isUser = message.role === 'user'
   const hasUI = message.uiActions && message.uiActions.length > 0
   const actionButtons = Array.isArray(message.actionButtons) ? message.actionButtons : []
@@ -185,6 +196,8 @@ const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, 
             onResult={onResult}
             onStatusChange={onStatusChange}
             onCopyHash={onCopyHash}
+            screenRef={screenRef}
+            messageTimestamp={message.timestamp}
             // Scope persistence to THIS message + action index so the host can
             // write the tx state back onto the right uiAction.
             onPersist={onPersist ? (txState) => onPersist(message, idx, txState) : undefined}

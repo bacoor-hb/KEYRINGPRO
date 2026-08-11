@@ -34,7 +34,7 @@ const ReanimatedFlatList = Animated.createAnimatedComponent(FlatList)
  * - DRAGGING (finger down, before release): an overlay Lottie sits in the
  *   overscroll gap and is dragged down with the pull (UI thread → no lag). Its
  *   frame is scrubbed to the pull depth — small pull holds an early frame, hard
- *   pull a later one ("kéo ít chạy ít, kéo căng chạy nhiều").
+  *   pull a later one (shallow pull = early frame, hard pull = later frame).
  * - REFRESHING (after release, while `refreshing` is true): a real spacer at the
  *   TOP OF THE LIST animates open and holds the looping Lottie. Because it lives
  *   inside the list content, it SCROLLS WITH THE LIST just like RefreshControl —
@@ -111,7 +111,7 @@ const LottieRefreshFlatList = ({
   // True once the pull has crossed the threshold and we've kicked off the
   // full-playthrough on the overlay. While set, we stop scrubbing frames to the
   // pull depth and just let the animation run to the end (LOTTIE_END_FRAME).
-  // "kéo tới vị trí refresh thì chạy anim full luôn."
+  // Once past the refresh threshold, play the full animation to completion.
   const playedFullRef = useRef(false)
 
   // `active` = the in-list spinner is showing. We own this locally instead of
@@ -123,7 +123,7 @@ const LottieRefreshFlatList = ({
   // UI-thread mirror of `active` so worklets can branch on it.
   const isActive = useSharedValue(0)
   // Overlay Lottie loops only once the pull has reached the threshold and the
-  // finger is still down — so it keeps spinning "cho tới khi user buông tay",
+  // finger is still down — so it keeps spinning until the user releases,
   // instead of playing once and freezing on the last frame.
   const [overlayLooping, setOverlayLooping] = useState(false)
 

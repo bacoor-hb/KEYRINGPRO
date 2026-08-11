@@ -15,6 +15,7 @@ import TitleScreen from 'frontend/Components/UI/TitleScreen'
 import { NavigationActions } from 'src/navigation/NavigationService'
 import { NAME_SCREEN } from 'common/constants/navigation'
 import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
+import { getUrlIconWalletConnect } from 'common/walletconnect'
 
 const WalletConnectPage = ({ _this, func }) => {
   const { handleViewHistoryWCP } = _this
@@ -55,7 +56,7 @@ const WalletConnectPage = ({ _this, func }) => {
       >
         <View style={styles.avatarWrap}>
           <ImageRender
-            uri={item.icon}
+            uri={getUrlIconWalletConnect(item.icon, item.url)}
             uriDefault={images.walletConnectIcon}
             style={styles.dappIcon}
             resizeMode='contain'
