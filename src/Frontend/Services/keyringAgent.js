@@ -20,7 +20,7 @@ const buildRpcUrls = () => {
 // Is the lending subagent routable? Exported because the init-suggestion tree
 // hides its "lending" pill when it isn't — tapping it would send a turn nothing
 // can serve. Flip this one flag to enable both.
-export const LENDING_ENABLED = false
+export const LENDING_ENABLED = true
 
 const DEFAULT_CONFIG = {
   maxIterations: 8,
@@ -51,7 +51,6 @@ const DEFAULT_CONFIG = {
     nfc: true,
     lending: LENDING_ENABLED
   },
-
   // Swap and buy are not done in chat — the app has its own screens for them.
   // Both tools keep their name and routing, so the intent still lands on them,
   // but they only relay this message (the core translates it to the user's

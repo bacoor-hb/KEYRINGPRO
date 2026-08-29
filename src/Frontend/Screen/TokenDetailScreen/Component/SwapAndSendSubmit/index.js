@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, TextInput, TouchableOpacity, Keyboard, Platform, Dimensions } from 'react-native'
 // ScrollView from react-native-gesture-handler: it scrolls inside the gorhom sheet on
 // Android (a plain RN ScrollView doesn't) AND, unlike gorhom's BottomSheetScrollView, its
@@ -47,9 +47,10 @@ import {
   convertWeiToBalance,
   handleOpenUrl,
   isValidContract,
+  isValidEVMAddressFormat as isValidAddress,
   lowerCase
 } from 'common/function'
-import { getNativeTokenSymbolByChain, getUrlExplorerHash, handleOpenExplorerHash, handleOpenExplorerUserAddress } from 'common/chain'
+import { getNativeTokenSymbolByChain, getUrlExplorerHash, handleOpenExplorerHash, handleOpenExplorerUserAddress, hasNativeTokenByChain } from 'common/chain'
 import { isNativeToken, getAddressNative } from 'common/tokens'
 import { NavigationActions } from 'src/navigation/NavigationService'
 import InputCustom from 'frontend/Components/UI/InputCustom'
@@ -60,6 +61,9 @@ import { cn, mergeStyle } from 'common/tailwind'
 import BtnBack from 'frontend/Components/UI/BtnBack'
 import SwapAndSend from '../SwapAndSend'
 import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
+import { CHAIN_ID_NO_GAS_PRICE_SWAP, PLATFORM_EXCHANGE } from 'common/constants/swap'
+import { SWAP_SERVICE_CONFIG, CURRENCY_DATA } from 'common/constants/app'
+import useProtocolFee from 'frontend/Hooks/useProtocolFee'
 
 const getAddressFromQR = (raw) => {
   try {
@@ -132,6 +136,7 @@ const SwapAndSendSubmit = ({ _this }) => {
     tokenIn,
     chainOut,
     amountIn: amountInDefault,
+    amountIn2USD: amountInToUSDDefault,
     recipientAddress: recipientAddressDefault,
     nameAddressBook: nameAddressBookDefault,
     addressBookInfo: addressBookInfoDefault
@@ -142,6 +147,7 @@ const SwapAndSendSubmit = ({ _this }) => {
   const userAddress = activeAccount?.account?.address
 
   const locale = useSelector((s) => s.localeRedux)
+  const currencyCode = useSelector((s) => s.currencyRedux)
   const [addrTwoLineHeight] = useState(0)
   const fieldHeight = addrTwoLineHeight > 0
     ? Math.max(FIELD_MIN_HEIGHT, Math.ceil(addrTwoLineHeight) + FIELD_VPAD * 2 + 2)
@@ -185,6 +191,13 @@ const SwapAndSendSubmit = ({ _this }) => {
   const [addressBookInfo, setAddressBookInfo] = useState(addressBookInfoDefault)
   const [isAddressBookNotFound, setIsAddressBookNotFound] = useState(false)
   const [amountIn, setAmountIn] = useState(amountInDefault)
+  const [amountInToUSD, setAmountInToUSD] = useState(amountInToUSDDefault)
+  const [isFocusAmountInputToUSD, setIsFocusAmountInputToUSD] = useState(false)
+  const isFocusAmountInputToUSDRef = useRef(false)
+  // true when the fiat value in the token IN USD field was typed by the user (not derived
+  // from a token amount). Keeps the exact number the user entered on blur, instead of the
+  // quote's round-tripped value (fiat→token→fiat loses precision, e.g. 1000 -> 999.9592).
+  const [isUsdInEdited, setIsUsdInEdited] = useState(false)
   const [amountOut, setAmountOut] = useState('')
   const [isExactInput, setIsExactInput] = useState(true)
   const [error, setError] = useState('')
@@ -195,6 +208,7 @@ const SwapAndSendSubmit = ({ _this }) => {
   const [hasStartedExecute, setHasStartedExecute] = useState(false)
   const [tableView, setTableView] = useState('enter')
   const [amountOutAfterSwap, setAmountOutAfterSwap] = useState('')
+  const [requestId, setRequestId] = useState(null)
 
   const chainId = tokenIn?.chainId
   const isNative = tokenIn?.isNative || isNativeToken(tokenIn?.contractAddress)
@@ -212,7 +226,7 @@ const SwapAndSendSubmit = ({ _this }) => {
   const { data: isContractAddr, isLoading: isLoadingContract } = useQuery(
     ['isRecipientContract', recipientAddress, chainId],
     () => isValidContract(chainId, recipientAddress),
-    { enabled: !isOwnAccount && !!recipientAddress && recipientAddress.startsWith('0x') && recipientAddress.length === 42 && !!chainId }
+    { enabled: !isOwnAccount && isValidAddress(recipientAddress) && !!chainId }
   )
 
   const { statusAddressTo, typeStatusAddressTo, isLoading: isLoadingHistory } = useGetTokensLatestTransactions(
@@ -270,14 +284,6 @@ const SwapAndSendSubmit = ({ _this }) => {
   const { data: nativePriceData } = useGetTokenPrice(chainId, zeroAddress)
   const nativePriceUSD = isNative ? priceUSD : Number(nativePriceData || 0)
 
-  const feeGas = useMemo(() => {
-    if (gasWeiPriceDefault && !loadingGasPriceDefault) {
-      const gasPrice = convertWeiToBalance(gasWeiPriceDefault)
-      return new BigNumber(gasPrice).multipliedBy(DEFAULT_GAS_LIMIT).toString()
-    }
-    return '0.00000001'
-  }, [gasWeiPriceDefault, loadingGasPriceDefault])
-
   const isCrossChain = useMemo(() => {
     return tokenIn?.chainId?.toString() !== chainIdOut?.toString()
   }, [tokenIn, chainIdOut])
@@ -299,13 +305,30 @@ const SwapAndSendSubmit = ({ _this }) => {
     return BigNumber(amountOut).multipliedBy(priceTokenOut).toString()
   }, [amountOut, priceTokenOut])
 
-  const isValidAddress = (address) => {
-    try {
-      return address.startsWith('0x') && address.length === 42 && !!address.match(/^[0-9a-zA-Z]+$/)
-    } catch (e) {
-      return false
+  // Convert a plain-USD value to the fiat amount shown in the editable token IN field,
+  // rounding IDENTICALLY to FiatBalance: multiply by the fiat rate, then toFixed at
+  // MAX_DECIMAL_2USD (toFixed = half-up, same as MyNumber's toLocaleString). Returns a plain
+  // number string (no separators/symbol) for a TextInput value. Accepts a BigNumber or
+  // anything Number() understands.
+  const toFiatAmount = useCallback((usd) => {
+    const rate = fiatRateRedux > 0 ? fiatRateRedux : 1
+    const fiatValue = Number(usd?.toString?.() ?? usd) * rate
+    if (!Number.isFinite(fiatValue)) {
+      return ''
     }
-  }
+    return BigNumber(fiatValue.toFixed(MAX_DECIMAL_2USD)).toFixed()
+  }, [fiatRateRedux])
+
+  // Plain-USD value for the token IN row. When the user typed the fiat value directly
+  // (isUsdInEdited), keep it verbatim by converting that fiat back to USD (÷ rate) instead of
+  // round-tripping through price × amount (which loses precision, e.g. 1000 -> 999.9592).
+  // Full precision; getFormattedValue re-applies the rate, so this is plain USD.
+  const amountInUsdForDisplay = useMemo(() => {
+    if (isUsdInEdited && amountInToUSD != null && amountInToUSD !== '' && !isNaN(Number(amountInToUSD))) {
+      return BigNumber(amountInToUSD).div(fiatRateRedux > 0 ? fiatRateRedux : 1).toString()
+    }
+    return amountInUsd
+  }, [isUsdInEdited, amountInToUSD, amountInUsd, fiatRateRedux])
 
   const scrollToFocusedInput = () => {
     setTimeout(() => {
@@ -469,13 +492,37 @@ const SwapAndSendSubmit = ({ _this }) => {
   }, [loadingDecimalTokenOut, loadingDecimalTokenIn, addressTokenIn, addressTokenOut, decimalTokenIn, decimalTokenOut, tokenIn, tokenOut, isExactInput, amountInDebounce, amountOutDebounce, chainIdOut, slippage, recipientAddress, isValidRecipient, userAddress])
 
   const isExecuting = hasStartedExecute || step != null || !!hash?.approve || !!hash?.exchange
-  const { data: rawTransaction, isLoading: loadingGetQuote } = useGetRawTxExchange(queryGetRawTxExchange, { freeze: isExecuting })
+  const { getBridgeProvider, data: rawTransaction, isLoading: loadingGetQuote } = useGetRawTxExchange(queryGetRawTxExchange, { freeze: isExecuting })
+
+  const bridgeProvider = getBridgeProvider(tokenIn?.chainId, chainIdOut)
+  const { data: feeProtocol, isLoading: loadingFeeProtocol } = useProtocolFee(tokenIn?.chainId, chainIdOut, bridgeProvider)
+
+  const gasLimitRawTx = useMemo(() => {
+    if (rawTransaction?.tx?.gas || rawTransaction?.estimatedTransactionFee?.details?.gasLimit) {
+      const gas = rawTransaction?.tx?.gas ?? rawTransaction?.estimatedTransactionFee?.details?.gasLimit
+      if (BigNumber(gas).lt(DEFAULT_GAS_LIMIT)) {
+        return DEFAULT_GAS_LIMIT
+      }
+      return gas?.toString()
+    }
+    return null
+  }, [rawTransaction])
+
+  const feeGas = useMemo(() => {
+    let totalFee = '0.00000001'
+    if (gasWeiPriceDefault && !loadingGasPriceDefault) {
+      const gasPrice = convertWeiToBalance(gasWeiPriceDefault)
+      totalFee = new BigNumber(gasPrice).multipliedBy(gasLimitRawTx || DEFAULT_GAS_LIMIT).toString()
+
+      totalFee = BigNumber(totalFee).plus(feeProtocol || '0').toFixed()
+    }
+    return totalFee
+  }, [gasWeiPriceDefault, gasLimitRawTx, feeProtocol, loadingGasPriceDefault])
 
   const isHasApprove = useMemo(() => rawTransaction?.approveStep?.id === 'approve', [rawTransaction])
 
   const minBalanceAddToSwap = useMemo(() => {
-    const feeGasTemp = BigNumber(feeGas || '0').gt(feeGas || '0') ? feeGas : feeGas
-    const amount = BigNumber(feeGasTemp).minus(balanceNative || '0').decimalPlaces(8)
+    const amount = BigNumber(feeGas).minus(balanceNative || '0').decimalPlaces(8)
     if (amount.lte(0)) return '0'
     return amount.toFixed()
   }, [feeGas, balanceNative])
@@ -496,9 +543,16 @@ const SwapAndSendSubmit = ({ _this }) => {
         const decimal = tokenInEst?.decimals || tokenIn?.decimals || 18
         const value = convertWeiToBalance(balanceWei, decimal)
         setAmountIn(value)
+        // USD from OUR price API (price × amount) — not the quote's amountUsd. amountInToUSD is
+        // what the editable fiat field shows/edits, so round it exactly like FiatBalance does
+        // (× rate, then toFixed(MAX_DECIMAL_2USD)) — the full-precision USD lives in amountInUsd.
+        const usd = BigNumber(value || 0).multipliedBy(BigNumber(priceTokenIn || 0))
+        const fiatBalance = toFiatAmount(usd)
+        setAmountInToUSD(fiatBalance)
+        setIsUsdInEdited(false)
       }
     }
-  }, [rawTransaction, isExactInput, tokenIn, priceTokenIn])
+  }, [rawTransaction, isExactInput, tokenIn, priceTokenIn, toFiatAmount])
 
   useEffect(() => {
     if (tokenIn && tokenOut && isValidRecipient) {
@@ -551,12 +605,26 @@ const SwapAndSendSubmit = ({ _this }) => {
 
   const onChangeAmountIn = (value) => {
     setIsExactInput(true)
+    setIsUsdInEdited(false)
     const valueSanitize = sanitizeAmountText(value, decimalTokenIn)
     setAmountIn(valueSanitize)
+
+    if (!priceTokenIn) {
+      return
+    }
+
+    const price = BigNumber(priceTokenIn || 0)
+    const amountInRaw = BigNumber(value || 0)
+
+    // amountInToUSD is the editable fiat field's value — round it exactly like FiatBalance
+    // (toFiatAmount); the full-precision USD used for calculations lives in amountInUsd.
+    const fiatBalance = toFiatAmount(amountInRaw.multipliedBy(price))
+    setAmountInToUSD(fiatBalance)
   }
 
   const onChangeAmountOut = (value) => {
     setIsExactInput(false)
+    setIsUsdInEdited(false)
     const valueSanitize = sanitizeAmountText(value, decimalTokenOut)
     setAmountOut(valueSanitize)
   }
@@ -572,7 +640,134 @@ const SwapAndSendSubmit = ({ _this }) => {
     }
     if (BigNumber(balanceUser).lte(0)) return
     setIsExactInput(true)
+    setIsUsdInEdited(false)
     setAmountIn(balanceUser)
+
+    const price = BigNumber(priceTokenIn || 0)
+    const amountInFinal = BigNumber(balanceUser || 0)
+
+    // amountInToUSD is the editable fiat field's value — round it exactly like FiatBalance
+    // (toFiatAmount); the full-precision USD used for calculations lives in amountInUsd.
+    const fiatBalance = toFiatAmount(amountInFinal.multipliedBy(price))
+    setAmountInToUSD(fiatBalance)
+  }
+
+  // On blur the editable fiat field must show exactly what FiatBalance renders (same math as
+  // toFiatAmount), then adds thousands separators + trims trailing zeros exactly like
+  // MyNumber — so blur, focus, and the Confirm screen all render the identical number.
+  const getFormattedValue = () => {
+    if (amountInUsdForDisplay == null) {
+      return ''
+    }
+    const fiatValue = Number(amountInUsdForDisplay) * (fiatRateRedux > 0 ? fiatRateRedux : 1)
+    if (!Number.isFinite(fiatValue)) {
+      return ''
+    }
+    const formatted = fiatValue.toLocaleString('en-US', {
+      minimumFractionDigits: MAX_DECIMAL_2USD,
+      maximumFractionDigits: MAX_DECIMAL_2USD
+    })
+    // Trim trailing zeros the same way MyNumber does, so this matches FiatBalance on
+    // Confirm exactly (e.g. '17.5000' -> '17.5', '17.0000' -> '17').
+    const dot = formatted.indexOf('.')
+    if (dot < 0) {
+      return formatted
+    }
+    const frac = formatted.slice(dot + 1).replace(/0+$/, '')
+    return frac.length > 0 ? `${formatted.slice(0, dot)}.${frac}` : formatted.slice(0, dot)
+  }
+
+  // User types a fiat amount for the INPUT (token OUT USD is read-only). Convert
+  // fiat → USD → token amount using the token's USD price.
+  const onChangeAmountToUsd = (value, decimal) => {
+    const cur = CURRENCY_DATA[currencyCode] || CURRENCY_DATA.USD
+    value = value.replace(`${cur.symbol}`, '').trim()
+
+    if (!priceTokenIn || !isFocusAmountInputToUSDRef.current) {
+      return
+    }
+    const valueSanitize = sanitizeAmountText(value, decimal)
+    setAmountInToUSD(valueSanitize)
+    setIsUsdInEdited(true)
+
+    const price = BigNumber(priceTokenIn || 0)
+    // USD = typed fiat ÷ rate, kept at full precision so the back-computed token amount stays
+    // accurate; only the token amount is rounded (to its own decimals) at the end.
+    const usd = BigNumber(valueSanitize || 0).div(fiatRateRedux > 0 ? fiatRateRedux : 1)
+
+    let amountIn = usd.dividedBy(price).decimalPlaces(decimalTokenIn, BigNumber.ROUND_DOWN).toFixed()
+    if (isNaN(amountIn) || amountIn === 'NaN' || amountIn?.includes('e-') || amountIn?.includes('-e')) {
+      amountIn = '0'
+    }
+
+    setIsExactInput(true)
+    setAmountIn(amountIn)
+  }
+
+  // Token IN USD row: editable. User can type a fiat amount and we back-compute the token.
+  // `amountInToUSD` holds the fiat-side value (already × rate), kept to MAX_DECIMAL_2USD so it
+  // reads like a currency amount. While focused we show that raw value so typing stays smooth
+  // (no reformatting mid-keystroke); on blur getFormattedValue() renders the same 2-decimal
+  // number — so tapping in shows exactly what was displayed, not a long decimal.
+  const renderTokenInUSD = () => {
+    const cur = CURRENCY_DATA[currencyCode] || CURRENCY_DATA.USD
+    const isSuffixSymbol = cur.position === 'suffix'
+    const textValue = isFocusAmountInputToUSD ? amountInToUSD : getFormattedValue()
+
+    // The currency symbol renders INSIDE the input value (prefix before the number,
+    // suffix after it) — never as a sibling <Text>. A separate Text can't share the
+    // TextInput's line-box on every device, so its glyph drifts off the digits'
+    // baseline. Inside the value, alignment comes free.
+    const prefixSymbol = cur.position !== 'suffix' ? cur.symbol : ''
+    const suffixSymbol = cur.position === 'suffix' ? ` ${cur.symbol}` : ''
+
+    const displayValue = isFocusAmountInputToUSD
+      ? `${prefixSymbol}${textValue || ''}${suffixSymbol}`
+      : textValue ? `${prefixSymbol}${textValue}${suffixSymbol}` : ''
+
+    // Suffix: pin the caret to the END OF THE NUMBER (before the symbol) while
+    // editing, so Backspace removes a digit — never the symbol — and new digits
+    // insert before it. Prefix needs no pinning: the symbol leads, so it is
+    // unreachable from the string's end.
+    const selection = isSuffixSymbol && isFocusAmountInputToUSD
+      ? { start: displayValue.length - suffixSymbol.length, end: displayValue.length - suffixSymbol.length }
+      : undefined
+
+    const onBlur = () => {
+      isFocusAmountInputToUSDRef.current = false
+      setIsFocusAmountInputToUSD(false)
+    }
+    const onFocus = () => {
+      isFocusAmountInputToUSDRef.current = true
+      setIsFocusAmountInputToUSD(true)
+    }
+
+    return (
+      <View style={{ flexDirection: 'row', display: 'flex', alignItems: 'center' }}>
+        <View style={{ width: '100%', position: 'relative' }}>
+          <InputCustom
+            variant='empty'
+            useNativePlaceholder
+            isDisable={!isValidAddressRecipient}
+            onBlur={onBlur}
+            onFocus={onFocus}
+            value={displayValue}
+            selection={selection}
+            onChangeText={value => {
+              value = value.toString()?.replace?.(cur.symbol, '')?.trim?.()
+              onChangeAmountToUsd(value, MAX_DECIMAL_2USD)
+            }}
+            height={0}
+            keyboardType='decimal-pad'
+            placeholderTextColor={Colors.TEXT_MEDIUM}
+            placeholder={`${prefixSymbol}0${suffixSymbol}`}
+            inputConfig={{
+              style: { color: Colors.TEXT_MEDIUM }
+            }}
+          />
+        </View>
+      </View>
+    )
   }
 
   const feeFiat = useMemo(() => {
@@ -587,7 +782,8 @@ const SwapAndSendSubmit = ({ _this }) => {
     BigNumber(amountIn).gt(0) &&
     !!tokenOut &&
     !loadingGetQuote &&
-    !!rawTransaction?.tx
+    !!rawTransaction?.tx && !error
+
   )
 
   const getAmountToUSD = (isTokenOut = false) => {
@@ -610,7 +806,10 @@ const SwapAndSendSubmit = ({ _this }) => {
     }
     if (nextStep === STEP_EXCHANGE.exchange) {
       setHash(pre => ({ ...pre, exchange: data?.hash }))
-      if (data?.amountOut) {
+      if (data?.requestId) {
+        setRequestId(data?.requestId)
+      }
+      if (BigNumber(data?.amountOut || '0').gt(0)) {
         setAmountOutAfterSwap(data?.amountOut)
       }
     }
@@ -627,10 +826,15 @@ const SwapAndSendSubmit = ({ _this }) => {
         data: rawApprove.data,
         to: rawApprove.to,
         from: rawApprove.from,
-        noEstimateGas: true
+        noGasPrice: !!CHAIN_ID_NO_GAS_PRICE_SWAP[tokenIn.chainId]
       }
-      if (rawApprove?.gas) raw.gasLimit = rawApprove.gas
-      else raw.gasLimit = DEFAULT_GAS_LIMIT
+
+      if (rawApprove?.gas) {
+        raw.gasLimit = rawApprove.gas
+      } else {
+        raw.gasLimit = DEFAULT_GAS_LIMIT
+      }
+
       if (rawApprove.value && BigNumber(rawApprove.value.toString()).gt(0)) {
         raw.value = rawApprove.value
         raw.valueNoConvert = rawApprove.value
@@ -640,19 +844,26 @@ const SwapAndSendSubmit = ({ _this }) => {
       const raw = {
         data: rawTransaction?.tx.data,
         to: rawTransaction?.tx.to,
-        from: rawTransaction?.tx.from,
-        noEstimateGas: true,
-        requestId: rawTransaction?.rawResponse?.requestId
+        from: rawTransaction?.tx.from || userAddress,
+        rawTransactionApi: rawTransaction?.tx,
+        noGasPrice: !!CHAIN_ID_NO_GAS_PRICE_SWAP[tokenIn.chainId]
+
       }
-      if (rawTransaction?.tx?.gas) raw.gasLimit = rawTransaction?.tx.gas
-      else raw.gasLimit = DEFAULT_GAS_LIMIT
+
       if (rawTransaction?.tx.value && BigNumber(rawTransaction?.tx.value.toString()).gt(0)) {
         raw.value = rawTransaction?.tx.value
         raw.valueNoConvert = rawTransaction?.tx.value
       }
-      raw.rawTransactionApi = rawTransaction?.tx
+      if (rawTransaction?.rawResponse?.requestId) {
+        raw.requestId = rawTransaction?.rawResponse?.requestId
+      }
 
-      await handleSubmitExchange(raw, callbackStep, 'swapAndSend')
+      if (gasLimitRawTx) {
+        raw.noEstimateGas = true
+        raw.gasLimit = gasLimitRawTx
+      }
+
+      await handleSubmitExchange(raw, rawTransaction.provider, callbackStep, 'swapAndSend')
     }
   }
 
@@ -681,7 +892,21 @@ const SwapAndSendSubmit = ({ _this }) => {
       return
     }
     if (type === TYPE_VIEW_EXPLORER.relayLink) {
-      const url = `https://relay.link/transaction/${hash?.exchange}`
+      let url
+      const baseUrlExplorer = SWAP_SERVICE_CONFIG.providers[bridgeProvider].linkExplorer
+      switch (bridgeProvider) {
+        case PLATFORM_EXCHANGE.relay:
+          url = `${baseUrlExplorer}/transaction/${hash?.exchange}`
+          break
+        case PLATFORM_EXCHANGE.deBridge:
+          if (isCrossChain) {
+            url = `${baseUrlExplorer}/order?orderId=${requestId}`
+          } else {
+            url = `${baseUrlExplorer}/same-chain-order?orderId=${requestId}&txHash=${hash?.exchange}&chainId=${tokenIn?.chainId}`
+          }
+          break
+      }
+
       handleOpenUrl(url)
     }
   }
@@ -744,8 +969,8 @@ const SwapAndSendSubmit = ({ _this }) => {
         <MyButton
           variant='default'
           disableLiquidGlass
-          isLoading={loadingGetQuote}
-          isDisable={!canSend || step >= STEP_EXCHANGE.approving}
+          isLoading={loadingGetQuote || loadingFeeProtocol}
+          isDisable={!canSend || step === STEP_EXCHANGE.approving || step === STEP_EXCHANGE.approve}
           label={I18n.t('Initial.ExchangeApprove')}
           onPress={onSend}
         />
@@ -754,8 +979,8 @@ const SwapAndSendSubmit = ({ _this }) => {
     return (
       <MyButton
         variant='primary'
-        isLoading={loadingGetQuote}
-        isDisable={!canSend || step >= STEP_EXCHANGE.exchanging}
+        isLoading={loadingGetQuote || loadingFeeProtocol}
+        isDisable={!canSend || (step >= STEP_EXCHANGE.exchanging && step !== STEP_EXCHANGE.failed)}
         label={I18n.t('Initial.send')}
         onPress={onSend}
       />
@@ -892,11 +1117,9 @@ const SwapAndSendSubmit = ({ _this }) => {
                   <View style={{ width: getSizeImgSquare('large'), alignItems: 'center' }}>
                     <MyIcon uri={images.UIV2.icons.goArrowDownMedium} />
                   </View>
-                  <View style={{ opacity: getAmountToUSD(false) ? 1 : 0 }}>
-                    <FiatBalance fractionDigits={MAX_DECIMAL_2USD} className='text-medium' valueUSD={getAmountToUSD(false)} />
-
+                  <View style={{ flex: 1 }}>
+                    {renderTokenInUSD()}
                   </View>
-
                 </View>
                 <Field
                   style={{ minHeight: pixelByHeight(62), opacity: !isValidAddressRecipient ? 0.5 : 1 }}
@@ -957,10 +1180,16 @@ const SwapAndSendSubmit = ({ _this }) => {
             )}
 
             <View style={styles.footer}>
-              <View style={styles.footerRow}>
-                <MyText className='text-medium'>{I18n.t('v2.sendToken.nativeBalance', { symbol: nativeSymbol })}</MyText>
-                <MyNumber className='text-white' value={balanceNative} fractionDigits={8} suffix={` ${nativeSymbol}`} />
-              </View>
+              {/* Chains with no native coin (Tempo) answer eth_getBalance with a
+              sentinel, not a balance — there is nothing real to show here. The
+              fee row below is unaffected: its `|| 1` fallback already prices the
+              USD-denominated gas unit correctly. */}
+              {hasNativeTokenByChain(chainId) && (
+                <View style={styles.footerRow}>
+                  <MyText className='text-medium'>{I18n.t('v2.sendToken.nativeBalance', { symbol: nativeSymbol })}</MyText>
+                  <MyNumber className='text-white' value={balanceNative} fractionDigits={8} suffix={` ${nativeSymbol}`} />
+                </View>
+              )}
               <View style={styles.footerRow}>
                 <MyText className='text-medium'>{I18n.t('v2.sendToken.transactionFee')}</MyText>
                 <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end' }}>
@@ -1068,12 +1297,28 @@ const SwapAndSendSubmit = ({ _this }) => {
                 <MyIcon variant='small' uri={images.UIV2.icons.copyWhite} />
               </TouchableOpacity>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: pixelByWidth(4), marginTop: pixelByHeight(4) }}>
-              <MyIcon uri={images.UIV2.icons.relayIcon} />
-              <TouchableOpacity onPress={() => handleExplorer(TYPE_VIEW_EXPLORER.relayLink)} activeOpacity={1}>
-                <MyText className='text-brand'>{I18n.t('v2.exchange.viewRelayExplorer')}</MyText>
-              </TouchableOpacity>
-            </View>
+            {
+              bridgeProvider === PLATFORM_EXCHANGE.relay && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: pixelByWidth(4), marginTop: pixelByHeight(4) }}>
+                  <MyIcon uri={images.UIV2.icons.relayIcon} />
+                  <TouchableOpacity onPress={() => handleExplorer(TYPE_VIEW_EXPLORER.relayLink)} activeOpacity={1}>
+                    <MyText className='text-brand'>{I18n.t('v2.exchange.viewRelayExplorer')}</MyText>
+                  </TouchableOpacity>
+                </View>
+              )
+            }
+
+            {
+              requestId && bridgeProvider === PLATFORM_EXCHANGE.deBridge && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: pixelByWidth(4), marginTop: pixelByHeight(4) }}>
+                  <MyIcon uri={images.UIV2.icons.deBridgeExplorer} />
+                  <TouchableOpacity onPress={() => handleExplorer(TYPE_VIEW_EXPLORER.relayLink)} activeOpacity={1}>
+                    <MyText className='text-brand'>{I18n.t('v2.exchange.viewDeBridgeExplorer')}</MyText>
+                  </TouchableOpacity>
+                </View>
+              )
+            }
+
           </View>
         </View>
       )}

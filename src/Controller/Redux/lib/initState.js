@@ -48,6 +48,11 @@ var initState = {
   aiSearchHistory: {},
   addressRegisteredLiquidity: [],
   addressDeletedLiquidity: {},
+  // Last known liquidity data per registered address:
+  // { [addressKey]: { pools: [], tokensDetail: [], coinPool: {} } }
+  // Rehydrated from AsyncStorage before the first render (see App.hydrateReduxFromStorage),
+  // so the Liquidity screen reopens showing the previous data instead of a loader.
+  liquidityData: {},
 
   // Migration flags for app version updates
   migrationFlags: {
@@ -96,7 +101,12 @@ var initState = {
     indexAccount: 0, // index of account current in accountListRedux
     chainIdScreen: {}, // chain id current when to user selected an page,
     accountsUsing: [] // list accounts of user opening to use
-  }
+  },
+
+  // Persisted exchange/bridge settings (chainSupport + bridgeProvider + affiliate config).
+  // Written by useGetSettingExchange after each background fetch so the UI can paint
+  // instantly on cold start instead of showing a loading spinner.
+  settingExchangeInit: null
 
 }
 

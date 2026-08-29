@@ -17,7 +17,7 @@ import images from 'assets/Image'
 import I18n from 'assets/Lang'
 import ReduxService from 'common/redux'
 import { typeLiquidityPool } from 'common/constants/chain'
-import { comparePrice, getCurrencySymbolData, splitDecimalNumber } from 'common/function'
+import { comparePrice, getCurrencySymbolData, getFlatSeriesDomain, splitDecimalNumber } from 'common/function'
 import { Colors, pixelByHeight, pixelByWidth, sizeImageSquare } from 'common/styles'
 import { STATUS_RANGE } from 'common/constants/app'
 import useGetHistoryLiquidityPool from 'frontend/Hooks/useGetHistoryLiquidityPool'
@@ -70,7 +70,7 @@ const DetailPool = ({ item, tokenInfo0, tokenInfo1 }) => {
   //   name = "Uniswap - 0.3% - VIRTUAL/WETH - 2270.2<>3413.8"
   // We re-assemble in the design order "{pair} {fee}% - {lower}<>{upper}". Each
   // part is appended only when present, so it degrades gracefully.
-  const { data: positionNftName } = useGetPositionNftName(item?.chainId, item?.tokenId, item?.type)
+  const { data: positionNftName } = useGetPositionNftName(item?.chainId, item?.tokenId, item?.type, item?.owner)
   const rangeSubtitleParts = []
   if (positionNftName?.pair) rangeSubtitleParts.push(positionNftName.pair)
   if (positionNftName?.feePercent) rangeSubtitleParts.push(`${positionNftName.feePercent}%`)
@@ -106,7 +106,15 @@ const DetailPool = ({ item, tokenInfo0, tokenInfo1 }) => {
   const quantityLiquidityEndTemp = (item?.fiatAmountLiquidity || 0) * fiatRateRedux
   const quantityEndLiquidity = splitDecimalNumber(BigNumber(quantityLiquidityEndTemp).decimalPlaces(8))
 
-  const hasChart = dataHistoryLiquidityPool?.length > 0
+  // A single point can't draw a curve, so the chart needs at least two — same
+  // gate the token detail chart uses. Anything less falls through to the bare grid.
+  const hasChart = dataHistoryLiquidityPool?.length > 1
+  // A position's value is often perfectly FLAT across the window (nothing traded
+  // against the pool), which would otherwise pin the curve to the card floor as a
+  // thin rule. See getFlatSeriesDomain — this centres it instead.
+  const chartValueMin = hasChart ? Math.min(...dataHistoryLiquidityPool) : 0
+  const chartValueMax = hasChart ? Math.max(...dataHistoryLiquidityPool) : 0
+  const { isFlat: isFlatChart, gridMin, gridMax } = getFlatSeriesDomain(chartValueMin, chartValueMax)
 
   // Full-screen states. Each hook's isLoading is already "loading AND no data yet"
   // (offline still surfaces the persisted snapshot, so this only fires on a genuine
@@ -277,7 +285,11 @@ const DetailPool = ({ item, tokenInfo0, tokenInfo1 }) => {
                       <View style={styles.chartWrap}>
                         {renderChartGrid()}
                         <AreaChart
-                          start={Math.min(...dataHistoryLiquidityPool)}
+                          // Fill baseline: the domain floor, so a flat series still
+                          // fills from the centred line down to the chart bottom.
+                          start={isFlatChart ? gridMin : chartValueMin}
+                          gridMin={gridMin}
+                          gridMax={gridMax}
                           style={styles.chart}
                           data={dataHistoryLiquidityPool}
                           svg={{ fill: 'url(#gradientLiquidity)' }}
@@ -297,6 +309,8 @@ const DetailPool = ({ item, tokenInfo0, tokenInfo1 }) => {
                         <LineChart
                           style={StyleSheet.absoluteFill}
                           data={dataHistoryLiquidityPool}
+                          gridMin={gridMin}
+                          gridMax={gridMax}
                           svg={{ stroke: colorLine, strokeWidth: pixelByWidth(2) }}
                           curve={shape.curveCatmullRom}
                           contentInset={CHART_INSET}

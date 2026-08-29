@@ -16,6 +16,9 @@ export const KEYSTORE = {
   AI_SEARCH_HISTORY: 'AI_SEARCH_HISTORY',
   SET_ADDRESS_REGISTERED_LIQUIDITY: 'SET_ADDRESS_REGISTERED_LIQUIDITY',
   SET_ADDRESS_DELETED_LIQUIDITY: 'SET_ADDRESS_DELETED_LIQUIDITY',
+  // Last known liquidity data, kept so the screen can paint on its first render after
+  // a restart instead of loading from scratch. Keyed by registered address inside.
+  SET_LIQUIDITY_DATA: 'SET_LIQUIDITY_DATA',
   ADDRESS_BOOK_HISTORY: 'ADDRESS_BOOK_HISTORY',
   ADDRESS_BOOK_INFO: 'ADDRESS_BOOK_INFO',
   SET_MIGRATION_FLAGS: 'SET_MIGRATION_FLAGS',
@@ -29,17 +32,19 @@ export const KEYSTORE = {
   SET_ACCOUNT_TOKEN_LIST: 'SET_ACCOUNT_TOKEN_LIST',
   HISTORY_WC_PAY: 'HISTORY_WC_PAY',
   HISTORY_BACKUP: 'HISTORY_BACKUP',
-  LIST_CHAIN_SUPPORT_EXCHANGE: 'LIST_CHAIN_SUPPORT_EXCHANGE',
   // User's device location/region, used to localize content (e.g. where-to-buy
   // links). Shape: { asked: boolean, granted: boolean, country: string } —
   // country '' means declined/unknown.
   SET_USER_LOCATION: 'SET_USER_LOCATION',
   NOTIFICATION_LIST: 'NOTIFICATION_LIST',
   NOTIFICATION_READ_IDS: 'NOTIFICATION_READ_IDS',
-  SEND_RECEIVED_HISTORY_BLOCK_TIMESTAMP: 'SEND_RECEIVED_HISTORY_BLOCK_TIMESTAMP'
+  SEND_RECEIVED_HISTORY_BLOCK_TIMESTAMP: 'SEND_RECEIVED_HISTORY_BLOCK_TIMESTAMP',
+  SET_SETTING_EXCHANGE: 'SET_SETTING_EXCHANGE'
 }
 
 export const REDUX_KEY = {
   accountListRedux: 'accountListRedux',
-  activeAccount: 'activeAccount'
+  activeAccount: 'activeAccount',
+  settingExchangeRedux: 'settingExchangeRedux',
+  blockchainListRedux: 'blockchainListRedux'
 }

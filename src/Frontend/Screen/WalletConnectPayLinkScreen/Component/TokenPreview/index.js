@@ -15,7 +15,7 @@ import { getSafeAreaValues, pixelByHeight, pixelByWidth } from 'common/styles'
 import StatusMessage from 'frontend/Components/UI/StatusMessage'
 import { convertWeiToBalance, formatNumberBro } from 'common/function'
 import { TYPE_STEP_PAYMENT } from '../..'
-import { getNativeTokenSymbolByChain, getUrlExplorerHash, handleOpenExplorerHash } from 'common/chain'
+import { getNativeTokenSymbolByChain, getUrlExplorerHash, handleOpenExplorerHash, hasNativeTokenByChain } from 'common/chain'
 import TokenIconWithChain from 'frontend/Components/UI/TokenIconWithChain'
 import I18n from 'assets/Lang'
 import Clipboard from '@react-native-clipboard/clipboard'
@@ -59,6 +59,8 @@ const TokenPreview = ({ _this, option }) => {
   const { activeAccount } = useSelector(s => s)
   const { account } = activeAccount
   const nativeSymbol = getNativeTokenSymbolByChain(chainId)
+  // False only on chains that charge gas in a stablecoin and have no native coin.
+  const chainHasNative = hasNativeTokenByChain(chainId)
 
   const { data: balanceNative, isLoading: loadingBalanceNative } = useGetBalanceToken(chainId, account?.address, addressNative)
   const { data: decimalNative, isLoading: loadingDecimalNative } = useGetDecimalToken(chainId, addressNative)
@@ -123,8 +125,12 @@ const TokenPreview = ({ _this, option }) => {
     }
     const feeWei = BigNumber(txFee.gasLimit).multipliedBy(txFee.gasPrice).plus(txFee.l1Fee).multipliedBy(1.5).toFixed(0)
     const feeNative = convertWeiToBalance(feeWei, 18)
-    const feeFiat = BigNumber(feeNative || '0').multipliedBy(nativePriceUSD || 0).toNumber()
-    const feeInsufficient = BigNumber(balanceNative || '0').isLessThan(feeNative || '0')
+    // No native coin (Tempo): gasPrice is quoted in 18-decimal USD, so feeNative
+    // IS the dollar amount — price it at 1 instead of a token that doesn't exist
+    // (its lookup returns 0, which showed the fee as $0). The shortfall check
+    // goes with it: there is no native balance to weigh the fee against.
+    const feeFiat = BigNumber(feeNative || '0').multipliedBy(chainHasNative ? (nativePriceUSD || 0) : 1).toNumber()
+    const feeInsufficient = chainHasNative && BigNumber(balanceNative || '0').isLessThan(feeNative || '0')
     const missingFee = feeInsufficient ? formatNumberBro(BigNumber(feeNative).minus(balanceNative).toString(), 8) : '0'
     return {
       feeWei,
@@ -133,7 +139,7 @@ const TokenPreview = ({ _this, option }) => {
       feeInsufficient,
       missingFee
     }
-  }, [txFee, loadingBalanceNative, loadingDecimalNative, balanceNative, nativePriceUSD])
+  }, [txFee, loadingBalanceNative, loadingDecimalNative, balanceNative, nativePriceUSD, chainHasNative])
 
   const [step, setStep] = useState(TYPE_STEP_PAYMENT.idle)
   const [hash, setHash] = useState('')
@@ -270,10 +276,14 @@ const TokenPreview = ({ _this, option }) => {
             {
               !loadingBalanceNative && !loadingDecimalNative && hasSendTransactionAction && balanceNative && decimalNative && (
                 <>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                    <MyText className='text-medium'>{I18n.t('v2.sendToken.nativeBalance', { symbol: nativeSymbol })}</MyText>
-                    <MyNumber ticker className='text-medium' value={balanceNative} fractionDigits={DECIMAL_SHOW_UI} suffix={` ${nativeSymbol}`} />
-                  </View>
+                  {/* Only the balance row is chain-gated — the fee row below still
+                  applies on a chain with no native coin (it is just priced in USD). */}
+                  {chainHasNative && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <MyText className='text-medium'>{I18n.t('v2.sendToken.nativeBalance', { symbol: nativeSymbol })}</MyText>
+                      <MyNumber ticker className='text-medium' value={balanceNative} fractionDigits={DECIMAL_SHOW_UI} suffix={` ${nativeSymbol}`} />
+                    </View>
+                  )}
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <MyText className='text-medium'>{I18n.t('v2.sendToken.transactionFee')}</MyText>
                     {renderTransactionFee()}

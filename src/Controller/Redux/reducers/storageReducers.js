@@ -109,6 +109,12 @@ export const addressDeletedLiquidity = createReducer(init.addressDeletedLiquidit
   }
 })
 
+export const liquidityDataRedux = createReducer(init.liquidityData, {
+  [KEYSTORE.SET_LIQUIDITY_DATA] (state, action) {
+    return action.payload
+  }
+})
+
 export const migrationFlagsRedux = createReducer(init.migrationFlags, {
   [KEYSTORE.SET_MIGRATION_FLAGS] (state, action) {
     return action.payload
@@ -147,6 +153,12 @@ export const notificationListRedux = createReducer(init.arrInit, {
 
 export const notificationReadIdsRedux = createReducer(init.arrInit, {
   [KEYSTORE.NOTIFICATION_READ_IDS] (state, action) {
+    return action.payload
+  }
+})
+
+export const settingExchangeRedux = createReducer(init.settingExchangeInit, {
+  [KEYSTORE.SET_SETTING_EXCHANGE] (state, action) {
     return action.payload
   }
 })

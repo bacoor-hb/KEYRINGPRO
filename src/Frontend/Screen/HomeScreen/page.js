@@ -31,8 +31,22 @@ import useCheckNewAppVersion from 'frontend/Hooks/useCheckNewAppVersion'
 
 const HomePage = (props) => {
   const { func } = props
-  const { accountListRedux } = useSelector(state => state)
-  const accountTokenListRedux = useSelector(state => state.accountTokenListRedux)
+  // Subscribe per slice. A whole-state selector (`state => state`) re-rendered
+  // this screen — and every account row under it — on EVERY dispatch in the app,
+  // including each per-chain token commit of a balance refresh.
+  const accountListRedux = useSelector(state => state.accountListRedux)
+  // Is ANY account mid-refresh? The selector returns a primitive, so this only
+  // re-renders when a refresh wave starts or ends — not on every one of the
+  // dozens of per-chain commits in between.
+  const isAnyAccountLoading = useSelector(
+    state => Object.values(state.tokenLoadingRedux || {}).some(Boolean)
+  )
+  // Used by renderLiquidity. Read through a selector (not ReduxService) so the
+  // fiat total still updates when the currency / rate changes — a ReduxService
+  // read is not a subscription, and this screen no longer re-renders globally.
+  const currencyRedux = useSelector(state => state.currencyRedux)
+  const fiatRateRedux = useSelector(state => state.fiatRateRedux)
+  // Every label here goes through I18n.t, so a language change must re-render.
   useSelector(state => state.localeRedux)
   const styles = createStyles()
 
@@ -50,6 +64,14 @@ const HomePage = (props) => {
   // part of the V2 balance pipeline (no computed total), so they always sink to
   // the bottom in their original relative order — same as before this sort.
   const sortedAccountList = useMemo(() => {
+    // The token list is read WITHOUT subscribing to it on purpose. A refresh
+    // dispatches that slice once per chain per account, and re-sorting (and
+    // re-rendering the whole screen) on each of those commits was both expensive
+    // and visibly wrong — rows jumped around under the user's finger while
+    // balances were still streaming in. The order is settled when the account
+    // list changes or when a refresh wave ends; each row's displayed total comes
+    // from its own selector and stays live regardless of the order.
+    const accountTokenListRedux = ReduxService.getAccountTokenList()
     const totalOf = (acc) =>
       getVisibleTotalUSD(accountTokenListRedux?.[lowerCase(acc?.address || '')])
     const isEvm = (acc) => acc?.chain === STANDARD_CHAIN.Evm
@@ -60,7 +82,10 @@ const HomePage = (props) => {
       if (!aEvm) return 0
       return totalOf(b) - totalOf(a)
     })
-  }, [accountListRedux, accountTokenListRedux])
+    // isAnyAccountLoading looks unused to the linter — it IS the trigger: it is
+    // what tells this memo that the unsubscribed token list above has settled.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountListRedux, isAnyAccountLoading])
 
   // Total USD of liquidity positions — computed on demand when this screen mounts
   // (fetches the registered address' pools and sums the active/non-hidden ones).
@@ -201,9 +226,6 @@ const HomePage = (props) => {
   // }
 
   const renderLiquidity = () => {
-    const fiatRateRedux = ReduxService.getFiatRateRedux()
-    const currencyRedux = ReduxService.getCurrencyRedux()
-
     const totalLiquidityByFiat = liquidityTotalUSD * fiatRateRedux
 
     const { symbol: currencySymbol, position: currencyPosition } = getCurrencySymbolData(currencyRedux)

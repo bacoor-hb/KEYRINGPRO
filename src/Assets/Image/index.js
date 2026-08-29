@@ -178,6 +178,7 @@ const images = {
       approve: require('./UIV2/Icon/approve.png'),
       closeNoBorder: require('./UIV2/Icon/closeNoBorder.png'),
       relayIcon: require('./UIV2/Icon/relayIcon.png'),
+      deBridgeExplorer: require('./UIV2/Icon/deBridgeExplorer.png'),
       noTokenOutExchange: require('./UIV2/Icon/noTokenOutExchange.png'),
       payConfirm: require('./UIV2/Icon/payConfirm.png'),
       payProcess: require('./UIV2/Icon/payProcess.png'),
@@ -235,6 +236,7 @@ const images = {
       failed: require('./UIV2/Icon/failed.png'),
       arrowRightLow: require('./UIV2/Icon/arrowRightLow.png'),
       icon_history_24h: require('./UIV2/Icon/icon_history_24h.png'),
+      icon_history_7d: require('./UIV2/Icon/icon_history_7d.png'),
       arrowRDownBlue: require('./UIV2/Icon/arrowRDownBlue.png'),
       autoGenerateKey: require('./UIV2/Icon/autoGenerateKey.png'),
       accountAdd: require('./UIV2/Icon/accountAdd.png'),
@@ -246,6 +248,8 @@ const images = {
       deleteWhite: require('./UIV2/Icon/deleteWhite.png'),
       deleteBrand: require('./UIV2/Icon/deleteBrand.png'),
       exchange: require('./UIV2/Icon/exchange.png'),
+      withdraw: require('./UIV2/Icon/withdraw.png'),
+      withdraw_white: require('./UIV2/Icon/withdraw_white.png'),
       browser: require('./UIV2/Icon/browser.png'),
       browserBlue: require('./UIV2/Icon/browserBlue.png'),
       unHide: require('./UIV2/Icon/unHide.png'),
@@ -274,6 +278,16 @@ const images = {
         walletConnect: require('./UIV2/Icon/Home/walletConnectDarkmode.png'),
         exportNFCKeycard: require('./UIV2/Icon/Home/exportNFCKeycardDarkmode.png'),
         liquidityManagement: require('./UIV2/Icon/Home/liquidityManagementDarkmode.png')
+      },
+      // Lending-protocol logos, keyed by the market `type` the core reports
+      // (see WithdrawToken/abis.js SUPPORTED_WITHDRAW_TYPES). Spark and
+      // Spark-ethereum are one protocol with two market types, so they share
+      // an image — the mapping lives in WithdrawToken/protocolLogo.js.
+      lending: {
+        aave: require('./UIV2/Icon/lending/logo_aave.png'),
+        compound: require('./UIV2/Icon/lending/logo_compound.png'),
+        morpho: require('./UIV2/Icon/lending/logo_morpho.png'),
+        spark: require('./UIV2/Icon/lending/logo_spark.png')
       },
       settings: {
         customRPC: require('./UIV2/Icon/Settings/customRPCDarkmode.png'),

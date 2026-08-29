@@ -357,6 +357,10 @@ export default function X402SignModal ({ request, walletAddress, onResolve, scre
       // A payment approval must not be dismissed by accident — the core is
       // blocked awaiting this signature, so closing goes through the buttons.
       enablePanDownToClose: false,
+      // Tapping the backdrop is deliberate enough to count as a cancel, though —
+      // opted back in because the swipe being off would otherwise disable it too.
+      // onClose below settles the request either way, so this can't hang the core.
+      closeOnBackdropPress: true,
       // Belt and braces: whatever closes the sheet, the signer gets an answer
       // (a no-op once approve/cancel already settled it), so it never hangs.
       onClose: () => settle(null),

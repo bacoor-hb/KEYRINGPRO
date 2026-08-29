@@ -358,7 +358,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
             </View>
 
             <View style={styles.rangeRow}>
-              <MyText variant='small' className='font-semibold' style={styles.rangeRowLabel}>{t('min')}</MyText>
+              <MyText variant='small' className='' style={styles.rangeRowLabel}>{t('min')}</MyText>
               <GlassView effect='clear' style={styles.rangeRowInput}>
                 <TextInput
                   style={styles.rangeRowInputText}
@@ -425,7 +425,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
             <GlassView effect='clear' style={styles.inputRow}>
               <TextInput
                 style={styles.amountInput}
-                className='text-white font-semibold'
+                className='text-white '
                 value={amount}
                 onChangeText={(v) => setAmount(sanitizePrice(v))}
                 keyboardType='decimal-pad'
@@ -457,7 +457,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
                   onPress={() => setAmount(toAmountDown(r.amount))}
                 >
                   <GlassView interactive style={styles.quickChip}>
-                    <MyText variant='small' className='font-semibold'>{r.percent}%</MyText>
+                    <MyText variant='small' className=''>{r.percent}%</MyText>
                   </GlassView>
                 </TouchableOpacity>
               ))}

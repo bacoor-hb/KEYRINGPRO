@@ -6,7 +6,8 @@ import { useQuery } from 'react-query'
 import QueryString from 'query-string'
 import settings from 'controller/settings'
 import AllChainServices from 'controller/AllChainServices'
-import usePersistedQueryData from 'frontend/Hooks/usePersistedQueryData'
+import { buildPositionKey, useLiquidityPositionData, writeLiquidityPositionData } from 'frontend/Hooks/useLiquidityData'
+import { useMemo } from 'react'
 
 const getPositionLiquidityInfo = async ({ queryKey }) => {
   // eslint-disable-next-line no-unused-vars
@@ -83,14 +84,19 @@ const getPositionLiquidityInfo = async ({ queryKey }) => {
 }
 
 const useGetPositionLiquidityInfo = (poolId, chainId, owner, tokenId) => {
-  // Per-pool persisted snapshot — show the last result (even after app restart)
-  // while the network refetches.
-  const [persisted, persist] = usePersistedQueryData(`POSITION_LIQUIDITY_INFO_${chainId}_${poolId}_${tokenId}`)
+  // Saved result for this position, from Redux — in hand on the first render, so
+  // reopening a position shows its previous info immediately. `owner` is the position's
+  // account, which is the address it is stored under.
+  const owners = useMemo(() => [owner], [owner])
+  const positionKey = buildPositionKey(chainId, tokenId)
+  const persisted = useLiquidityPositionData(owners, positionKey, 'positionInfo')
 
   const { data, isLoading } = useQuery(['getPositionLiquidityInfo', poolId, chainId, owner, tokenId], getPositionLiquidityInfo, {
     enabled: !!poolId && !!chainId && !!owner && !!tokenId,
     keepPreviousData: true,
-    onSuccess: persist
+    // The fetcher returns null on a failed/offline request, and the writer ignores null,
+    // so a bad response never replaces good saved info.
+    onSuccess: (value) => writeLiquidityPositionData(owners, positionKey, 'positionInfo', value)
   })
 
   const source = data ?? persisted

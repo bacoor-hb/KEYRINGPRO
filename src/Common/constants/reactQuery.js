@@ -13,8 +13,13 @@ export const REACT_QUERY_KEY = {
   getBalanceToken: 'getBalanceToken',
   getTokenPriceChanges: 'getTokenPriceChanges',
   getTokenPriceHistory: 'getTokenPriceHistory',
+  getLendingTokenInfo: 'getLendingTokenInfo',
   getDecimalToken: 'getDecimalToken',
   getRawBalanceToken: 'getRawBalanceToken',
   getPaymentTokenInfo: 'getPaymentTokenInfo',
-  getX402Fees: 'getX402Fees'
+  getX402Fees: 'getX402Fees',
+  getWithdrawState: 'getWithdrawState',
+  getWithdrawPreviewShares: 'getWithdrawPreviewShares',
+  getWithdrawFeeCheck: 'getWithdrawFeeCheck',
+  getProtocolFee: 'getProtocolFee'
 }

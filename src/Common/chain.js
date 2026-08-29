@@ -1,6 +1,6 @@
 import DeviceInfo from 'react-native-device-info'
 import { REVIEW_URL_STATUS } from './constants/app'
-import { chainType } from 'common/constants/chain'
+import { chainType, SUPPORTED_BLOCKCHAIN_DATA } from 'common/constants/chain'
 import { handleOpenUrl, isURL } from './function'
 import ReduxService from './redux'
 import BaseAPI from 'controller/API/BaseAPI'
@@ -288,6 +288,63 @@ export const getNativeTokenSymbolByChain = (chainId) => {
   } catch (error) {
     return ''
   }
+}
+
+/**
+ * Does this chain have a native coin at all?
+ *
+ * True everywhere except the handful of chains that charge gas in an ERC20
+ * stablecoin and have no native asset (Tempo/4217 — see the note on its entry
+ * in constants/chain). On those, `eth_getBalance` returns a meaningless
+ * sentinel, so anything derived from a native balance (the balance row, the
+ * "not enough for the fee" check) has to be skipped rather than shown.
+ *
+ * Source order — the API answer wins, the bundled constant is the fallback:
+ *   1. blockchainListRedux, but ONLY when it holds a real boolean. That is the
+ *      live copy, so a chain the API later flags is picked up without an app
+ *      update.
+ *   2. SUPPORTED_BLOCKCHAIN_DATA. Needed because redux is PERSISTED and
+ *      refeshBlockChainList only re-pins the icon on entries that already
+ *      exist: a user who already has the chain stored keeps an entry with no
+ *      such field, and reading redux alone would silently answer "has native".
+ *
+ * @param {number|string} chainId
+ * @returns {boolean}
+ */
+export const hasNativeTokenByChain = (chainId) => {
+  const fromRedux = ReduxService.getReduxDataByKey('blockchainListRedux')?.[chainId]?.hasNativeToken
+  if (typeof fromRedux === 'boolean') return fromRedux
+  return SUPPORTED_BLOCKCHAIN_DATA[Number(chainId)]?.hasNativeToken !== false
+}
+
+/**
+ * Can `contractAddress` pay the gas fee on this chain?
+ *
+ * Only meaningful on chains that charge gas in a token (see
+ * hasNativeTokenByChain). Tempo restricts it to TIP-20 tokens whose currency is
+ * USD — a transfer of anything else is charged to the protocol default instead,
+ * so "not in the list" must NOT be read as "this token pays".
+ *
+ * Same source order as hasNativeTokenByChain: the live API copy wins, the
+ * bundled constant covers users whose persisted entry predates the field.
+ *
+ * @param {number|string} chainId
+ * @param {string} contractAddress
+ * @returns {boolean}
+ */
+export const isFeeTokenByChain = (chainId, contractAddress) => {
+  if (!contractAddress) return false
+  // A NON-EMPTY array is the live answer; `[]` is treated as no answer and falls
+  // back to the constant. The API merge keeps arrays verbatim (only null and
+  // blank strings are stripped), so an empty one is far more likely to be a
+  // field the backend hasn't filled in than a real "nothing may pay fees here".
+  const fromRedux = ReduxService.getReduxDataByKey('blockchainListRedux')?.[chainId]?.feeTokens
+  const list = Array.isArray(fromRedux) && fromRedux.length > 0
+    ? fromRedux
+    : SUPPORTED_BLOCKCHAIN_DATA[Number(chainId)]?.feeTokens
+  if (!Array.isArray(list)) return false
+  const address = contractAddress.toLowerCase()
+  return list.some((item) => `${item}`.toLowerCase() === address)
 }
 
 export const getNativeTokenDecimalByChain = (chainId) => {

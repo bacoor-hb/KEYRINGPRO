@@ -63,6 +63,16 @@ const WalletConnectRequestsModal = ({ topic, _this }) => {
   const gasPriceSlideValue = useSelector((s) => s.gasPriceSlideValue) || 1
 
   const [sliderW, setSliderW] = useState(width(40))
+  // Live display value for the gwei label. The slider only commits to redux on
+  // release (onGasChange), so without this the number would stay frozen while
+  // dragging — mirrors SendToken's sliderValue.
+  const [gasDisplayValue, setGasDisplayValue] = useState(gasPriceSlideValue)
+
+  // Re-sync when the committed value changes from elsewhere (release commit, or
+  // another screen's slider).
+  useEffect(() => {
+    setGasDisplayValue(gasPriceSlideValue)
+  }, [gasPriceSlideValue])
 
   const accountIndex = (walletConnectRedux || []).findIndex(
     (item) => lowerCase(item?.session?.topic) === lowerCase(topic)
@@ -109,7 +119,14 @@ const WalletConnectRequestsModal = ({ topic, _this }) => {
   // Only show the gas slider for EVM sessions (gas is irrelevant otherwise).
   const isEvmConnection = (walletConnectInfo?.chainArray || []).some((c) => String(c).startsWith('eip155:'))
 
+  // While dragging: update the label only (no dispatch per step).
+  const onGasChanging = (v) => {
+    setGasDisplayValue(v ?? 1)
+  }
+
+  // On release: commit the final value to redux.
   const onGasChange = (v) => {
+    setGasDisplayValue(v ?? 1)
     ReduxService.callDispatchAction(StorageReduxAction.setGasPriceSlideValue(v ?? 1))
   }
 
@@ -220,17 +237,27 @@ const WalletConnectRequestsModal = ({ topic, _this }) => {
         {isEvmConnection && (
           <View style={styles.gasRow}>
             <MyText style={styles.gasLabel}>{I18n.t('WalletConnect.gasFee')}</MyText>
-            <View style={styles.gasSliderWrap} onLayout={(e) => setSliderW(e.nativeEvent.layout.width)}>
-              <GasSlider
-                value={gasPriceSlideValue}
-                min={1}
-                max={10}
-                step={0.2}
-                trackWidth={sliderW}
-                onChangeEnd={onGasChange}
-              />
+            <View style={styles.gasSliderWrap}>
+              <View style={styles.gasSliderMeasure} onLayout={(e) => setSliderW(e.nativeEvent.layout.width)}>
+                <GasSlider
+                  value={gasDisplayValue}
+                  min={1}
+                  max={10}
+                  step={0.2}
+                  trackWidth={sliderW}
+                  onChange={onGasChanging}
+                  onChangeEnd={onGasChange}
+                />
+              </View>
             </View>
-            <MyText style={styles.gasGwei}>{`${formatNumberBro(gasPriceSlideValue, 1)}x Gwei`}</MyText>
+            {/* Auto-shrink (down to 70%) so a long value stays on one line inside
+                the fixed-width label instead of clipping. */}
+            <MyText
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+              style={styles.gasGwei}
+            >{`${formatNumberBro(gasDisplayValue, 1)}x Gwei`}</MyText>
           </View>
         )}
 

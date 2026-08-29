@@ -58,8 +58,15 @@ export const checkNativeBalance = async ({ chainId, from, amount, symbol, langua
   // 'native' routes getBalanceToken down its getBalance path; converted, so the
   // comparison is in the same decimal units the user typed.
   const have = BigNumber(await ViemWeb3.getBalanceToken(toChainId(chainId), from, 'native', true))
-  // An unreadable balance also resolves to 0 — don't block someone who can pay.
-  if (!have.isFinite() || have.lte(0)) return null
+  // Only an unparseable figure is "cannot tell". A balance of ZERO is a real
+  // reading and must fall through to the message below — an empty wallet is the
+  // clearest case of not being able to cover the send.
+  //
+  // Note `getBalanceToken` THROWS on a failed read rather than resolving 0 (the
+  // caller's try/catch owns that path), so there is no unreadable-zero to fail
+  // open on here. The old `lte(0)` guard protected nothing and only swallowed
+  // the empty wallet.
+  if (!have.isFinite() || have.lt(0)) return null
   if (have.gte(want)) return null
 
   return tr('walletActionNotEnoughBalance', language, {
@@ -80,7 +87,9 @@ export const checkTokenBalance = async ({ chainId, from, contractAddress, amount
   // Multicalls decimals + balanceOf and converts, so the token's own decimals
   // are used rather than the agent's (possibly absent) figure.
   const have = BigNumber(await ViemWeb3.getBalanceToken(toChainId(chainId), from, contractAddress, true))
-  if (!have.isFinite() || have.lte(0)) return null
+  // Zero is a real reading, not a failed one — see `checkNativeBalance`. A
+  // wallet holding none of the token must be told, not waved through.
+  if (!have.isFinite() || have.lt(0)) return null
   if (have.gte(want)) return null
 
   return tr('walletActionNotEnoughBalance', language, {

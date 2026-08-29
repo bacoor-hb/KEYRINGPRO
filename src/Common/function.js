@@ -19,7 +19,7 @@ import { isEmpty } from 'lodash'
 import { removeCommasFromNumer } from './web3'
 import Keys from 'react-native-keys'
 import BigNumber from 'bignumber.js'
-import { erc20Abi, erc721Abi, numberToHex, createPublicClient, http, hexToString as viemHexToString } from 'viem'
+import { erc20Abi, erc721Abi, numberToHex, createPublicClient, http, hexToString as viemHexToString, isAddress as viemIsAddress } from 'viem'
 import { NavigationActions } from 'src/navigation/NavigationService'
 import { add0xToPrivateKey, remove0xFromPrivateKey, storePrivateKeyByAddress } from './wallet'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -433,9 +433,17 @@ export const array2Object = (arr, key, defaultValue = undefined) => {
     : {}
 }
 
+// Format-only check for an EVM address: '0x' + exactly 40 HEX characters.
+// `strict: false` on purpose — viem's default (strict) additionally requires a
+// mixed-case address to match its EIP-55 checksum, which rejects a perfectly
+// valid ALL-UPPERCASE address (common in QR codes / EIP-681 payloads). Those
+// send fine on-chain, so the format check must not block them.
 export const isValidEVMAddressFormat = (address) => {
   try {
-    return address && isString(address) && address.startsWith('0x') && address.length === 42
+    // `typeof` rather than isString(): isString returns the value itself when
+    // falsy ('' -> ''), and callers pass this straight into react-query's
+    // `enabled`, which rejects anything that isn't a real boolean.
+    return typeof address === 'string' && viemIsAddress(address, { strict: false })
   } catch (error) {
     return false
   }
@@ -993,4 +1001,33 @@ export function formatInputNumberDecimal (value, decimal = 18) {
 
   const [integer, fraction] = str.split('.')
   return `${integer}.${fraction.slice(0, BigNumber(decimal).toNumber())}`
+}
+
+// A charted series can be perfectly FLAT — a stablecoin's price, a stable vault
+// reporting the same APY every day, a liquidity position that hasn't moved.
+// react-native-svg-charts then maps that single-value domain onto one pixel,
+// pinning the curve to the very bottom of the plot with a zero-height gradient:
+// a thin rule along the card floor.
+//
+// So for a flat series we widen the domain by hand and centre the value in it,
+// giving the line its usual mid-card position with the fill fading beneath. The
+// padding is RELATIVE to the value (with an absolute floor so a 0 series still
+// gets a domain) so the curve sits in the same place whatever the scale — $1
+// stablecoin, 3.52% APY or a $12k position.
+//
+// Returns `undefined` bounds for a series with real variation, which is what
+// the chart's `array.extent([...yValues, gridMin, gridMax])` ignores — so the
+// normal path is left exactly as it was.
+//
+// Feed the result to BOTH the AreaChart and the LineChart as `gridMin`/`gridMax`,
+// and use `start={isFlat ? gridMin : valueMin}` on the AreaChart so the fill
+// still spans from the centred line down to the chart floor.
+export const getFlatSeriesDomain = (valueMin, valueMax) => {
+  const span = valueMax - valueMin
+  // Relative epsilon, not `===`: float noise in a series that is flat for all
+  // practical purposes would otherwise be stretched into a fake jagged curve.
+  const isFlat = !(span > Math.abs(valueMax) * 1e-6)
+  if (!isFlat) return { isFlat: false, gridMin: undefined, gridMax: undefined }
+  const pad = Math.max(Math.abs(valueMax) * 0.5, 0.01)
+  return { isFlat: true, gridMin: valueMin - pad, gridMax: valueMax + pad }
 }

@@ -1,7 +1,7 @@
 import { StyleSheet } from 'react-native'
 import { Colors, pixelByHeight, pixelByWidth } from 'common/styles'
 
-const createStyles = () => {
+const buildStyles = () => {
   return StyleSheet.create({
     itemContainer: {
       gap: pixelByHeight(8)
@@ -22,6 +22,18 @@ const createStyles = () => {
       borderBottomColor: Colors.BG_BOX_SMALL
     }
   })
+}
+
+// Built once, then cached. These values are static (the app is dark-mode only),
+// so rebuilding the sheet on every render only burned CPU and — worse — handed
+// children a brand new style identity each time, defeating their memoization.
+let cachedStyles = null
+
+const createStyles = () => {
+  if (!cachedStyles) {
+    cachedStyles = buildStyles()
+  }
+  return cachedStyles
 }
 
 export default createStyles

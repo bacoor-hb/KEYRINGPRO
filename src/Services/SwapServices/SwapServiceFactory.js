@@ -1,6 +1,7 @@
 import DebridgeAdapter from './DebridgeAdapter'
 import RelayAdapter from './RelayAdapter'
 import { SWAP_SERVICE_CONFIG } from 'common/constants/app'
+import { PLATFORM_EXCHANGE } from 'common/constants/swap'
 import BaseAPI from 'controller/API/BaseAPI'
 
 /**
@@ -17,19 +18,19 @@ class SwapServiceFactory {
    * Get the active swap service instance based on chainId
    * @param {number} srcChainId - The source chain ID
    * @param {number} dstChainId - The destination chain ID (optional for same-chain swaps)
+   * @param {Array} [chainSupport] - Chain support data from settingExchange (each chain has bridgeProvider array)
    * @returns {BaseSwapService} The active swap service
    */
-  async getService (srcChainId = null, dstChainId = null) {
-    const activeProvider = await this.getActiveProvider(srcChainId, dstChainId)
-
+  async getService (bridgeProvider = null) {
     // Return cached instance if available
-    if (this.serviceInstances[activeProvider]) {
-      return this.serviceInstances[activeProvider]
+    if (this.serviceInstances[bridgeProvider]) {
+      return this.serviceInstances[bridgeProvider]
     }
 
     // Create new instance
-    const service = this.createService(activeProvider)
-    this.serviceInstances[activeProvider] = service
+    const service = this.createService(bridgeProvider)
+
+    this.serviceInstances[bridgeProvider] = service
 
     return service
   }
@@ -47,63 +48,71 @@ class SwapServiceFactory {
     }
 
     switch (providerName) {
-      case 'debridge':
+      case PLATFORM_EXCHANGE.deBridge:
         return new DebridgeAdapter(config)
 
-      case 'relay':
+      case PLATFORM_EXCHANGE.relay:
         return new RelayAdapter(config)
 
       default:
-        return new DebridgeAdapter(config)
+        return new RelayAdapter(config)
     }
   }
 
   /**
    * Get the name of the provider based on chainIds from Redux config
-   * @param {number} sourceChainId - The source chain ID to check
+   * @param {number} srcChainId - The source chain ID to check
    * @param {number} dstChainId - The destination chain ID to check (optional)
+   * @param {Array} [chainSupport] - Chain support data from settingExchange (each chain has bridgeProvider array)
    * @returns {string} Provider name ('debridge' or 'relay')
    */
-  async getActiveProvider (srcChainId = null, dstChainId = null) {
-    // Get config from API
+  async getActiveProvider (srcChainId = null, dstChainId = null, chainSupport = null) {
+    // Use chainSupport from settingExchange if provided — find a provider that supports BOTH chains
+    if (chainSupport?.length > 0 && srcChainId != null && dstChainId != null) {
+      const srcChain = chainSupport.find(c =>
+        c.chainId?.toString() === srcChainId?.toString()
+      )
+      const dstChain = chainSupport.find(c =>
+        c.chainId?.toString() === dstChainId?.toString()
+      )
+
+      if (srcChain?.bridgeProvider?.length > 0 && dstChain?.bridgeProvider?.length > 0) {
+        const commonProviders = srcChain.bridgeProvider.filter(p =>
+          dstChain.bridgeProvider.includes(p)
+        )
+        if (commonProviders.length > 0) {
+          const provider = commonProviders[0]
+          return provider
+        }
+      }
+    }
+
+    // Fall back to API-based config
     const result = await BaseAPI.getApiSettingByKey('keyring_EXCHANGE_PROVIDER')
     let configExchangeProvider = result?.keyring_EXCHANGE_PROVIDER
     const typeofConfig = typeof configExchangeProvider
     if (typeofConfig !== 'object' && !!typeofConfig) {
       configExchangeProvider = JSON.parse(configExchangeProvider)
     }
-    return 'relay'
 
-    // // If no chainId provided or no config, default to debridge
-    // if (!sourceChainId || Object.keys(configExchangeProvider).length === 0) {
-    //   return 'debridge'
-    // }
+    if (!srcChainId || Object.keys(configExchangeProvider).length === 0) {
+      return 'debridge'
+    }
 
-    // // For same-chain swaps, use dstChainId = srcChainId
-    // const destinationChainId = dstChainId || sourceChainId
-    // const isCrossChain = sourceChainId !== destinationChainId
+    const destinationChainId = dstChainId || srcChainId
 
-    // // Check which provider supports BOTH chains (for cross-chain) or single chain (for same-chain)
-    // for (const [providerName, providerConfig] of Object.entries(configExchangeProvider)) {
-    //   if (providerConfig.chainIds && Array.isArray(providerConfig.chainIds)) {
-    //     const supportsSrcChain = providerConfig.chainIds.includes(sourceChainId)
-    //     const supportsDstChain = providerConfig.chainIds.includes(destinationChainId)
+    for (const [providerName, providerConfig] of Object.entries(configExchangeProvider)) {
+      if (providerConfig.chainIds && Array.isArray(providerConfig.chainIds)) {
+        const supportsSrcChain = providerConfig.chainIds.includes(srcChainId)
+        const supportsDstChain = providerConfig.chainIds.includes(destinationChainId)
 
-    //     // Provider must support both chains
-    //     if (supportsSrcChain && supportsDstChain) {
-    //       if (isCrossChain) {
-    //         console.log(`🚀 ~ SwapServiceFactory ~ Using provider "${providerName}" for cross-chain swap: ${sourceChainId} → ${destinationChainId}`)
-    //       } else {
-    //         console.log(`🚀 ~ SwapServiceFactory ~ Using provider "${providerName}" for same-chain swap on chainId ${sourceChainId}`)
-    //       }
-    //       return providerName
-    //     }
-    //   }
-    // }
+        if (supportsSrcChain && supportsDstChain) {
+          return providerName
+        }
+      }
+    }
 
-    // // Default to debridge if no match found
-    // console.log(`🚀 ~ SwapServiceFactory ~ No provider found supporting both chains (${sourceChainId} → ${destinationChainId}), defaulting to "debridge"`)
-    // return 'debridge'
+    return 'debridge'
   }
 
   /**
@@ -113,8 +122,8 @@ class SwapServiceFactory {
    * @param {number} dstChainId - The destination chain ID to check (optional)
    * @returns {boolean}
    */
-  async isProviderActive (providerName, srcChainId = null, dstChainId = null) {
-    const activeProvider = await this.getActiveProvider(srcChainId, dstChainId)
+  async isProviderActive (providerName, srcChainId = null, dstChainId = null, chainSupport = null) {
+    const activeProvider = await this.getActiveProvider(srcChainId, dstChainId, chainSupport)
     return activeProvider === providerName
   }
 

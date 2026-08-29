@@ -35,7 +35,10 @@ const LiquidityManagementPage = ({ func, state }) => {
   const { data: listLiquidityPool = [], isLoading: isLoadingListLiquidity, refetch: refetchListLiquidity } = useGetListPoolLiquidity(listAddressRegisted, [], {
     enabled: isRegistered && !isLoadingCheckAddressCoinPool
   })
-  const { data: listTokensDetail, isLoading: isLoadingListTokensDetail } = useFetchMulticallDetailToken(listLiquidityPool)
+  // Same registered address as the pool list: the token details are keyed per address
+  // too, so both snapshots hydrate together and a row never paints its pair label /
+  // icons from the pool's own fallback fields before the details land.
+  const { data: listTokensDetail, isLoading: isLoadingListTokensDetail } = useFetchMulticallDetailToken(listLiquidityPool, listAddressRegisted)
 
   const dataListAddressCoinPoolChecked = dataCheckAddressCoinPool?.dataListAddressChecked || []
   const isLoading = isLoadingListLiquidity || isLoadingListTokensDetail || isLoadingCheckAddressCoinPool

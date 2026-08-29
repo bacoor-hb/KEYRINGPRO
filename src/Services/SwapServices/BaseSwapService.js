@@ -1,3 +1,5 @@
+import { sleep } from 'common/function'
+
 /**
  * Base abstract class for swap/bridge service providers
  * All swap service adapters must implement these methods
@@ -8,6 +10,24 @@ export default class BaseSwapService {
       throw new Error('BaseSwapService is abstract and cannot be instantiated directly')
     }
     this.config = config
+  }
+
+  /**
+   * Sleep in small chunks so a poll can abort quickly (within ~100ms) the moment
+   * `isCancelled` turns true — e.g. the drawer that owns the poll was closed.
+   * Returns false when cancelled, true when the full duration elapsed.
+   */
+  async sleepCancellable (milliseconds, isCancelled = null) {
+    const CHUNK = 100
+    let waited = 0
+    while (waited < milliseconds) {
+      if (typeof isCancelled === 'function' && isCancelled()) {
+        return false
+      }
+      await sleep(Math.min(CHUNK, milliseconds - waited))
+      waited += CHUNK
+    }
+    return !(typeof isCancelled === 'function' && isCancelled())
   }
 
   /**

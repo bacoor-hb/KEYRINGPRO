@@ -1,9 +1,10 @@
 
 import BaseAPI from 'controller/API/BaseAPI'
 import { useQuery } from 'react-query'
+import { useMemo } from 'react'
 import QueryString from 'query-string'
 import settings from 'controller/settings'
-import usePersistedQueryData from 'frontend/Hooks/usePersistedQueryData'
+import { buildPositionKey, useLiquidityPositionData, writeLiquidityPositionData } from 'frontend/Hooks/useLiquidityData'
 
 const getHistoryLiquidityPool = async ({ queryKey }) => {
   // eslint-disable-next-line no-unused-vars
@@ -32,14 +33,19 @@ const getHistoryLiquidityPool = async ({ queryKey }) => {
 }
 
 const useGetHistoryLiquidityPool = (poolId, chainId, owner, tokenId) => {
-  // Per-pool persisted snapshot — show the last result (even after app restart)
-  // while the network refetches.
-  const [persisted, persist] = usePersistedQueryData(`HISTORY_LIQUIDITY_POOL_${chainId}_${poolId}_${tokenId}`)
+  // Saved result for this position, from Redux — rehydrated before the first render, so
+  // reopening a position shows its previous chart immediately instead of an empty one.
+  // `owner` is the position's account, which is the address it is stored under.
+  const owners = useMemo(() => [owner], [owner])
+  const positionKey = buildPositionKey(chainId, tokenId)
+  const persisted = useLiquidityPositionData(owners, positionKey, 'history')
 
   const { data, isLoading } = useQuery(['getHistoryLiquidityPools', poolId, chainId, owner, tokenId], getHistoryLiquidityPool, {
     enabled: !!poolId && !!chainId && !!owner && !!tokenId,
     keepPreviousData: true,
-    onSuccess: persist
+    // The fetcher returns null on a failed/offline request, and the writer ignores null,
+    // so a bad response never replaces a good saved chart.
+    onSuccess: (value) => writeLiquidityPositionData(owners, positionKey, 'history', value)
   })
 
   const source = data ?? persisted

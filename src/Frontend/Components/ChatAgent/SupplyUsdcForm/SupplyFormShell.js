@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { View, TextInput, TouchableOpacity, ScrollView } from 'react-native'
 import BigNumber from 'bignumber.js'
-import { Colors } from 'common/styles'
 import I18n, { resolveLocale } from 'assets/Lang'
 import MyText from 'frontend/Components/UI/MyText'
 import MyButton from 'frontend/Components/UI/MyButton'
 import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
 import GlassView from 'frontend/Components/UI/GlassView'
 import { useX402FeeFor } from 'frontend/Hooks/useX402Fees'
+import { formatFeeLabel } from '../x402FeeLabel'
 import X402SignModal from '../X402SignModal'
 import { X402_PATH, runX402Gate } from '../WalletActionForm/x402Gate'
 import SupplyStatusTimeline from './SupplyStatusTimeline'
@@ -75,8 +75,16 @@ const fmtUsd = (n) => {
  * The ONE thing that genuinely differs between Aave, Compound, Spark and Morpho
  * is what the depositor receives back, so that is the only thing a protocol
  * component owns. It passes `ReceivedRow` — a COMPONENT (not a render callback)
- * rendered with `{ amount, validAmount }` into the "Est. Received" slot: a 1:1
- * aToken figure for Aave, a live share preview for a vault.
+ * rendered with `{ amount, validAmount, isEditable, estimate, onEstimate }`
+ * into the "Est. Received" slot: a 1:1 aToken figure for Aave, a live share
+ * preview for a vault.
+ *
+ * `estimate`/`onEstimate` exist for the vault case only. A 1:1 protocol can
+ * always re-derive its figure from the amount, but a vault's comes from a rate
+ * read that is disabled once the card settles — so the row reports each quote
+ * up here, this component persists it with the message, and hands it back on
+ * the next mount. It stays labelled an estimate; what was actually minted is a
+ * separate figure, parsed from the receipt and shown by the timeline.
  *
  * A component rather than a function because the vault variants need hooks (the
  * debounced `convertToShares` read) driven by the amount, and the amount is
@@ -101,10 +109,6 @@ export default function SupplyFormShell ({
 
   const decimals = asset?.decimals ?? 6
   const symbol = asset?.symbol || 'USDC'
-  // Upper-cased here rather than in the payload so the name reads as a brand
-  // however the agent happened to case it ("morpho", "Morpho" → "MORPHO"), and
-  // so the title and the contract label below can never disagree about it.
-  const protocolName = String(market?.protocol || '').toUpperCase()
   // The market's own page on its protocol's app, built backend-side (see
   // `marketLink` in keyring-agent-core). Null whenever the protocol's site is
   // unknown — the contract then renders as plain text rather than a dead tap,
@@ -118,6 +122,12 @@ export default function SupplyFormShell ({
     txState?.amount != null ? String(txState.amount) : (prefillAmount ? String(prefillAmount) : '')
   )
   const [touched, setTouched] = useState(false)
+
+  // The last figure the "Est. Received" row quoted, for protocols that read it
+  // off-chain rather than deriving it from the amount (vaults — see
+  // `ReceivedRow` above). Restored from the message so a settled card keeps the
+  // estimate it was submitted against instead of re-quoting at today's rate.
+  const [estimate, setEstimate] = useState(() => txState?.estimate ?? null)
 
   // What a supply costs in x402, read from the backend's own price list. This
   // drives BOTH the "※ Fee" line and whether the paid gate runs at all: priced →
@@ -240,7 +250,7 @@ export default function SupplyFormShell ({
     })
   }, [chainId, walletAddress, market, asset, amount, markX402Paid])
 
-  const { step, approveHash, supplyHash, error, execute } = useSupplyFlow({
+  const { step, approveHash, supplyHash, error, received, execute } = useSupplyFlow({
     market,
     asset,
     walletAddress,
@@ -264,6 +274,24 @@ export default function SupplyFormShell ({
   const validAmount = parsed.isFinite() && parsed.gt(0)
   const spendableBn = BigNumber(spendable)
   const exceedsBalance = validAmount && spendableBn.isFinite() && parsed.gt(spendableBn)
+
+  // What the typed amount is worth, shown beside the "Amount" label — the same
+  // "(~$X)" the wallet action and add-liquidity cards put next to theirs.
+  //
+  // No unit price comes down from the core, only the pair it already computed
+  // (`spendableUsd = spendable × price`), so the price is recovered by dividing
+  // the two. Exact, since both sides come from that one multiplication.
+  //
+  // Renders nothing whenever the token wasn't priced (no `spendableUsd`, an
+  // older core), and `gt(0)` on the divisor keeps a drained wallet from
+  // producing Infinity.
+  const unitPriceUsd = (() => {
+    const usd = BigNumber(spendableUsd)
+    if (!usd.isFinite() || usd.lte(0)) return null
+    if (!spendableBn.isFinite() || !spendableBn.gt(0)) return null
+    return usd.div(spendableBn)
+  })()
+  const amountUsd = validAmount && unitPriceUsd ? parsed.times(unitPriceUsd) : null
 
   // Not memoized: `t` closes over `language` and is rebuilt each render, so a
   // memo here would either be stale on a language switch or never hit.
@@ -334,8 +362,9 @@ export default function SupplyFormShell ({
 
   // Persist enough to restore the card: the amount that was signed, both hashes,
   // the outcome — including the failure reason, without which a restored error
-  // would render "Failed" with no explanation — and whether the fee is already
-  // paid, so a retry is not charged twice.
+  // would render "Failed" with no explanation, and the amount actually received,
+  // which is read from a receipt this card will not fetch again — and whether the
+  // fee is already paid, so a retry is not charged twice.
   //
   // Skipped while idle (nothing worth restoring) and while CHECKING (a transient
   // pre-flight phase with no transaction behind it, which the restore path
@@ -345,8 +374,8 @@ export default function SupplyFormShell ({
   // signed. That flag has to be written the moment it becomes true.
   useEffect(() => {
     if (!x402Paid && (step === SUPPLY_STEP.IDLE || step === SUPPLY_STEP.CHECKING)) return
-    onPersist?.({ step, approveHash, supplyHash, error, amount, x402Paid })
-  }, [step, approveHash, supplyHash, error, amount, x402Paid, onPersist])
+    onPersist?.({ step, approveHash, supplyHash, error, received, amount, estimate, x402Paid })
+  }, [step, approveHash, supplyHash, error, received, amount, estimate, x402Paid, onPersist])
 
   const handleSubmit = useCallback(() => {
     if (!canSubmit) return
@@ -373,10 +402,10 @@ export default function SupplyFormShell ({
         <View style={styles.headerBlock}>
           <View style={styles.header}>
             <View style={styles.headerTitle}>
-              {/* "Supply USDC to MORPHO" — the token comes from the asset actually
-                  being supplied rather than a hardcoded "USDC". */}
+              {/* "Supply USDC" — the token comes from the asset actually being
+                  supplied rather than a hardcoded "USDC". */}
               <MyTextTicker variant='subTitle' fontWeight={700}>
-                {t('supplyTitle', { symbol, protocol: protocolName })}
+                {t('supplyTitle', { symbol })}
               </MyTextTicker>
             </View>
             <View>
@@ -398,7 +427,7 @@ export default function SupplyFormShell ({
         <View style={styles.fieldGroup}>
           <View className='flex flex-row'>
             <MyText variant='default' fontWeight='700'>
-              {t('supplySendToContract', { protocol: protocolName })}
+              {t('supplySendToContract')}
             </MyText>
           </View>
           {/* Tapping the contract opens that market's page on the protocol's own
@@ -416,25 +445,63 @@ export default function SupplyFormShell ({
 
         {/* Amount */}
         <View style={styles.fieldGroup}>
-          <View className='flex flex-row'>
-            <MyText variant='default' fontWeight='700'>{t('supplyAmount')}</MyText>
+          <View style={styles.labelRow}>
+            <View>
+              <MyText variant='default' fontWeight='700'>{t('supplyAmount')}</MyText>
+            </View>
+            {/* What the typed amount is worth, beside the label — mirroring the
+                wallet action card. Only while the card is still pre-send: once
+                the supply is signed the figure is a stale quote of a price that
+                has since moved. Nothing renders when the token wasn't priced. */}
+            <View
+              style={{
+                flex: 1
+              }}>
+              {isPreSend && !!fmtUsd(amountUsd) && (
+                <MyTextTicker variant='small' className='text-low'>
+                  (~{fmtUsd(amountUsd)})
+                </MyTextTicker>
+              )}
+            </View>
           </View>
           <GlassView effect='clear' style={styles.inputRow}>
-            <TextInput
-              style={styles.input}
-              className='text-white font-semibold'
-              value={amount}
-              onChangeText={(v) => {
-                setAmount(sanitizeAmount(v, decimals))
-                setTouched(true)
-              }}
-              editable={isEditable}
-              keyboardType='decimal-pad'
-              placeholder={t('enterAmount')}
-              placeholderTextColor={Colors.TEXT_LOW}
-              autoCapitalize='none'
-              autoCorrect={false}
-            />
+            {/* The field always carries the FILLED style (18/bold) and never
+                renders a native placeholder. The hint is an overlaid <MyText>
+                instead.
+
+                Why not `placeholder` + a conditional style: the native view
+                clears its text on the keystroke, while `setAmount('')` only
+                reaches this style a frame later — so on delete the placeholder
+                was painted once at 18/bold before snapping to the small style.
+                Swapping `fontFamily` (Geist-Bold <-> Geist-Regular are separate
+                files) made it worse by forcing a native font reload on the same
+                view. Holding one style on the input removes both effects: the
+                hint is a sibling that simply mounts/unmounts. */}
+            <View style={styles.inputWrap}>
+              <TextInput
+                style={[styles.input, styles.inputFilled]}
+                className='text-white '
+                value={amount}
+                onChangeText={(v) => {
+                  setAmount(sanitizeAmount(v, decimals))
+                  setTouched(true)
+                }}
+                editable={isEditable}
+                keyboardType='decimal-pad'
+                autoCapitalize='none'
+                autoCorrect={false}
+              />
+              {!amount && (
+                <MyText
+                  className='text-low'
+                  style={styles.inputPlaceholder}
+                  pointerEvents='none'
+                  numberOfLines={1}
+                >
+                  {t('enterAmount')}
+                </MyText>
+              )}
+            </View>
             <MyText className='text-medium font-medium'>{symbol}</MyText>
           </GlassView>
 
@@ -473,7 +540,7 @@ export default function SupplyFormShell ({
                     }}
                   >
                     <GlassView interactive style={styles.quickChip}>
-                      <MyText variant='small' className='font-semibold'>{p}%</MyText>
+                      <MyText variant='small' className=''>{p}%</MyText>
                     </GlassView>
                   </TouchableOpacity>
                 ))}
@@ -498,15 +565,23 @@ export default function SupplyFormShell ({
           <View className='flex flex-row'>
             <MyText variant='default' fontWeight='700'>{t('supplyEstReceived')}</MyText>
           </View>
-          <GlassView
-            effect='clear'
+          <View
             style={[styles.panelRow, {
-              pointerEvents: 'none'
+              backgroundColor: '#CCD4FF0A'
             }]}>
             {/* `isEditable` lets a vault skip its preview read on a card that is
-                settled or replaying from history — see `useSharePreview`. */}
-            <ReceivedRow amount={amount} validAmount={validAmount} isEditable={isEditable} />
-          </GlassView>
+                settled or replaying from history — see `useSharePreview`.
+                `estimate`/`onEstimate` let a protocol that QUOTES its figure
+                (a vault) keep the last quote across that gap, instead of
+                falling back to the deposited amount. */}
+            <ReceivedRow
+              amount={amount}
+              validAmount={validAmount}
+              isEditable={isEditable}
+              estimate={estimate}
+              onEstimate={setEstimate}
+            />
+          </View>
         </View>
 
         {/* Est. Earnings */}
@@ -551,7 +626,7 @@ export default function SupplyFormShell ({
         <View style={styles.submitBlock}>
           {isPreSend && !!x402Fee && (
             <MyText className='text-medium' style={styles.feeNotice}>
-              {t('walletActionFeeNotice', { fee: x402Fee.label })}
+              {t('walletActionFeeNotice', { fee: formatFeeLabel(x402Fee, language) })}
             </MyText>
           )}
 
@@ -604,6 +679,7 @@ export default function SupplyFormShell ({
           chainId={chainId}
           walletAddress={walletAddress}
           onCopyHash={onCopyHash}
+          received={received}
           // The settled result animates only when it settles in front of the
           // user; a card restored already-finished renders it statically.
           animate={settledLive}

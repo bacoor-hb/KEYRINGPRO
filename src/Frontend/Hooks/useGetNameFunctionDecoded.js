@@ -6,10 +6,39 @@ import { useMemo } from 'react'
 import { useQuery } from 'react-query'
 import { constants } from 'ethers'
 import CoinGeckoAPI from 'controller/API/CoinGeckoAPI'
-import { formatUnits } from 'viem'
+import { formatUnits, decodeFunctionData } from 'viem'
 import AllChainServices from 'controller/AllChainServices'
 import images from 'assets/Image'
 import BaseAPI from 'controller/API/BaseAPI'
+
+// Same minimal ABI RequestCard uses to re-encode a custom spending cap — kept
+// here too so the standard approve(address,uint256) selector can be decoded
+// locally, without depending on the scan-API decoder below (which only covers
+// chains in its own allowlist and returns null for anything else, e.g. custom
+// / dynamic chains).
+const ERC20_APPROVE_ABI = [{
+  name: 'approve',
+  type: 'function',
+  inputs: [
+    { name: 'spender', type: 'address' },
+    { name: 'amount', type: 'uint256' }
+  ]
+}]
+
+// Some dApps prefix the calldata with a `--{"type":"..."}--` metadata blob.
+// redux.js parses that blob into params[0].information and stores the STRIPPED
+// calldata in params[0].data, but keeps the RAW prefixed string in payload.dataTx
+// (which is what this hook receives). Strip it back off before any decode:
+// viem's decodeFunctionData needs a plain hex string, and the selector sniff
+// below needs the calldata to actually start at index 0.
+// Mirrors the same split in redux.js / decodeDataTxAndGetMethodName.
+const stripCalldataMetadata = (dataTxRaw) => {
+  if (typeof dataTxRaw !== 'string') return dataTxRaw
+  const parts = dataTxRaw.split('--')
+  const data = parts[2] || parts[0]
+  if (!data) return data
+  return data.startsWith('0x') ? data : `0x${data}`
+}
 
 const getNameFunctionDecoded = async ({ queryKey }) => {
   // eslint-disable-next-line no-unused-vars
@@ -103,7 +132,7 @@ const getApproveTokenInfo = async ({ queryKey }) => {
 }
 
 const useGetNameFunctionDecoded = (requestTxData) => {
-  const dataTx = requestTxData?.dataTx
+  const dataTx = stripCalldataMetadata(requestTxData?.dataTx)
   const chainId = requestTxData?.chainId
   const to = requestTxData?.params?.[0]?.to
 
@@ -115,32 +144,50 @@ const useGetNameFunctionDecoded = (requestTxData) => {
     }
   )
 
-  // Cache requestMethodName via useMemo
-  const requestMethodName = useMemo(() => {
-    return getWalletconnectRequestMethodName(
-      requestTxData.params[0],
-      false,
-      { nameFunctionDecodedData: decodedTxData?.method, forceGetMethodName: requestTxData?.forceGetMethodName }
-    )
-  }, [decodedTxData, requestTxData])
-
-  const requestMethodNameWithLabel = useMemo(() => {
-    return getWalletconnectRequestMethodName(
-      requestTxData.params[0],
-      true,
-      { nameFunctionDecodedData: decodedTxData?.method, forceGetMethodName: requestTxData?.forceGetMethodName }
-    )
-  }, [decodedTxData, requestTxData])
-
-  // True for any approve method (ERC20 or not) — known right after decode.
-  const isApproveMethod = requestTxData?.params?.[0]?.information?.type === 'CONFIRM_APPROVE' || requestMethodName === 'APPROVE'
-
   // Synchronous approve hint from the raw calldata: ERC20 approve(address,uint256)
   // always starts with the selector 0x095ea7b3. Available on the very first render
   // (before async decode), so the UI can reserve the spending-cap height up front
   // for approves only — other txs (e.g. transfer) never reserve it.
   const isApproveLikely = requestTxData?.params?.[0]?.information?.type === 'CONFIRM_APPROVE' ||
     (typeof dataTx === 'string' && dataTx.toLowerCase().startsWith('0x095ea7b3'))
+
+  // Local, synchronous decode of the standard approve selector — a fallback for
+  // when the scan-API decoder below can't resolve the method (it only covers
+  // chains in its own allowlist and returns null for anything else, e.g. custom
+  // / dynamic chains). Without this, an approve on such a chain never resolves
+  // its method name, so isApproveLikely reserves the spending-cap UI space but
+  // nothing ever fills it.
+  const localApproveDecoded = useMemo(() => {
+    if (!isApproveLikely || typeof dataTx !== 'string') return null
+    try {
+      const [spender, amount] = decodeFunctionData({ abi: ERC20_APPROVE_ABI, data: dataTx }).args
+      // Stringify the bigint amount — react-query hashes the query key with
+      // JSON.stringify, which throws on a raw BigInt.
+      return { inputs: [spender, amount.toString()] }
+    } catch (error) {
+      return null
+    }
+  }, [isApproveLikely, dataTx])
+
+  // Cache requestMethodName via useMemo
+  const requestMethodName = useMemo(() => {
+    return getWalletconnectRequestMethodName(
+      requestTxData.params[0],
+      false,
+      { nameFunctionDecodedData: decodedTxData?.method || (localApproveDecoded ? 'approve' : undefined), forceGetMethodName: requestTxData?.forceGetMethodName }
+    )
+  }, [decodedTxData, localApproveDecoded, requestTxData])
+
+  const requestMethodNameWithLabel = useMemo(() => {
+    return getWalletconnectRequestMethodName(
+      requestTxData.params[0],
+      true,
+      { nameFunctionDecodedData: decodedTxData?.method || (localApproveDecoded ? 'approve' : undefined), forceGetMethodName: requestTxData?.forceGetMethodName }
+    )
+  }, [decodedTxData, localApproveDecoded, requestTxData])
+
+  // True for any approve method (ERC20 or not) — known right after decode.
+  const isApproveMethod = requestTxData?.params?.[0]?.information?.type === 'CONFIRM_APPROVE' || requestMethodName === 'APPROVE'
 
   // Check if contract is ERC721
   const { data: isERC720, isLoading: isLoadingIsERC720 } = useQuery(
@@ -155,12 +202,16 @@ const useGetNameFunctionDecoded = (requestTxData) => {
   // Check if this is approve transaction for ERC20 token (not ERC721 NFT)
   const isConfirmApprove = isApproveMethod && isERC720
 
+  // Prefer the scan-API decoder's inputs; fall back to the local selector decode
+  // above when the scan API couldn't resolve this chain/contract.
+  const approveInputs = decodedTxData?.inputs || localApproveDecoded?.inputs
+
   // Cache approveTokenInfo by react-query
   const { data: approveTokenInfo, isLoading: isLoadingApproveInfo, isIdle: isIdleApproveInfo } = useQuery(
-    ['approveTokenInfo', chainId, to, decodedTxData?.inputs],
+    ['approveTokenInfo', chainId, to, approveInputs],
     getApproveTokenInfo,
     {
-      enabled: isConfirmApprove && !!decodedTxData?.inputs && !!chainId && !!to,
+      enabled: isConfirmApprove && !!approveInputs && !!chainId && !!to,
       staleTime: 30 * 60 * 1000 // Cache for 30 minutes
     }
   )

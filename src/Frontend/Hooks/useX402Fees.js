@@ -9,11 +9,6 @@ import { setX402Fees } from 'frontend/Components/ChatAgent/InitSuggestions/sugge
 // without a release, and there is no second copy of the number to drift.
 const OPENAPI_PATH = '/openapi.json'
 
-// Everything is settled in USDC on Base (see the spec's `x-guidance`), and the
-// prices are quoted in USD. The spec does not name the settlement token per
-// route, so the network/token half of the label stays app-side copy.
-const SETTLEMENT = 'USDC on Base'
-
 // "0.05" → "0.05", "3" → "3", "3.00" → "3". Trailing zeros are dropped so a
 // whole-dollar fee reads as "3 USDC" rather than "3.00 USDC", but a genuine
 // sub-cent price keeps its digits.
@@ -58,9 +53,7 @@ const parseFees = (doc) => {
         amount,
         currency: price.currency || 'USD',
         path,
-        method: String(method).toUpperCase(),
-        // What the pill actually prints, e.g. "0.05 USDC on Base".
-        label: `${amount} ${SETTLEMENT}`
+        method: String(method).toUpperCase()
       }
     }
   }
@@ -141,7 +134,8 @@ export default function useX402Fees () {
  *
  * @param {string|{path: string, method?: string}} [endpoint]
  * @returns {{ fee: object|null, isLoading: boolean }} `fee` is the entry
- *   (`{ amount, currency, path, method, label }`) or null when unpriced.
+ *   (`{ amount, currency, path, method }`) or null when unpriced. Print it with
+ *   `formatFeeLabel(fee, language)` — the entry holds no pre-rendered label.
  */
 export function useX402FeeFor (endpoint) {
   const { fees, isLoading } = useX402Fees()

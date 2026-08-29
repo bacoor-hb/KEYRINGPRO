@@ -1,5 +1,9 @@
 import { StyleSheet } from 'react-native'
-import { Colors, getHeightHeaderDrawer, getSizeImgSquare, pixelByHeight, pixelByWidth } from 'common/styles'
+import { Colors, getHeightHeaderDrawer, getSizeImgSquare, pixelByHeight, pixelByWidth, sizeImageSquare } from 'common/styles'
+
+// Half the slider thumb — pads the track so the thumb at either extreme stays
+// inside the wrap instead of overlapping the label / card edge.
+const SLIDER_PAD = sizeImageSquare(11)
 
 const styles = StyleSheet.create({
   // No bg/radius here — the drawer wrapper renders MyLinearGradient + rounded-32.
@@ -84,7 +88,9 @@ const styles = StyleSheet.create({
   gasRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: pixelByWidth(14),
+    // Small gap: the slider wrap already reserves SLIDER_PAD on its right for the
+    // thumb, so a large gap here reads as a hole between the bar and the label.
+    gap: pixelByWidth(8),
     paddingHorizontal: pixelByWidth(16),
     paddingVertical: pixelByHeight(14)
   },
@@ -93,7 +99,12 @@ const styles = StyleSheet.create({
   },
   gasSliderWrap: {
     flex: 1,
+    paddingHorizontal: SLIDER_PAD,
     justifyContent: 'center'
+  },
+  // Measured child — trackWidth excludes the thumb padding above.
+  gasSliderMeasure: {
+    width: '100%'
   },
   sliderContainer: {
     height: pixelByHeight(20)
@@ -120,7 +131,12 @@ const styles = StyleSheet.create({
   },
   gasGwei: {
     color: Colors.TEXT_MEDIUM,
-    minWidth: pixelByWidth(60),
+    // FIXED width (not minWidth): the value now updates live while dragging and
+    // changes width ("1x" -> "10.4x"); a growing label would shrink the flex:1
+    // slider, re-measure trackWidth and make the bar/thumb jump under the finger.
+    // Sized to fit the longest value ("9.8x Gwei") at the default 16.5px, so the
+    // right-aligned text sits close to the slider without needing to shrink.
+    width: pixelByWidth(86),
     textAlign: 'right'
   },
 

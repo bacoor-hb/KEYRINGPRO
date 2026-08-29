@@ -1,4 +1,4 @@
-import { saveDataToAsyncStorage } from '../lib/reducerConfig'
+import { saveDataToAsyncStorage, saveDataToAsyncStorageDebounced } from '../lib/reducerConfig'
 import notifee from '@notifee/react-native'
 import { KEYSTORE, REDUX_KEY } from 'common/constants/redux'
 import { storeDataToSecureStorage } from 'common/storage/secureStorage'
@@ -157,6 +157,14 @@ export default class StorageReduxAction {
     }
   }
 
+  static setLiquidityData (payload) {
+    saveDataToAsyncStorage(payload, KEYSTORE.SET_LIQUIDITY_DATA)
+    return {
+      type: KEYSTORE.SET_LIQUIDITY_DATA,
+      payload
+    }
+  }
+
   // <- Data stored ins Secure storage
   static setTokenJWT (payload) {
     storeDataToSecureStorage(KEYSTORE.TOKEN_JWT, payload)
@@ -184,8 +192,11 @@ export default class StorageReduxAction {
 
   // -> Data stored ins Secure storage
 
+  // Debounced on purpose: a balance refresh commits this key once per chain per
+  // account, and each write serializes every account's tokens. Redux still gets
+  // the value immediately; only the disk copy is coalesced (see reducerConfig).
   static setAccountTokenList (payload) {
-    saveDataToAsyncStorage(payload, KEYSTORE.SET_ACCOUNT_TOKEN_LIST)
+    saveDataToAsyncStorageDebounced(payload, KEYSTORE.SET_ACCOUNT_TOKEN_LIST)
     return {
       type: KEYSTORE.SET_ACCOUNT_TOKEN_LIST,
       payload
@@ -211,6 +222,14 @@ export default class StorageReduxAction {
     saveDataToAsyncStorage(payload, KEYSTORE.NOTIFICATION_READ_IDS)
     return {
       type: KEYSTORE.NOTIFICATION_READ_IDS,
+      payload
+    }
+  }
+
+  static setSettingExchange (payload) {
+    saveDataToAsyncStorage(payload, KEYSTORE.SET_SETTING_EXCHANGE)
+    return {
+      type: KEYSTORE.SET_SETTING_EXCHANGE,
       payload
     }
   }

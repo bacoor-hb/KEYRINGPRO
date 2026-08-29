@@ -38,7 +38,7 @@ const settings = () => {
       42220: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.celo-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
       4326: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.megaeth-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
       100: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.xdai.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
-      // 747474: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.katana-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`, // "error":"Network mismatch" from Quicknode, so we don't use this chain for now.
+      747474: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.katana-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`, // "error":"Network mismatch" from Quicknode, so we don't use this chain for now.
       143: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.monad-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
       57073: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.ink-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
       4217: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.tempo-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,

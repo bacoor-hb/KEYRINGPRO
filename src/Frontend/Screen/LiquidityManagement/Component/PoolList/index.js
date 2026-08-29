@@ -1,7 +1,6 @@
 import React, { useRef } from 'react'
 import { View, TouchableOpacity, Animated, InteractionManager } from 'react-native'
 import Swipeable from 'react-native-gesture-handler/Swipeable'
-import LottieView from 'lottie-react-native'
 import BigNumber from 'bignumber.js'
 import moment from 'moment'
 import TextTicker from 'react-native-text-ticker'
@@ -30,6 +29,7 @@ import { Colors, getHeightHeader, getSizeImgSquare, pixelByWidth } from 'common/
 import LottieRefreshFlatList from 'frontend/Components/UI/LottieRefreshFlatList'
 import Overview from '../Overview'
 import styles from './styles'
+import MyDotsLoading from 'frontend/Components/UI/MyDotsLoading'
 
 // Total swipe-open width = the actions column width defined in styles.actionsBox.
 // The column is wider than the round button so the label below it isn't clipped
@@ -399,7 +399,7 @@ const PoolList = ({ _this, isLoading, listLiquidityPool = [], listTokensDetail, 
     if (isLoading) {
       return (
         <View style={styles.loaderBox}>
-          <LottieView style={styles.loader} source={images.keyringLoadingV1} autoPlay loop resizeMode='cover' />
+          <MyDotsLoading variant='small' />
         </View>
       )
     }
@@ -443,7 +443,7 @@ const PoolList = ({ _this, isLoading, listLiquidityPool = [], listTokensDetail, 
       // listContent already reserves the header height, so don't let the component
       // add its own blur-header spacer (would double the top padding).
       blurHeader={false}
-      data={isLoading ? [] : sorted}
+      data={sorted}
       extraData={arrayAddressDeleted}
       keyExtractor={(item) => `${item._id}`}
       // removeClippedSubviews={false}

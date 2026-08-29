@@ -15,14 +15,28 @@ import BaseAPI from 'controller/API/BaseAPI'
 import CoinGeckoAPI from 'controller/API/CoinGeckoAPI'
 import { SUPPORTED_CHAINS_BY_SERVICE_MORALIS, SUPPORTED_CHAINS_BY_SERVICE_ALCHEMY, MULTICALL3_CHAIN_IDS } from 'common/constants/chain'
 import { lowerCase, getChainInfo, getRpcUrlByChain } from 'common/function'
-import { erc20Abi, formatUnits, isAddress, parseUnits } from 'viem'
+import { erc20Abi, formatUnits, isAddress, zeroAddress } from 'viem'
 import ViemWeb3 from 'src/Web3/ViemWeb3'
 import { isNativeToken } from 'common/tokens'
 // Yield-token valuation lives in keyring-agent-core, which already models the
 // ERC-4626-share vs. rebasing-receipt distinction for its lending protocols.
-// Core plans the reads; this service executes them over its own RPC stack.
-import { planYieldTokenConversions, applyYieldConversions, isShareBasedProtocol } from 'keyring-agent-core'
+// Core now owns the reads too (`valueYieldTokens` / `resolveTokenPriceUSD`):
+// it plans them, batches them over its own multicall, and folds the answers
+// back — this service used to hand-roll that batching and had grown a second,
+// worse copy of it. The RPC endpoint is still ours, passed per call.
+//
+// Identity (`yieldProtocol` / `yieldAsset`) stays OUR job: it is resolved from
+// sources only this service can see (the live API row, the field persisted on
+// the token, a by-address re-ask, the Redux snapshot), so the tokens handed to
+// core arrive already described. Letting core re-fetch it would see only the
+// first of those and silently drop the tag on a snapshot-recovered vault.
+// `planYieldTokenConversions` is still imported, but ONLY to explain a decision
+// in the debug trace below (which tokens qualified, and why the rest didn't).
+// The valuation itself no longer runs it here — `valueYieldTokens` does, so the
+// trace describes the same plan the conversion actually used.
+import { valueYieldTokens, resolveTokenPriceUSD, isShareBasedProtocol, planYieldTokenConversions, effectivePriceUSD } from 'keyring-agent-core'
 import { resolveOnchainSymbols } from './symbolOnchain'
+import pLimit from 'p-limit'
 
 // Multicall3 deployment is the same address across most EVM chains.
 const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11'
@@ -32,38 +46,6 @@ const MULTICALL3_ABI = [
     name: 'getEthBalance',
     outputs: [{ name: 'balance', type: 'uint256' }],
     stateMutability: 'view',
-    type: 'function'
-  }
-]
-
-// Batches pre-encoded calldata (which viem's `multicall` helper can't take —
-// it encodes from an ABI). Used for the yield conversions planned by
-// keyring-agent-core, which arrive as raw {target, callData}.
-const MULTICALL3_AGGREGATE3_ABI = [
-  {
-    inputs: [
-      {
-        components: [
-          { name: 'target', type: 'address' },
-          { name: 'allowFailure', type: 'bool' },
-          { name: 'callData', type: 'bytes' }
-        ],
-        name: 'calls',
-        type: 'tuple[]'
-      }
-    ],
-    name: 'aggregate3',
-    outputs: [
-      {
-        components: [
-          { name: 'success', type: 'bool' },
-          { name: 'returnData', type: 'bytes' }
-        ],
-        name: 'returnData',
-        type: 'tuple[]'
-      }
-    ],
-    stateMutability: 'payable',
     type: 'function'
   }
 ]
@@ -78,6 +60,48 @@ const MIN_VISIBLE_VALUE_USD = 0.01
 // Per-token RPC reads (sequential fallback) run in bounded-concurrency batches —
 // fast enough without blasting the RPC as one giant burst.
 const SEQUENTIAL_RPC_CONCURRENCY = 8
+
+// ONE account sweeps at a time.
+//
+// This is the fix for the home screen locking up when a user opens many funded
+// accounts in a row. Measured on device, by flipping this one constant with
+// everything else held fixed: 20 reproduces the original jank, 1 is smooth.
+//
+// What costs is not the request count and not the loading animations — both were
+// ruled out separately. It is the CHAIN COMMIT churn: every chain that lands
+// parses a large response, rebuilds and re-sorts that account's whole token list,
+// dispatches, persists and re-renders the row. Twenty accounts sweeping at once
+// crams ~200 of those into the same stretch of JS thread the user is tapping on.
+// Serializing does not reduce the total work, it spreads it out so the thread
+// always has room for the next tap.
+//
+// Bounding CHAIN fetches instead was measurably worse: with a cap that isn't a
+// multiple of one account's chain count, accounts interleave (account 1 takes
+// six slots, account 2 picks up the four left over, …) so several accounts sit
+// mid-sweep at once — the exact state to avoid. Serializing per account also
+// stays correct no matter how many chains the user activated, which a
+// chain-count-derived number does not.
+//
+// A single account is never throttled: all of its chains still run in parallel,
+// so the common case (one or two accounts) is exactly as fast as it was before
+// any limiter existed.
+// Exported so the test asserts against the value actually in force instead of a
+// number copied into the test file, which would go stale the moment this is tuned.
+export const ACCOUNT_SWEEP_CONCURRENCY = 2
+const accountSweepLimit = pLimit(ACCOUNT_SWEEP_CONCURRENCY)
+
+// Slow chains (per-token RPC, no indexer) keep their own small pool: they stream
+// in behind the fast ones, and must not hold an account's sweep slot hostage
+// while a later row waits to load.
+const BACKGROUND_CHAIN_FETCH_CONCURRENCY = 2
+const backgroundChainLimit = pLimit(BACKGROUND_CHAIN_FETCH_CONCURRENCY)
+
+// Full refreshes currently queued or in flight, keyed by address. The home row's
+// effect re-runs on every progressive commit; the redux loading flag catches the
+// common case but it is UI state, and a queued refresh must not be scheduled
+// twice. Callers that arrive while one is running join it instead of starting a
+// second sweep, so they still resolve when the fast chains are done.
+const pendingFullRefresh = new Map()
 
 // How long an account with failed chains waits before it counts as stale again.
 // A provider outage would otherwise be retried on every focus / every commit;
@@ -621,46 +645,6 @@ const assertEmptyIsPlausible = (chainId, address, source) => {
   }
 }
 
-// Execute the raw {target, callData} reads planned by keyring-agent-core and
-// return their return-data aligned with `calls` (null wherever a read failed).
-//
-// Multicall3 chains get the whole batch in ONE round-trip. Everywhere else the
-// calls are made individually — deliberately in small bounded batches rather
-// than one big Promise.all, since these chains are exactly the ones most likely
-// to rate-limit a burst. Reuses SEQUENTIAL_RPC_CONCURRENCY so the pacing matches
-// the rest of this service.
-const executeRawCalls = async (chainId, calls) => {
-  if (calls.length === 0) return []
-  const client = ViemWeb3.getPublicClient(chainId)
-
-  if (MULTICALL3_CHAIN_IDS.has(Number(chainId))) {
-    try {
-      // Core hands us pre-encoded calldata, so we call Multicall3.aggregate3
-      // directly rather than viem's `multicall` helper (which encodes from an
-      // ABI). allowFailure keeps one reverting vault from failing the batch.
-      const results = await client.readContract({
-        address: MULTICALL3_ADDRESS,
-        abi: MULTICALL3_AGGREGATE3_ABI,
-        functionName: 'aggregate3',
-        args: [calls.map((c) => ({ target: c.target, allowFailure: true, callData: c.callData }))]
-      })
-      return calls.map((_, i) => (results[i]?.success ? results[i].returnData : null))
-    } catch {
-      return calls.map(() => null)
-    }
-  }
-
-  const out = []
-  for (let i = 0; i < calls.length; i += SEQUENTIAL_RPC_CONCURRENCY) {
-    const batch = calls.slice(i, i + SEQUENTIAL_RPC_CONCURRENCY)
-    const settled = await Promise.all(
-      batch.map((c) => client.call({ to: c.target, data: c.callData }).then((r) => r?.data ?? null).catch(() => null))
-    )
-    out.push(...settled)
-  }
-  return out
-}
-
 // Yield identity resolved as a PAIR from ordered sources. The first source that
 // has an ANSWER for `yieldProtocol` (anything but `undefined` — `null` is the
 // recorded answer "not a vault" and must stop the search, which is why a
@@ -688,9 +672,9 @@ const resolveYieldIdentity = (sources) => {
 // live check measured 1 steakUSDC = 1.0354 USDC, 1 Spark sUSDC = 1.1051 USDC).
 // Rebasing receipts (aave-v3 / compound-v3) are already denominated in the
 // underlying and must NOT be touched.
+// its lending protocols), so this function only supplies inputs, runs the reads,
 //
 // That whole distinction lives in keyring-agent-core (`balanceIsUnderlying` on
-// its lending protocols), so this function only supplies inputs, runs the reads,
 // and writes the answers back:
 //   valueUSD → the position valued in underlying units
 //   priceUSD → value per SHARE, keeping a row's unit price consistent with its
@@ -778,7 +762,13 @@ const applyYieldTokenValues = async (chainId, tokens, keyringByMetaKey, snapshot
       decimals: Number(t.decimals ?? 18),
       priceUSD: t.priceUSD,
       yieldProtocol: identity.yieldProtocol,
-      yieldAsset: identity.yieldAsset
+      yieldAsset: identity.yieldAsset,
+      // Needed only by cross-chain sUSDS, whose token implements no ERC-4626:
+      // its shares are valued against the chain's SSR oracle, and core resolves
+      // that address per chain. Every other vault converts against itself and
+      // ignores this. Without it such a row is passed through at 1:1, which
+      // understates the position by exactly the yield accrued.
+      chain: chainId
     }
   })
 
@@ -860,21 +850,22 @@ const applyYieldTokenValues = async (chainId, tokens, keyringByMetaKey, snapshot
     }
   }
 
-  // No planned calls still runs the fold below: it is what turns the inputs into
-  // the pass-through `balance × price` values every token needs. executeRawCalls
-  // itself short-circuits an empty batch, so this costs no RPC.
-  const returns = await executeRawCalls(chainId, plan.calls)
-  const values = applyYieldConversions(inputs, plan, returns)
+  // Core plans, batches and folds in one call. An input set with nothing
+  // convertible still returns a full map — the pass-through `balance × price`
+  // value every token needs — and costs no RPC, so the zero-balance-vault-only
+  // pass above reaches here harmlessly.
+  //
+  // Our RPC endpoint is passed explicitly: core PREFERS it and keeps the chain's
+  // other endpoints behind it as backups, so the paid provider leads without
+  // becoming a single point of failure.
+  const values = await valueYieldTokens(chainId, inputs, { rpcUrl: getRpcUrlByChain(Number(chainId)) })
 
-  // Only worth a line when there was actually something to read — an empty batch
-  // otherwise logs "0/0 succeeded", which reads like a failure but just means the
-  // pass got here for the zero-balance vaults alone (they are priced above, off a
-  // synthetic share, not through this batch).
-  if (DEBUG_YIELD && returns.length > 0) {
-    const via = MULTICALL3_CHAIN_IDS.has(Number(chainId))
-      ? 'aggregate3 (single round-trip)'
-      : `sequential RPC (batches of ${SEQUENTIAL_RPC_CONCURRENCY})`
-    logYield(`  read via ${via}: ${returns.filter((r) => r != null).length}/${returns.length} succeeded`)
+  // Read outcome, counted from the folded values rather than from raw return
+  // data — core owns the transport now, so the honest thing to report is how
+  // many of the planned conversions actually landed.
+  if (DEBUG_YIELD && plan.calls.length > 0) {
+    const converted = plan.calls.filter((c) => values.get(c.key)?.converted).length
+    logYield(`  ${converted}/${plan.calls.length} conversion read(s) succeeded`)
   }
 
   return tokens.map((rawT) => {
@@ -894,10 +885,27 @@ const applyYieldTokenValues = async (chainId, tokens, keyringByMetaKey, snapshot
       }
       return t
     }
+    // The price the valuation ACTUALLY used, not the API's quote: an underlying
+    // carrying `fixedPrice` is valued at that instead, and printing the quote
+    // here made the log's own arithmetic fail to add up — `0.738156 x 0.999914`
+    // does not equal the `0.738156` shown beside it, which reads as a bug in a
+    // number that is in fact correct.
+    // Guarded: this runs only to LABEL a value core already computed, so a core
+    // build without this export (or any throw inside it) must not take the
+    // refresh down with it — a wrong number in a debug line is a far smaller
+    // problem than a chain that fails to commit.
+    let usedPrice = t.priceUSD
+    try {
+      const inputForPrice = inputs.find((i) => i.key === t.metaKey)
+      if (inputForPrice && typeof effectivePriceUSD === 'function') {
+        usedPrice = effectivePriceUSD(inputForPrice)
+      }
+    } catch { /* keep the API quote for the log */ }
+    const fixedNote = usedPrice !== t.priceUSD ? ` [fixedPrice $${usedPrice}, API quote $${t.priceUSD}]` : ''
     logYield(
-      `  ${t.symbol}: ${t.balanceFormatted} shares x $${t.priceUSD} = $${t.valueUSD}` +
-      ` -> ${v.underlyingAmount} underlying x $${t.priceUSD} = $${v.valueUSD}` +
-      ` (price per share $${v.pricePerTokenUSD})`
+      `  ${t.symbol}: ${t.balanceFormatted} shares x $${usedPrice} = $${t.balanceFormatted * usedPrice}` +
+      ` -> ${v.underlyingAmount} underlying x $${usedPrice} = $${v.valueUSD}` +
+      ` (price per share $${v.pricePerTokenUSD})${fixedNote}`
     )
     return { ...t, valueUSD: v.valueUSD, priceUSD: v.pricePerTokenUSD, isYieldConverted: true }
   })
@@ -925,41 +933,26 @@ const applyYieldTokenValues = async (chainId, tokens, keyringByMetaKey, snapshot
 // fails on a share-based vault: the API price is known to be in the wrong unit
 // there, so no price at all is better than a wrong one — callers then fall back
 // to their own token-list snapshot, which already holds the converted price.
+//
+// Thin wrapper over core's `resolveTokenPriceUSD` — it applies exactly the rules
+// above (plain tokens and rebasing receipts pass through with no RPC; a
+// share-based vault is priced off one synthetic share; a failed read yields
+// null). Kept as a named export because this service's callers pass a Keyring
+// API row, and the `chainId` they hold can be a string from a react-query key.
 export const resolveKeyringTokenPriceUSD = async (chainId, keyringToken) => {
-  const apiPrice = toNumber(keyringToken?.price)
-  // Truncated once, here: this same number scales the synthetic balance below AND
-  // the `balanceFormatted` core derives back from it, so the two must agree.
-  const decimals = Math.trunc(Number(keyringToken?.decimals ?? 18))
-  const orNull = (p) => (p > 0 ? p : null)
-
-  if (!Number.isFinite(decimals) || decimals < 0) return orNull(apiPrice)
-
-  const input = {
-    key: 'price',
-    address: lowerCase(keyringToken?.address || ''),
-    // Exactly one whole share — `pricePerTokenUSD` is then the value of a single
-    // share, i.e. the unit price the UI wants.
-    rawBalance: parseUnits('1', decimals),
-    decimals,
-    priceUSD: apiPrice,
-    yieldProtocol: keyringToken?.yieldProtocol || null,
-    yieldAsset: keyringToken?.yieldAsset || null
-  }
-
-  try {
-    const plan = planYieldTokenConversions([input])
-    if (plan.calls.length === 0) return orNull(apiPrice) // not a share-based vault
-    // Numeric chainId: callers reach this from a react-query key, where it can be
-    // a string, and the RPC lookups below key on the number.
-    const returns = await executeRawCalls(Number(chainId), plan.calls)
-    const value = applyYieldConversions([input], plan, returns).get(input.key)
-    logYield(`price ${keyringToken?.symbol}: api $${apiPrice} -> per-share $${value?.pricePerTokenUSD} (converted=${!!value?.converted})`)
-    return value?.converted ? orNull(value.pricePerTokenUSD) : null
-  } catch {
-    // Only a share-based vault can reach here (the early return covers the rest),
-    // so the API price would be the underlying's — withhold it.
-    return null
-  }
+  const price = await resolveTokenPriceUSD(
+    Number(chainId),
+    {
+      address: lowerCase(keyringToken?.address || ''),
+      decimals: keyringToken?.decimals ?? 18,
+      price: keyringToken?.price,
+      yieldProtocol: keyringToken?.yieldProtocol || null,
+      yieldAsset: keyringToken?.yieldAsset || null
+    },
+    { rpcUrl: getRpcUrlByChain(Number(chainId)) }
+  )
+  logYield(`price ${keyringToken?.symbol}: api $${toNumber(keyringToken?.price)} -> $${price}`)
+  return price
 }
 
 // Fetch via Moralis (chains in SUPPORTED_CHAINS_BY_SERVICE_MORALIS).
@@ -1894,12 +1887,156 @@ const refreshTokenBalances = async (address, chainId, contractAddresses) => {
     }
   }
 
+  // Re-price the PLAIN tokens this pass touched. Without this the targeted path
+  // only ever re-read `balanceOf` and recomputed `balance x <the price already in
+  // Redux>` — so a token's unit price could not move until the next FULL
+  // multi-chain refresh happened to run.
+  //
+  // That is the WETH-on-Optimism report: the token API quoted $2494.36 while the
+  // detail screen showed $2406.97. TokenDetailScreen fires this targeted refresh
+  // on every mount and, whenever a balance is held, renders `token.priceUSD` from
+  // Redux rather than its own live `useGetTokenPrice` value — deliberately, so the
+  // price shown and the holding value shown always come from ONE snapshot. That
+  // invariant is right; the missing half was that nothing here ever refreshed the
+  // snapshot's price. Both numbers were then stale together, which is self
+  // consistent and still wrong.
+  //
+  // Vaults are excluded on purpose: the block above already wrote their per-SHARE
+  // price, and the API's quote for them is the UNDERLYING's — applying it here
+  // would undo that conversion and under-report the position by the whole
+  // share/underlying ratio. `isShareBasedProtocol` (not a bare `yieldProtocol`
+  // test) is the same allow-list that block uses, so rebasing receipts (aave-v3,
+  // compound-v3) — whose price IS the underlying's — are re-priced normally here.
+  const repricedMetaKeys = new Set(
+    tokens.filter((t) => t.isYieldConverted).map((t) => t.metaKey)
+  )
+  const touchedPlain = tokens.filter(
+    (t) => (updates[t.metaKey] || addedMetaKeys.has(t.metaKey)) &&
+      !isShareBasedProtocol(t.yieldProtocol) &&
+      !repricedMetaKeys.has(t.metaKey)
+  )
+  // The chain's NATIVE row rides along on every chunked response (address ''),
+  // so an ERC20 lookup re-prices native for free. But a NATIVE-ONLY refresh —
+  // opening ETH's detail screen, or coming back from sending ETH — has no ERC20
+  // to ride on, and an empty address list would make fetchKeyringTokens fall
+  // back to downloading the chain's whole first page (50 rows) to find one.
+  //
+  // So native asks by ZERO ADDRESS instead: `addresses=0x000…0` returns exactly
+  // the one native row (verified against keyrings/tokens/all/10 — `total: 1`).
+  // That is the same native → zeroAddress mapping useGetTokenPrice already uses
+  // for this endpoint, so it is the endpoint's own convention rather than a
+  // trick local to this call site.
+  //
+  // This holds even on the chains whose native coin lives at a REAL contract
+  // address rather than the zero sentinel (Celo, Cronos, Stable — see
+  // NATIVE_TOKEN_BY_CHAIN_ID): the API answers a zeroAddress query with THAT
+  // chain's native row, verified live as `celo`, `cro` and `usdt0`. Those
+  // addresses never arrive here anyway — `isNativeToken(addr, chainId)` at the
+  // top of this function consults the same map and normalizes them to the
+  // NATIVE sentinel on the way in.
+  //
+  // Which is load-bearing rather than incidental: Cronos' native address
+  // resolves to USDC on this API, so an address-based lookup would price CRO
+  // (~$0.06) as a dollar stablecoin. Keep native identified by the sentinel,
+  // never by its address.
+  const plainErc20 = touchedPlain.filter((t) => t.contractAddress !== NATIVE)
+  const wantsNative = touchedPlain.some((t) => t.contractAddress === NATIVE)
+  const lookupAddresses = wantsNative && plainErc20.length === 0
+    ? [zeroAddress]
+    : plainErc20.map((t) => t.contractAddress)
+  if (lookupAddresses.length > 0) {
+    try {
+      const fresh = await fetchKeyringTokens(chainId, lookupAddresses)
+      const freshByKey = {}
+      // ERC20s match by address, as everywhere else. The chain's native row is
+      // the ADDRESSLESS one — the same "no address ⇒ native" rule
+      // withSnapshotDiscovery uses when it re-keys the API list.
+      let nativeKeyring = null
+      fresh.forEach((k) => {
+        if (k?.address) freshByKey[buildMetaKey(chainId, lowerCase(k.address))] = k
+        else if (!nativeKeyring) nativeKeyring = k
+      })
+
+      // How far that addressless row can be trusted depends on how it arrived.
+      //
+      // The guarantee is NOT that one row comes back — the API appends this
+      // chain's native row to EVERY response, even for an address it does not
+      // know (verified: `…dead`, and the literal string `notanaddress`, both
+      // answer with it). What a zeroAddress query does is match no ERC20, so
+      // the addressless row is the only thing left — and an addressless row is
+      // this chain's native by construction. Identity therefore comes from the
+      // request, not from a symbol comparison.
+      //
+      // That distinction matters because the stored symbol does NOT come from
+      // this API: it is Moralis' / Alchemy's / getChainInfo's, and they
+      // disagree (Polygon reports `MATIC` long after the API moved to `pol`).
+      // The API is not even self-consistent in case — 'eth' on Optimism but
+      // 'ETH' on Unichain, both verified live. Gating on a symbol match would
+      // fail SHUT on any such mismatch, freezing native's price permanently:
+      // the exact bug this block exists to fix, re-entered through a side door.
+      //
+      // When native merely rides along on an ERC20 lookup the request proves
+      // nothing about it, so the symbol check stays as the confirming signal —
+      // the same rule findKeyringMatch applies on the discovery paths.
+      const nativeIsExact = lookupAddresses.length === 1 && lookupAddresses[0] === zeroAddress
+      const nativeSymbol = lowerCase(nativeKeyring?.symbol || nativeKeyring?.auditGoplus?.token_symbol || '')
+      const matchesNative = (t) => {
+        if (!nativeKeyring) return false
+        if (nativeIsExact) return true
+        return !!nativeSymbol && lowerCase(t.symbol) === nativeSymbol
+      }
+
+      tokens = tokens.map((t) => {
+        const k = t.contractAddress === NATIVE
+          ? (matchesNative(t) ? nativeKeyring : null)
+          : freshByKey[t.metaKey]
+        if (!k) return t
+        // Native is only re-priced when it was actually touched by this pass —
+        // it is in `tokens` on every refresh, and re-pricing an untouched row
+        // would quietly widen a targeted refresh into something it isn't.
+        if (t.contractAddress === NATIVE && !(updates[t.metaKey] || addedMetaKeys.has(t.metaKey))) return t
+        // Only a POSITIVE quote replaces what we have. A zero/absent price means
+        // the API had nothing to say this time — keeping the last known price is
+        // what stops an outage from zeroing a row and letting the UI's dust
+        // filter swallow it, exactly as commitChainTokens' own fallback does.
+        const priceUSD = toNumber(k.price)
+        if (!(priceUSD > 0)) return t
+        // The 24h change rides along: the detail screen's hero % and the change
+        // row read it from this same entry, so refreshing the price while leaving
+        // a day-old percentage beside it just moves the disagreement.
+        //
+        // Guarded on the RAW field, not on toNumber's output: toNumber maps a
+        // missing/unparseable value to 0, which is indistinguishable from a real
+        // flat 0% — writing it would silently zero a good percentage whenever the
+        // API omits the field. An explicitly sent 0 still lands.
+        const rawChange = k.price_change_percentage_24h
+        const hasChange = rawChange !== undefined && rawChange !== null && rawChange !== '' &&
+          Number.isFinite(Number(rawChange))
+        return {
+          ...t,
+          priceUSD,
+          valueUSD: (t.balanceFormatted || 0) * priceUSD,
+          ...(hasChange ? { priceChange24hPct: Number(rawChange) } : {})
+        }
+      })
+    } catch {
+      // Best-effort, same contract as the vault block: the row keeps its last
+      // known price rather than losing its value to a flaky API.
+    }
+  }
+
   tokens.sort((a, b) => (b.valueUSD || 0) - (a.valueUSD || 0))
   const totalUSD = tokens.reduce((sum, t) => sum + (t.valueUSD || 0), 0)
 
+  // `lastSyncedAt` is deliberately NOT bumped here. It records when the account's
+  // WHOLE list was last synced (every active chain, every token) — that is what
+  // isStaleForActiveChains and the focus/open re-fetch gates read. This pass only
+  // re-read the handful of tokens the caller named on ONE chain, so stamping
+  // `now` would claim a full sync that never happened and keep a genuinely stale
+  // list (other chains, other tokens) looking fresh after every send/swap.
   ReduxService.setAccountTokenList({
     ...currentList,
-    [address]: { ...(entry || {}), tokens, totalUSD, lastSyncedAt: Date.now() }
+    [address]: { ...(entry || {}), tokens, totalUSD }
   })
 }
 
@@ -1987,27 +2124,69 @@ export const refreshAccountTokens = async (accountAddress, opts = {}) => {
   const blocking = fastChains.length > 0 ? fastChains : slowChains
   const background = fastChains.length > 0 ? slowChains : []
 
-  // Flag this account as loading (consumed by the home account list icon). The
-  // flag is cleared only once EVERY chain settles — including the slow
-  // background ones — even though this function returns earlier (after the fast
-  // chains) to keep the caller's own loading indicator snappy.
+  // A full refresh that arrives while one is already queued or in flight for
+  // this address joins it instead of doubling the request count.
+  if (isFullRefresh) {
+    const inFlight = pendingFullRefresh.get(address)
+    if (inFlight) return inFlight
+  }
+
+  // Flag this account as loading (consumed by the home account list icon) BEFORE
+  // queuing, so a row that is waiting its turn says so instead of showing a
+  // momentary zero. The flag is cleared only once EVERY chain settles —
+  // including the slow background ones — even though this function returns
+  // earlier (after the fast chains) to keep the caller's indicator snappy.
   ReduxService.setTokenLoading(address, true)
-  const backgroundPromises = background.map(fetchAndCommit)
-  const blockingPromises = blocking.map(fetchAndCommit)
-  Promise.allSettled([...backgroundPromises, ...blockingPromises])
-    .then((results) => {
+
+  // Only a FULL refresh queues: a targeted refresh (after a send / swap) is a
+  // single chain the user is waiting on, and must not sit behind a home-screen
+  // balance sweep.
+  const runBlocking = () => Promise.all(blocking.map(fetchAndCommit))
+  const blockingResults = isFullRefresh ? accountSweepLimit(runBlocking) : runBlocking()
+  const backgroundResults = Promise.all(background.map((chainId) => (
+    isFullRefresh ? backgroundChainLimit(() => fetchAndCommit(chainId)) : fetchAndCommit(chainId)
+  )))
+
+  // Runs in the SAME tick the sweep settles in, never a microtask later: until
+  // the entry is released, a new refresh for this address joins the promise that
+  // just resolved and returns without fetching anything.
+  const finish = () => {
+    ReduxService.setTokenLoading(address, false)
+    // Released only once the background chains are done too — releasing after
+    // the fast ones would let a second sweep of this same account start while
+    // the first is still committing.
+    if (isFullRefresh) pendingFullRefresh.delete(address)
+  }
+
+  // fetchAndCommit reports a failure as a value and never rejects, so plain
+  // Promise.all is safe here and keeps the per-chain outcomes in order. The
+  // catch is a backstop, not an expected path: if anything above threw
+  // unexpectedly, the loading flag the home row spins on must still clear and
+  // the pending entry must still be released — a leaked one would leave this
+  // account permanently unrefreshable.
+  Promise.all([blockingResults, backgroundResults])
+    .then(([blockingOutcomes, backgroundOutcomes]) => {
       // Stamp only after EVERY chain (incl. slow background) has settled, so the
       // coverage marker reflects a fully completed full-refresh.
-      const failedChainIds = results
-        .map((r) => (r.status === 'fulfilled' ? r.value : null))
-        .filter((id) => id != null)
+      const failedChainIds = [...blockingOutcomes, ...backgroundOutcomes].filter((id) => id != null)
       stampRefreshOutcome(failedChainIds)
-      ReduxService.setTokenLoading(address, false)
+      finish()
     })
+    .catch(finish)
 
-  await Promise.allSettled(blockingPromises)
+  // Resolves when the FAST chains are done (see the doc comment above): the
+  // caller's spinner stops early while the slow ones keep filling in.
+  // Never rejects: callers (and anyone joining via pendingFullRefresh) get the
+  // account entry as it stands, exactly as they did before this was queued.
+  // A chain that failed is already reported through failedChainIds.
+  const readEntry = () => ReduxService.getAccountTokenList()[address] || null
+  const result = Promise.resolve(blockingResults).then(readEntry, readEntry)
 
-  return ReduxService.getAccountTokenList()[address] || null
+  // Registered synchronously — nothing between the lookup above and this line
+  // awaits, so two calls for the same address can never both get through.
+  if (isFullRefresh) pendingFullRefresh.set(address, result)
+
+  return result
 }
 
 // True when an account's cached tokens no longer match the current active EVM

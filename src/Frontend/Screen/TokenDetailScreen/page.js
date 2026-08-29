@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { View, ScrollView, TouchableOpacity, Linking, StyleSheet } from 'react-native'
 import { AreaChart, LineChart } from 'react-native-svg-charts'
 import * as shape from 'd3-shape'
-import { Defs, LinearGradient, Stop } from 'react-native-svg'
+import { Defs, Line, LinearGradient, Stop } from 'react-native-svg'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
 import MyText from 'frontend/Components/UI/MyText'
 import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
@@ -12,9 +12,10 @@ import MyDotsLoading from 'frontend/Components/UI/MyDotsLoading'
 import FiatBalance from 'frontend/Components/UI/FiatBalance'
 import MyLinearGradient from 'frontend/Components/UI/MyLinearGradient'
 import TokenIconWithChain from 'frontend/Components/UI/TokenIconWithChain'
+import ChartErrorBoundary from 'frontend/Components/UI/ChartErrorBoundary'
 import images from 'assets/Image'
 import { Colors, pixelByHeight, pixelByWidth, getHeightHeader } from 'common/styles'
-import { convertAddressArrToString, isHideMenuForAppleReview, lowerCase, routeLinkScanWithToken } from 'common/function'
+import { convertAddressArrToString, getFlatSeriesDomain, isHideMenuForAppleReview, lowerCase, routeLinkScanWithToken } from 'common/function'
 import { useSelector } from 'react-redux'
 import { getChainIconByChain } from 'common/chain'
 import ReduxService from 'common/redux'
@@ -22,6 +23,7 @@ import { ACCOUNT_TYPE } from 'common/constants/account'
 import useGetTokenPriceChanges from 'frontend/Hooks/useGetTokenPriceChanges'
 import useGetTokenPriceHistory from 'frontend/Hooks/useGetTokenPriceHistory'
 import useGetTokenPrice from 'frontend/Hooks/useGetTokenPrice'
+import useGetLendingTokenInfo from 'frontend/Hooks/useGetLendingTokenInfo'
 import I18n from 'assets/Lang'
 import createStyles from './styles'
 import MyRowItem from 'frontend/Components/UI/MyRowItem'
@@ -29,6 +31,7 @@ import useGetSettingExchange from 'frontend/Hooks/useGetSettingExchange'
 import LottieRefreshFlatList from 'frontend/Components/UI/LottieRefreshFlatList'
 import { refreshAccountTokens } from 'src/Services/TokenListV2'
 import { isShareBasedProtocol } from 'keyring-agent-core'
+import HeroBalance from './Component/HeroBalance'
 
 // Up/down green & red shared by the chart, the price, and the 24h % so all
 // three always agree — same hues as Colors.GREEN_TEXT / Colors.RED_TEXT.
@@ -36,9 +39,88 @@ import { isShareBasedProtocol } from 'keyring-agent-core'
 const CHART_UP_FILL_COLOR = '#0E5D3A'
 const CHART_DOWN_FILL_COLOR = '#752A2E'
 
+// The APY chart is monochrome rather than up/down coloured: a supply APY is a
+// yield, so there is no "down" direction to signal, and green here would read as
+// a gain the number doesn't claim. A soft grey line over a slightly darker grey
+// fill, so the curve stays the brightest thing in the card.
+const CHART_APY_COLOR = '#BABEC4'
+const CHART_APY_FILL_COLOR = '#8A9199'
+
 // Fixed display order for the multi-timeframe change row; the API returns these
 // timeFrame keys (any subset) and we render whichever are present in this order.
 const TIMEFRAME_ORDER = ['1h', '24h', '7d', '14d', '30d', '1y']
+
+// A lending market's size runs to millions, which would blow past the card's
+// width spelled out in full — so it is abbreviated ("2.05M"). Only used for the
+// market size; balances and prices keep their exact MyBalance rendering.
+const formatCompactAmount = (value) => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return null
+  const abs = Math.abs(num)
+  const [divisor, unit] = abs >= 1e9
+    ? [1e9, 'B']
+    : abs >= 1e6
+      ? [1e6, 'M']
+      : abs >= 1e3
+        ? [1e3, 'K']
+        : [1, '']
+  // Two decimals above 1K matches the mock ("2.05M"); below it the raw figure is
+  // already short, so trailing zeros are the only noise worth dropping.
+  const scaled = num / divisor
+  const text = unit ? scaled.toFixed(2) : String(Number(scaled.toFixed(2)))
+  // Comma-separate the integer part. The abbreviation keeps the mantissa under
+  // 1000 for K/M, but a market in the trillions still lands a 4+ digit integer
+  // part on the B suffix — "45678.00B" reads as noise, "45,678.00B" doesn't.
+  // Done by hand rather than through formatNumberBro: that helper hardcodes
+  // `trimMantissa: true`, which would turn the mock's "7.70M" into "7.7M".
+  const [intPart, decPart] = text.split('.')
+  const separated = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return `${decPart ? `${separated}.${decPart}` : separated}${unit}`
+}
+
+// Dashed horizontal rule at `value`, drawn inside a react-native-svg-charts
+// chart. It MUST be a wrapper rather than a bare <Line>: the chart clones every
+// child with its own extraProps (`x`/`y` d3 scales, `data`, `ticks`, `width`…),
+// and react-native-svg's Line reads `x`/`y` as transform props — handing it a
+// function there is a native-side error. Consuming `y` here and forwarding only
+// real SVG props keeps that spread from reaching the primitive.
+//
+// Using the chart's own `y` scale also means the line lands on the same pixel
+// the curve would for that value, insets and all, instead of a re-derivation
+// that has to be kept in sync with contentInset by hand.
+//
+// `centered` puts the rule at the middle of the DOMAIN rather than at `value`'s
+// own position. The average is a reference the eye reads against the curve, not
+// a measurement off an axis — and this card draws no y axis — so a line that slid
+// up and down with the series (sitting on the card floor whenever the average
+// landed near the series min) just read as misplaced.
+//
+// It must still go through the chart's `y` scale, NOT a raw `height / 2`: the
+// curve is drawn into the range [height - bottom, top], so a pixel measured off
+// the full SVG height ignores `contentInset` and lands a visible gap away from a
+// flat series' line. Asking the scale for the domain midpoint puts the rule in
+// the same coordinate system as the curve, insets included — which is exactly
+// where a flat series sits, so the two coincide.
+const ChartAverageLine = ({ y, value, color, centered }) => {
+  if (typeof y !== 'function') return null
+  // `y.domain()` is the [min, max] the chart actually used — the widened one on
+  // a flat series (see getFlatSeriesDomain), so this tracks whatever the chart
+  // was given rather than re-deriving it from the data.
+  const [domainMin, domainMax] = centered ? y.domain() : []
+  const yPos = centered ? y((domainMin + domainMax) / 2) : y(value)
+  if (!Number.isFinite(yPos)) return null
+  return (
+    <Line
+      x1='0%'
+      x2='100%'
+      y1={yPos}
+      y2={yPos}
+      stroke={color}
+      strokeWidth={pixelByWidth(1.5)}
+      strokeDasharray={[pixelByWidth(5), pixelByWidth(5)]}
+    />
+  )
+}
 
 const OperationRow = ({ disabled, icon, title, onPress, rightElement, style }) => {
   const styles = createStyles()
@@ -83,6 +165,7 @@ const TokenDetailScreenPage = (_this) => {
   const {
     onSend,
     onExchange,
+    onWithdraw,
     onSwapAndSend
   } = func
 
@@ -98,7 +181,7 @@ const TokenDetailScreenPage = (_this) => {
     const account = (accountListRedux || []).find((item) => lowerCase(item?.address) === address)
     return account?.accountType === ACCOUNT_TYPE.VIEW_ONLY
   }, [accountListRedux, address])
-  const { data: settingExchange } = useGetSettingExchange()
+  const { getAllChain, data: settingExchange } = useGetSettingExchange()
   // The navigation param `token` is just a snapshot taken when the screen opened.
   // Merge the LIVE entry from accountTokenList (refreshed e.g. after a send) over
   // it so balance/value stay current. If the token dropped out of the synced list
@@ -124,6 +207,8 @@ const TokenDetailScreenPage = (_this) => {
     { cacheTime: 0, staleTime: 0 }
   )
 
+  const yieldProtocol = token?.yieldProtocol
+
   // Lazy-load real price history by coinGeckoId. Days from app settings (fallback 7).
   // A series shorter than 2 points can't be charted, so treat it as no data.
   const { data: priceHistory, isLoading: isChartLoading, refetch: refetchPriceHistory } = useGetTokenPriceHistory(token?.coinGeckoId)
@@ -144,14 +229,43 @@ const TokenDetailScreenPage = (_this) => {
   // Deliberately NOT a bare `yieldProtocol` test, which would also catch
   // rebasing receipts (aave-v3 etc.) — their price IS the underlying's, so their
   // chart is correct and must keep rendering.
+
   const isYieldToken = useMemo(() => {
     const yieldAsset = token?.yieldAsset
     if (yieldAsset && Object.keys(yieldAsset).length > 0) return true
-    return isShareBasedProtocol(token?.yieldProtocol)
-  }, [token?.yieldAsset, token?.yieldProtocol])
+    return isShareBasedProtocol(yieldProtocol)
+  }, [token?.yieldAsset, yieldProtocol])
   const chartData = !isYieldToken && priceHistory.length > 1 ? priceHistory : null
 
   const chainId = token?.chainId
+
+  // Whether to look up a supply-APY series at all. DELIBERATELY broader than
+  // `isYieldToken` above: any token the API tagged with a `yieldProtocol` sits in
+  // a lending market, so it has an APY worth charting — including the rebasing
+  // receipts (aave-v3, compound-v3) that `isYieldToken` excludes because their
+  // PRICE chart is still correct. The two flags answer different questions:
+  // isYieldToken = "is the price series in the wrong unit?", this = "is there an
+  // APY to show?".
+  const hasYieldProtocol = !!yieldProtocol
+
+  // The whole lending market behind this receipt token, from the core's
+  // LendingService: its live + average supply APY and the daily samples, plus
+  // the market size and the asset it actually lends. Gated so a plain token
+  // never fires the scan — it has no lending market to find, and the lookup
+  // costs upstream calls. Any underlying is supported (core reads each market's
+  // asset on chain), so an aWETH position reports WETH's APY. Comes back null
+  // (not an error) whenever the token isn't a curated market at all, in which
+  // case the card falls back to whatever the price chart can show.
+  const {
+    data: lendingInfo,
+    isLoading: isLendingInfoLoading,
+    refetch: refetchLendingInfo
+  } = useGetLendingTokenInfo(chainId, token?.contractAddress, hasYieldProtocol)
+
+  // Only take over the card once there is a series long enough to draw. Until
+  // then the price-chart branch renders (its own loading / no-data states), so a
+  // slow lending lookup never leaves the card blank.
+  const apyChartData = lendingInfo?.series?.length > 1 ? lendingInfo.series : null
 
   // Refresh ONLY the token this screen shows. `tokenAddress` takes
   // refreshAccountTokens' targeted shortcut: a direct RPC read for this one
@@ -185,9 +299,10 @@ const TokenDetailScreenPage = (_this) => {
       refreshThisToken(),
       refetchPrice(),
       refetchPriceHistory(),
-      refetchPriceChanges()
+      refetchPriceChanges(),
+      refetchLendingInfo()
     ]).finally(() => setRefreshing(false))
-  }, [address, chainId, refreshThisToken, refetchPrice, refetchPriceHistory, refetchPriceChanges])
+  }, [address, chainId, refreshThisToken, refetchPrice, refetchPriceHistory, refetchPriceChanges, refetchLendingInfo])
 
   // Normalize to a fixed-order list of { timeFrame, changePercent }, dropping
   // any timeframe the API didn't return. The 24h value comes from a different
@@ -279,8 +394,8 @@ const TokenDetailScreenPage = (_this) => {
   }, [token, livePriceUSD])
 
   const disableExchange = useMemo(() => {
-    if (settingExchange?.chainSupport?.length > 0) {
-      const isSupportChain = settingExchange?.chainSupport?.some(chain => {
+    if (getAllChain().length > 0) {
+      const isSupportChain = getAllChain()?.some(chain => {
         return chain?.chainId?.toString() === display?.chainId?.toString()
       })
 
@@ -386,16 +501,15 @@ const TokenDetailScreenPage = (_this) => {
             signed
             style={display.isPriceUp ? styles.heroChangeTextUp : styles.heroChangeText}
           />
-          {/* Same maxWidth-hug column pattern for a long balance+symbol. */}
+          {/* Same maxWidth-hug column pattern for a long balance+symbol —
+              MyRollingNumber marquees itself when it overflows the cap, so the
+              wrapper is unchanged from the MyBalance/ticker it replaced. */}
           <View style={styles.heroBalanceWrap}>
-            <MyBalance
-              // variant='small'
-              className='text-medium'
-              value={display.balance}
-              fractionDigits={8}
-              suffix={` ${display.symbol}`}
-              style={styles.heroBalance}
-              ticker
+            <HeroBalance
+              address={address}
+              metaKey={token.metaKey}
+              balance={display.balance}
+              symbol={display.symbol}
             />
           </View>
         </View>
@@ -404,9 +518,19 @@ const TokenDetailScreenPage = (_this) => {
   )
 
   const renderChart = () => {
-    // A yield token goes straight to "no data" — no spinner first, since the
-    // in-flight history request can never produce a chart for it.
-    if (isChartLoading && !chartData && !isYieldToken) {
+    // Spin only when nothing can be drawn YET but still might be.
+    //
+    // A share-based token's PRICE history can never chart (wrong unit), so its
+    // price request in flight is not a reason to spin — but its APY lookup is:
+    // that one may still take over the card, and rendering "no data" first would
+    // flash a wrong state a moment before the curve appears.
+    //
+    // A token with a VALID price chart is deliberately excluded even while its
+    // APY lookup runs (aave-v3 / compound-v3 reach here): it already has
+    // something correct to show, so it renders the price chart and swaps to the
+    // APY card once the series lands. Spinning over a usable chart would be a
+    // step backwards.
+    if ((isChartLoading && !chartData && !isYieldToken) || (isYieldToken && isLendingInfoLoading)) {
       return (
         <View style={[styles.chartPlaceholder, { alignItems: 'center', justifyContent: 'center' }]}>
           <MyDotsLoading variant='small' />
@@ -424,14 +548,26 @@ const TokenDetailScreenPage = (_this) => {
     // series min so the fill spans line→bottom of the visible box (not a symmetric
     // ±max fill), letting the vertical gradient read as bright→transparent.
     const valueMin = Math.min(...chartData)
+    const valueMax = Math.max(...chartData)
     // Shared so the line sits exactly on top of the fill's upper edge.
     const CHART_INSET = { top: pixelByHeight(20), bottom: pixelByHeight(14) }
+
+    // A price CAN be flat — a stablecoin barely moves — and an auto-scaled domain
+    // collapses to a single value there, pinning the curve to the card floor.
+    // Centring rescues that. Unlike the APY chart below, this one is NOT
+    // zero-based: a price is read as movement, and anchoring $3,800 ETH to 0
+    // would flatten a whole week into one line. See getFlatSeriesDomain.
+    const { isFlat, gridMin, gridMax } = getFlatSeriesDomain(valueMin, valueMax)
     return (
       <View style={styles.chartPlaceholder}>
         {/* Fill only (no stroke) — AreaChart strokes the whole path including its
             flat bottom edge, which showed up as a stray horizontal line. */}
         <AreaChart
-          start={valueMin}
+          // Fill baseline: the domain floor, so a flat series still fills from
+          // the centred line down to the chart bottom rather than nothing.
+          start={isFlat ? gridMin : valueMin}
+          gridMin={gridMin}
+          gridMax={gridMax}
           style={{ flex: 1 }}
           data={chartData}
           svg={{ fill: 'url(#chartGradient)' }}
@@ -457,6 +593,8 @@ const TokenDetailScreenPage = (_this) => {
         <LineChart
           style={StyleSheet.absoluteFill}
           data={chartData}
+          gridMin={gridMin}
+          gridMax={gridMax}
           svg={{ stroke: chartColor, strokeWidth: pixelByWidth(2) }}
           curve={shape.curveCatmullRom}
           contentInset={CHART_INSET}
@@ -464,6 +602,225 @@ const TokenDetailScreenPage = (_this) => {
           animationDuration={1000}
         />
       </View>
+    )
+  }
+
+  // The APY curve. Same visual language as the price chart (area fill + line on
+  // top, identical insets so both variants occupy the exact same box), with two
+  // additions the mock calls for: a dashed line at the average, and the "AVG x%"
+  // badge sitting on it. Always drawn in the up/green palette — an APY is a
+  // yield, so there is no "down" colour for the series itself.
+  const renderApyChart = () => {
+    // Same two placeholder states as the price chart, and for the same reason:
+    // the slot must keep `chartPlaceholder`'s fixed height in every state so the
+    // sections below the card never shift once the series lands.
+    if (isLendingInfoLoading && !apyChartData) {
+      return (
+        <View style={[styles.chartPlaceholder, { alignItems: 'center', justifyContent: 'center' }]}>
+          <MyDotsLoading variant='small' />
+        </View>
+      )
+    }
+    // Spread into Math.min/max only after confirming a non-empty ARRAY. The
+    // caller already gates on `apyChartData`, but this function is one render
+    // away from an async source: `Math.min(...null)` and `Math.min(...undefined)`
+    // both throw, and a chart is not worth crashing the screen over.
+    if (!Array.isArray(apyChartData) || apyChartData.length < 2) {
+      return (
+        <View style={[styles.chartPlaceholder, { alignItems: 'center', justifyContent: 'center' }]}>
+          <MyText variant='small' style={{ color: Colors.TEXT_MEDIUM }}>{I18n.t('v2.tokenDetail.noChartData')}</MyText>
+        </View>
+      )
+    }
+    const valueMax = Math.max(...apyChartData)
+    const CHART_INSET = { top: pixelByHeight(20), bottom: pixelByHeight(14) }
+    const avg = Number(lendingInfo?.avgApyPercent)
+    const hasAvg = Number.isFinite(avg)
+
+    // An APY chart is ZERO-BASED, unlike the price chart above. A rate is an
+    // absolute quantity a user reads against 0 ("4% is good"), not a relative
+    // movement, so the protocols' own charts (Aave, DefiLlama) all anchor the
+    // floor at 0 — and so does this one.
+    //
+    // It also makes the card immune to a single bad sample. Auto-scaling to
+    // [valueMin, valueMax] means one outlier day in `apyHistory` sets the whole
+    // domain: the spike takes the top of the card and squashes every other day
+    // into a flat line along the floor. Anchored at 0 an outlier is just a
+    // spike, and the rest of the series keeps its real position and its fill.
+    //
+    // Headroom above the peak so the curve never touches the top edge — and,
+    // when a series is flat, so `gridMin === gridMax` can't collapse the domain
+    // to a single value (which pins the line to the floor). That makes
+    // getFlatSeriesDomain's centring unnecessary here: a flat 4.13% series sits
+    // at 4.13/4.55 of the height, which is where it belongs.
+    const gridMin = 0
+    const gridMax = valueMax > 0 ? valueMax * 1.1 : 0.01
+    return (
+      <View style={styles.chartPlaceholder}>
+        <AreaChart
+          // Fill baseline: 0, matching the domain floor, so the fill spans the
+          // whole card from the curve down to the bottom edge.
+          start={gridMin}
+          gridMin={gridMin}
+          gridMax={gridMax}
+          style={{ flex: 1 }}
+          data={apyChartData}
+          svg={{ fill: 'url(#apyChartGradient)' }}
+          curve={shape.curveCatmullRom}
+          contentInset={CHART_INSET}
+          animate
+          animationDuration={1000}
+        >
+          <Defs>
+            <LinearGradient id='apyChartGradient' x1='0%' y1='0%' x2='0%' y2='100%'>
+              <Stop offset='0%' stopColor={CHART_APY_FILL_COLOR} stopOpacity='0.9' />
+              <Stop offset='50%' stopColor={CHART_APY_FILL_COLOR} stopOpacity='0.8' />
+              <Stop offset='100%' stopColor={CHART_APY_FILL_COLOR} stopOpacity='0' />
+            </LinearGradient>
+          </Defs>
+        </AreaChart>
+        <LineChart
+          style={StyleSheet.absoluteFill}
+          data={apyChartData}
+          gridMin={gridMin}
+          gridMax={gridMax}
+          svg={{ stroke: CHART_APY_COLOR, strokeWidth: pixelByWidth(2) }}
+          curve={shape.curveCatmullRom}
+          contentInset={CHART_INSET}
+          animate
+          animationDuration={1000}
+        >
+          {/* Dashed reference line at the average's OWN position — not centred.
+              Centring existed to rescue a flat series whose auto-scaled domain
+              collapsed onto the card floor; on a zero-based domain the average
+              already lands next to the curve, so drawing it anywhere else would
+              just misreport it. */}
+          {hasAvg && (
+            <ChartAverageLine value={avg} color={Colors.TEXT_MEDIUM} />
+          )}
+        </LineChart>
+        {hasAvg && (
+          // Parked in the card's bottom-left corner rather than riding the dashed
+          // line: the line's height varies with the series, and a badge that
+          // tracked it would collide with the curve on a low average.
+          <View style={[styles.apyAvgBadge, { bottom: pixelByHeight(24) }]}>
+            <MyText variant='small' style={styles.apyAvgBadgeLabel}>{I18n.t('v2.tokenDetail.avg')}</MyText>
+            <MyBalance
+              fontWeight='700'
+              variant='small'
+              value={avg}
+              fractionDigits={2}
+              fixedDecimals
+              suffix='%'
+              style={styles.apyAvgBadgeValue}
+            />
+          </View>
+        )}
+      </View>
+    )
+  }
+
+  // Yield-token variant of the chart card: the headline is the market's supply
+  // APY instead of a price, the pill on its right is the day-over-day APY change,
+  // and the row beneath shows the market's total size. Layout mirrors
+  // renderChartCard exactly so the two never shift the content below them.
+  const renderApyChartCard = () => {
+    const change = Number(lendingInfo?.apyChangePercent)
+    const hasChange = Number.isFinite(change)
+    // Denominated in the market's OWN asset (WETH, USDC, …), which core resolves
+    // on chain — so the amount is always rendered with the symbol that came back
+    // with it, never a hardcoded ticker. Symbol unreadable ⇒ show the bare number
+    // rather than mislabel it.
+    const totalSupplied = formatCompactAmount(lendingInfo?.totalSupplied)
+    const suppliedLabel = lendingInfo?.assetSymbol
+      ? `${totalSupplied} ${lendingInfo.assetSymbol}`
+      : totalSupplied
+    // The live rate is the headline; the average stands in when the protocol
+    // reports no live figure (the series is then all we have).
+    const headline = Number.isFinite(Number(lendingInfo?.currentApyPercent))
+      ? Number(lendingInfo.currentApyPercent)
+      : Number(lendingInfo?.avgApyPercent)
+    const hasHeadline = Number.isFinite(headline)
+    // While the lookup is in flight there is no rate to show yet. Render the
+    // headline's own fixed-height slot EMPTY rather than a placeholder `0%`,
+    // which would read as a real 0% APY for the moment before the data lands.
+    // The slot keeps its height either way, so nothing below it moves.
+    const isApyPending = isLendingInfoLoading && !hasHeadline
+
+    return (
+      <MyLinearGradient disableClip style={styles.chartCard}>
+        <View style={styles.chartCardInner}>
+          <View style={styles.chartTopRow}>
+            <View style={styles.chartPriceWrap}>
+              {hasHeadline ? (
+                <MyBalance
+                  variant='subTitle'
+                  value={headline}
+                  fractionDigits={2}
+                  fixedDecimals
+                  suffix='%'
+                  style={styles.apyHeadline}
+                />
+              ) : <></>}
+            </View>
+            {hasChange ? (
+              <View style={styles.apyChangePill}>
+                <MyBalance
+                  variant='small'
+                  value={change}
+                  fractionDigits={2}
+                  fixedDecimals
+                  suffix='%'
+                  signed
+                  style={change >= 0 ? styles.apyChangeUp : styles.apyChangeDown}
+                />
+              </View>
+            ) : <></>}
+          </View>
+
+          {/* Same fixed-height slot as the price card's timeframe row. The row
+              itself ALWAYS renders so it keeps reserving its height — only the
+              text inside is gated, so the card is the same height while the
+              lookup runs as it is once the data lands. */}
+          <View style={styles.apySuppliedRow}>
+            {!!totalSupplied && !isApyPending ? (
+              <>
+                <MyText style={styles.apySuppliedLabel}>{I18n.t('v2.tokenDetail.totalSupplied')}</MyText>
+                <MyText style={styles.apySuppliedValue}>{suppliedLabel}</MyText>
+              </>
+            ) : <></>}
+          </View>
+
+          <ChartErrorBoundary
+            resetKey={apyChartData}
+            fallback={(
+              <View style={[styles.chartPlaceholder, { alignItems: 'center', justifyContent: 'center' }]}>
+                <MyText variant='small' style={{ color: Colors.TEXT_MEDIUM }}>{I18n.t('v2.tokenDetail.noChartData')}</MyText>
+              </View>
+            )}
+          >
+            {renderApyChart()}
+          </ChartErrorBoundary>
+
+          {/* Only meaningful once a curve is actually drawn — same gate the price
+              card uses, so the badge never floats over a spinner or "no data". */}
+          {apyChartData ? (
+            <View
+              style={{
+                position: 'absolute',
+                right: pixelByWidth(12),
+                bottom: pixelByWidth(12),
+                zIndex: 100
+              }}>
+              <MyIcon
+                variant='medium'
+                uri={images.UIV2.icons.icon_history_7d}
+                style={{ zIndex: 100 }}
+              />
+            </View>
+          ) : <></>}
+        </View>
+      </MyLinearGradient>
     )
   }
 
@@ -514,7 +871,19 @@ const TokenDetailScreenPage = (_this) => {
           )}
         </View>
 
-        {renderChart()}
+        {/* The chart is the one part of this card fed by async third-party data
+            through d3 + svg-charts; a throw in there must not take the balance
+            and actions down with it. `resetKey` lets a later refresh retry. */}
+        <ChartErrorBoundary
+          resetKey={chartData}
+          fallback={(
+            <View style={[styles.chartPlaceholder, { alignItems: 'center', justifyContent: 'center' }]}>
+              <MyText variant='small' style={{ color: Colors.TEXT_MEDIUM }}>{I18n.t('v2.tokenDetail.noChartData')}</MyText>
+            </View>
+          )}
+        >
+          {renderChart()}
+        </ChartErrorBoundary>
         {!chartData || chartData.length < 2 ? <></> : (
           <View
             style={{
@@ -622,6 +991,21 @@ const TokenDetailScreenPage = (_this) => {
             />
           )
       }
+      {yieldProtocol
+        ? (
+          <OperationRow
+            // `lendingInfo` is what carries the market's contract / protocol
+            // family / underlying, and a withdrawal cannot be encoded without
+            // it. Until the lookup resolves (or when it comes back null for a
+            // market core can't identify) the row is dimmed and unpressable,
+            // rather than looking live and doing nothing on tap.
+            disabled={isViewOnly || !lendingInfo?.contract}
+            icon={images.UIV2.icons.withdraw}
+            title={I18n.t('v2.tokenDetail.withdraw')}
+            onPress={() => onWithdraw({ ...token, ...display, lendingInfo })}
+          />
+        )
+        : null}
 
     </View>
   )
@@ -648,7 +1032,10 @@ const TokenDetailScreenPage = (_this) => {
           ListHeaderComponent={(
             <>
               {renderHeroSection()}
-              {renderChartCard()}
+              {/* A yield token whose lending market we resolved shows its APY
+                  history; everything else (and a yield token we couldn't match)
+                  keeps the price chart. */}
+              {yieldProtocol ? renderApyChartCard() : renderChartCard()}
               {renderInformationSection()}
               {renderOperations()}
             </>

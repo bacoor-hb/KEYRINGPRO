@@ -1,5 +1,5 @@
 import { StyleSheet } from 'react-native'
-import { Colors, pixelByHeight, pixelByWidth, width, fontSize } from 'common/styles'
+import { Colors, getSizeImgSquare, pixelByHeight, pixelByWidth, width, fontSize } from 'common/styles'
 import { FIELD_MIN_HEIGHT } from 'frontend/Screen/TokenDetailScreen/Component/SendToken/styles'
 
 const styles = StyleSheet.create({
@@ -14,6 +14,35 @@ const styles = StyleSheet.create({
   },
   inputTextArea: {
     height: 'auto'
+  },
+  // Address field + scan button on one row. Top-aligned so the error message
+  // growing under the input never drags the button down with it.
+  inputRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: pixelByWidth(12)
+  },
+  inputFlex: {
+    flex: 1
+  },
+  // Keeps the scan button vertically centered against the input box only.
+  scanBtnWrap: {
+    minHeight: FIELD_MIN_HEIGHT,
+    justifyContent: 'center'
+  },
+  // Fixed circle button for the QR-scan action — same 40px bordered circle as the
+  // send-token receive-address field, so it never squishes when the row is tight.
+  scanBtn: {
+    width: getSizeImgSquare('large'),
+    height: getSizeImgSquare('large'),
+    borderRadius: getSizeImgSquare('large') / 2,
+    flexShrink: 0,
+    backgroundColor: Colors.BG_INPUT_FIELD,
+    borderWidth: 1,
+    borderColor: Colors.BG_BOX_SMALL,
+    justifyContent: 'center',
+    alignItems: 'center'
   },
   input: {
     flex: 1,

@@ -25,6 +25,7 @@ import TokenRow from './Component/TokenRow'
 import BalanceSyncLabel from './Component/BalanceSyncLabel'
 import styles from './styles'
 import LottieRefreshFlatList from 'frontend/Components/UI/LottieRefreshFlatList'
+import { balanceHandoffKey } from 'frontend/Components/UI/MyRollingNumber/handoff'
 
 export const MIN_VALUE_USD = 0.01
 // Auto-reload threshold: entering the screen with a cache older than this
@@ -416,6 +417,12 @@ const TokenListPage = (_this) => {
               active={rowsVisible}
               // One-shot spin for a token that has just arrived — see arrivedKeys.
               spinOnAppear={arrivedKeys.has(item.metaKey)}
+              // Hands the announcement over to / takes it from the token detail
+              // screen, which shows this same balance and stays mounted behind
+              // this list. A send made over there spins there; without this the
+              // row would replay that same change on the way back, because it
+              // was parked (active=false) while it happened.
+              handoffKey={balanceHandoffKey(address, item.metaKey)}
               // View-only accounts CAN open the detail screen — it's read-only
               // info. The signable actions (send / swap / exchange) are disabled
               // there instead of blocking the whole screen.

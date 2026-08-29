@@ -1,4 +1,4 @@
-import { View, TouchableOpacity, Keyboard, Text } from 'react-native'
+import { View, TouchableOpacity, Keyboard } from 'react-native'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import createStyles from './styles'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
@@ -30,15 +30,18 @@ import { getAddressNative, isNativeToken } from 'common/tokens'
 import useDebounceValue from 'frontend/Hooks/useDebounceValue'
 import useGasPrice from 'frontend/Hooks/useGasPrice'
 import { KeyboardAwareScrollView } from '@codler/react-native-keyboard-aware-scroll-view'
-import { CURRENCY_DATA } from 'common/constants/app'
+import { CURRENCY_DATA, SWAP_SERVICE_CONFIG } from 'common/constants/app'
+import { CHAIN_ID_NO_GAS_PRICE_SWAP, PLATFORM_EXCHANGE } from 'common/constants/swap'
 import FiatBalance from 'frontend/Components/UI/FiatBalance'
 import TxStepIcon from 'frontend/Components/UI/TxStepIcon'
 import MyDotsLoading from 'frontend/Components/UI/MyDotsLoading'
 import AutoFitAmountInput from './Components/AutoFitAmountInput'
+import { getNumberParts } from 'frontend/Components/UI/MyNumber'
 import { sanitizeAmountText } from './helpers'
 import InputCustom from 'frontend/Components/UI/InputCustom'
 import I18nWithLinks from 'frontend/Components/UI/I18nWithLinks'
 import useGetDecimalToken from 'frontend/Hooks/useGetDecimalToken'
+import useProtocolFee from 'frontend/Hooks/useProtocolFee'
 
 export const STEP_EXCHANGE = {
   approving: 1,
@@ -67,6 +70,28 @@ const OPTION_DEFAULT_BALANCE = {
   '100%': '100'
 }
 
+const InputAmount = ({ ...props }) => {
+  const styles = createStyles()
+  const [isShow, setIsShow] = useState(false)
+
+  useEffect(() => {
+    if (ISIOS) {
+      setIsShow(true)
+    } else {
+      setTimeout(() => {
+        setIsShow(true)
+      }, 10)
+    }
+  }, [])
+
+  return (
+    <AutoFitAmountInput
+      {...props}
+      textStyle={{ ...styles.input, opacity: isShow ? 1 : 0 }}
+    />
+  )
+}
+
 const Exchange = ({ _this }) => {
   const {
     onChangeValueExchange,
@@ -92,15 +117,19 @@ const Exchange = ({ _this }) => {
   const [amountInToUSD, setAmountInToUSD] = useState(amountIn2USDDefault)
   const [amountOut, setAmountOut] = useState('')
   const [amountOutAfterSwap, setAmountOutAfterSwap] = useState('')
-
-  // Only the token IN USD field is editable; token OUT USD is computed from our price API.
+  const [requestId, setRequestId] = useState(null)
   const [isFocusAmountInputToUSD, setIsFocusAmountInputToUSD] = useState(false)
   const isFocusAmountInputToUSDRef = useRef(false)
-  const [inputWidthTokenIn, setInputWidthTokenIn] = useState(pixelByWidth(20))
   // true when the fiat value in the token IN USD field was typed by the user (not derived
   // from a token amount). Keeps the exact number the user entered on blur, instead of the
   // quote's round-tripped value (fiat→token→fiat loses precision, e.g. 1000 -> 999.9592).
   const [isUsdInEdited, setIsUsdInEdited] = useState(false)
+  // Same editable fiat field for the token OUT row (shown only once an outToken exists).
+  const [amountOutToUSD, setAmountOutToUSD] = useState('')
+  // eslint-disable-next-line no-unused-vars -- fiat input for the output token, not wired into the UI yet
+  const [isFocusAmountInputToUSDOut, setIsFocusAmountInputToUSDOut] = useState(false)
+  const isFocusAmountInputToUSDOutRef = useRef(false)
+  const [isUsdOutEdited, setIsUsdOutEdited] = useState(false)
 
   // true  -> user is editing the INPUT field  (tradeType EXACT_INPUT, output is computed)
   // false -> user is editing the OUTPUT field (tradeType EXPECTED_OUTPUT, input is computed)
@@ -138,7 +167,7 @@ const Exchange = ({ _this }) => {
     if (!Number.isFinite(fiatValue)) {
       return ''
     }
-    return fiatValue.toFixed(MAX_DECIMAL_2USD)
+    return BigNumber(fiatValue.toFixed(MAX_DECIMAL_2USD)).toFixed()
   }, [fiatRate])
 
   const styles = createStyles()
@@ -183,15 +212,6 @@ const Exchange = ({ _this }) => {
   const chainIn = blockchainListRedux[tokenIn?.chainId]
   const shortNameChainIn = chainIn?.shortName || chainIn?.name || chainIn?.chain || ''
   const shortNameChainOut = chainOut?.shortName || chainOut?.name || chainOut?.chain || shortNameChainIn
-
-  const estimateFake = useMemo(() => {
-    if (gasWeiPriceDefault && !loadingGasPriceDefault) {
-      const gasPrice = convertWeiToBalance(gasWeiPriceDefault)
-      const totalGas = new BigNumber(gasPrice).multipliedBy(DEFAULT_GAS_LIMIT).toString()
-      return totalGas
-    }
-    return '0.00000001'
-  }, [gasWeiPriceDefault, loadingGasPriceDefault])
 
   const isCrossChain = useMemo(() => {
     return tokenIn?.chainId?.toString() !== chainIdOut?.toString()
@@ -256,7 +276,31 @@ const Exchange = ({ _this }) => {
     step != null ||
     !!hash?.approve ||
     !!hash?.exchange
-  const { data: rawTransaction, isLoading: loadingGetQuote } = useGetRawTxExchange(queryGetRawTxExchange, { freeze: isExecuting })
+  const { getBridgeProvider, data: rawTransaction, isLoading: loadingGetQuote } = useGetRawTxExchange(queryGetRawTxExchange, { freeze: isExecuting })
+  const bridgeProvider = getBridgeProvider(tokenIn?.chainId, chainIdOut)
+  const { data: feeProtocol, isLoading: loadingFeeProtocol } = useProtocolFee(tokenIn?.chainId, chainIdOut, bridgeProvider)
+
+  const gasLimitRawTx = useMemo(() => {
+    if (rawTransaction?.tx?.gas || rawTransaction?.estimatedTransactionFee?.details?.gasLimit) {
+      const gas = rawTransaction?.tx?.gas ?? rawTransaction?.estimatedTransactionFee?.details?.gasLimit
+      if (BigNumber(gas).lt(DEFAULT_GAS_LIMIT)) {
+        return DEFAULT_GAS_LIMIT
+      }
+      return gas?.toString()
+    }
+    return null
+  }, [rawTransaction])
+
+  const feeGas = useMemo(() => {
+    let totalFee = '0.00000001'
+    if (gasWeiPriceDefault && !loadingGasPriceDefault) {
+      const gasPrice = convertWeiToBalance(gasWeiPriceDefault)
+      totalFee = new BigNumber(gasPrice).multipliedBy(gasLimitRawTx || DEFAULT_GAS_LIMIT).toString()
+
+      totalFee = BigNumber(totalFee).plus(feeProtocol || '0').toFixed()
+    }
+    return totalFee
+  }, [gasWeiPriceDefault, gasLimitRawTx, feeProtocol, loadingGasPriceDefault])
 
   const isHasApprove = useMemo(() => {
     return rawTransaction?.approveStep?.id === 'approve'
@@ -299,32 +343,22 @@ const Exchange = ({ _this }) => {
     return amountInUsd
   }, [isUsdInEdited, amountInToUSD, amountInUsd, fiatRate])
 
-  const feeGas = useMemo(() => {
-    const gasFee = rawTransaction?.fees?.gas?.amountFormatted
-    if (gasFee) {
-      if (isHasApprove) {
-        return BigNumber(gasFee).multipliedBy(2).decimalPlaces(12).toString()
-      }
-      return BigNumber(gasFee).multipliedBy(1.5).decimalPlaces(12).toString()
+  // Same as amountInUsdForDisplay but for the editable token OUT USD row.
+  // eslint-disable-next-line no-unused-vars -- fiat input for the output token, not wired into the UI yet
+  const amountOutUsdForDisplay = useMemo(() => {
+    if (isUsdOutEdited && amountOutToUSD != null && amountOutToUSD !== '' && !isNaN(Number(amountOutToUSD))) {
+      return BigNumber(amountOutToUSD).div(fiatRate > 0 ? fiatRate : 1).toString()
     }
-    return '0'
-  }, [rawTransaction, isHasApprove])
+    return amountOutUsd
+  }, [isUsdOutEdited, amountOutToUSD, amountOutUsd, fiatRate])
 
   const minBalanceAddToSwap = useMemo(() => {
-    let feeGasTemp
-
-    if (BigNumber(feeGas || '0').gt(estimateFake || '0')) {
-      feeGasTemp = feeGas
-    } else {
-      feeGasTemp = estimateFake
-    }
-
-    const amount = BigNumber(feeGasTemp).minus(balanceNative || '0').decimalPlaces(8)
+    const amount = BigNumber(feeGas).minus(balanceNative || '0').decimalPlaces(8)
     if (amount.lte(0)) {
       return '0'
     }
     return amount.toFixed()
-  }, [estimateFake, balanceNative, feeGas])
+  }, [feeGas, balanceNative])
 
   useEffect(() => {
     if (!rawTransaction?.estimation) {
@@ -340,6 +374,11 @@ const Exchange = ({ _this }) => {
         const value = convertWeiToBalance(balanceWei, decimal)
         setAmountOut(value)
         onChangeValueExchange({ amountOut: value })
+
+        if (priceTokenOut) {
+          setAmountOutToUSD(toFiatAmount(BigNumber(value || 0).multipliedBy(priceTokenOut)))
+        }
+        setIsUsdOutEdited(false)
       }
     } else {
       // user typed the OUTPUT amount -> fill the required INPUT
@@ -372,9 +411,9 @@ const Exchange = ({ _this }) => {
         } else {
           let balanceUserAfterFeeGas = balanceTokenIn
           if (isNativeTokenInput) {
-            balanceUserAfterFeeGas = BigNumber(balanceUserAfterFeeGas).minus(estimateFake)
+            balanceUserAfterFeeGas = BigNumber(balanceUserAfterFeeGas).minus(feeGas)
           } else {
-            if (BigNumber(balanceNative).lte(estimateFake)) {
+            if (BigNumber(balanceNative).lte(feeGas)) {
               setError(
                 I18n.t('Initial.feeTokenNeedSwap', {
                   amount: minBalanceAddToSwap,
@@ -384,11 +423,11 @@ const Exchange = ({ _this }) => {
             }
           }
 
-          if (BigNumber(balanceUserAfterFeeGas).lte(0) && BigNumber(estimateFake).lt(0)) {
+          if (BigNumber(balanceUserAfterFeeGas).lte(0) && BigNumber(feeGas).lt(0)) {
             balanceUserAfterFeeGas = '0'
           }
 
-          if (BigNumber(amountIn).gt(balanceUserAfterFeeGas?.toString()) && BigNumber(estimateFake).gt(0)) {
+          if (BigNumber(amountIn).gt(balanceUserAfterFeeGas?.toString()) && BigNumber(feeGas).gt(0)) {
             setError(I18n.t('Content.notEnoughBalance'))
           } else {
             setError('')
@@ -397,8 +436,8 @@ const Exchange = ({ _this }) => {
       }
     }
 
-    if (estimateFake && balanceNative && !loadingGasPriceDefault && !loadingBalanceNative) {
-      if (BigNumber(estimateFake).gte(balanceNative)) {
+    if (feeGas && balanceNative && !loadingGasPriceDefault && !loadingBalanceNative) {
+      if (BigNumber(feeGas).gte(balanceNative)) {
         setError(
           I18n.t('Initial.feeTokenNeedSwap', {
             amount: minBalanceAddToSwap,
@@ -406,7 +445,7 @@ const Exchange = ({ _this }) => {
           }))
       }
     }
-  }, [addressTokenOut, addressTokenIn, chainIn, minBalanceAddToSwap, isCrossChain, loadingBalanceNative, loadingGasPriceDefault, estimateFake, balanceNative, tokenIn, tokenOut, rawTransaction, isNativeTokenInput, amountIn, balanceTokenIn])
+  }, [addressTokenOut, addressTokenIn, chainIn, minBalanceAddToSwap, isCrossChain, loadingBalanceNative, loadingGasPriceDefault, feeGas, balanceNative, tokenIn, tokenOut, rawTransaction, isNativeTokenInput, amountIn, balanceTokenIn])
 
   useEffect(() => {
     if (containerConfirmRef.current) {
@@ -433,8 +472,22 @@ const Exchange = ({ _this }) => {
     }
 
     if (type === TYPE_VIEW_EXPLORER.relayLink) {
-      const url = `https://relay.link/transaction/${hash?.exchange}`
+      let url
+      const baseUrlExplorer = SWAP_SERVICE_CONFIG.providers[bridgeProvider].linkExplorer
+      switch (bridgeProvider) {
+        case PLATFORM_EXCHANGE.relay:
+          url = `${baseUrlExplorer}/transaction/${hash?.exchange}`
+          break
+        case PLATFORM_EXCHANGE.deBridge:
+          if (isCrossChain) {
+            url = `${baseUrlExplorer}/order?orderId=${requestId}`
+          } else {
+            url = `${baseUrlExplorer}/same-chain-order?orderId=${requestId}&txHash=${hash?.exchange}&chainId=${tokenIn?.chainId}`
+          }
+          break
+      }
       handleOpenUrl(url)
+
       return
     }
     if (type === TYPE_VIEW_EXPLORER.hashExchange) {
@@ -466,7 +519,10 @@ const Exchange = ({ _this }) => {
         ...pre,
         exchange: data?.hash
       }))
-      if (data?.amountOut) {
+      if (data?.requestId) {
+        setRequestId(data?.requestId)
+      }
+      if (BigNumber(data?.amountOut || '0').gt(0)) {
         setAmountOutAfterSwap(data?.amountOut)
       }
     }
@@ -484,8 +540,8 @@ const Exchange = ({ _this }) => {
       const raw = {
         data: rawApprove.data,
         to: rawApprove.to,
-        from: rawApprove.from,
-        noEstimateGas: true
+        from: rawApprove.from || account.address,
+        noGasPrice: !!CHAIN_ID_NO_GAS_PRICE_SWAP[tokenIn.chainId]
       }
 
       if (rawApprove?.gas) {
@@ -503,24 +559,26 @@ const Exchange = ({ _this }) => {
       const raw = {
         data: rawTransaction?.tx.data,
         to: rawTransaction?.tx.to,
-        from: rawTransaction?.tx.from,
-        noEstimateGas: true,
-        requestId: rawTransaction?.rawResponse?.requestId
-      }
-
-      if (rawTransaction?.tx?.gas) {
-        raw.gasLimit = rawTransaction?.tx.gas
-      } else {
-        raw.gasLimit = DEFAULT_GAS_LIMIT
+        from: rawTransaction?.tx.from || account.address,
+        rawTransactionApi: rawTransaction?.tx,
+        noGasPrice: !!CHAIN_ID_NO_GAS_PRICE_SWAP[tokenIn.chainId]
       }
 
       if (rawTransaction?.tx.value && BigNumber(rawTransaction?.tx.value.toString()).gt(0)) {
         raw.value = rawTransaction?.tx.value
         raw.valueNoConvert = rawTransaction?.tx.value
       }
-      raw.rawTransactionApi = rawTransaction?.tx
 
-      await handleSubmitExchange(raw, callbackStep)
+      if (rawTransaction?.rawResponse?.requestId) {
+        raw.requestId = rawTransaction?.rawResponse?.requestId
+      }
+
+      if (gasLimitRawTx) {
+        raw.noEstimateGas = true
+        raw.gasLimit = gasLimitRawTx
+      }
+
+      await handleSubmitExchange(raw, rawTransaction.provider, callbackStep)
     }
   }
 
@@ -609,14 +667,50 @@ const Exchange = ({ _this }) => {
   }
 
   // user types the OUTPUT amount -> EXPECTED_OUTPUT, input gets computed by the quote.
-  // OUT USD is derived from our price API (amountOut × priceTokenOut), so we only track the
-  // token amount here.
   const onChangeAmountOut = (value, decimal) => {
     setIsExactInput(false)
     setIsUsdInEdited(false)
+    setIsUsdOutEdited(false)
     const valueSanitize = sanitizeAmountText(value, decimal)
     setAmountOut(valueSanitize)
     onChangeValueExchange({ amountOut: valueSanitize })
+
+    if (priceTokenOut) {
+      // amountOutToUSD is the editable fiat field's value — round it exactly like FiatBalance
+      // (toFiatAmount); the full-precision USD used for calculations lives in amountOutUsd.
+      setAmountOutToUSD(toFiatAmount(BigNumber(valueSanitize || 0).multipliedBy(priceTokenOut)))
+    }
+  }
+
+  // User types a fiat amount for the OUTPUT (mirror of onChangeAmountToUsd). Convert
+  // fiat → USD → token amount using the token's USD price, then EXPECTED_OUTPUT so the
+  // quote back-computes the INPUT amount.
+  // eslint-disable-next-line no-unused-vars -- fiat input for the output token, not wired into the UI yet
+  const onChangeAmountOutToUsd = (value, decimal) => {
+    setOptionDefaultBalance(null)
+    const cur = CURRENCY_DATA[currencyCode] || CURRENCY_DATA.USD
+    value = value.replace(`${cur.symbol}`, '').trim()
+
+    if (!priceTokenOut || !isFocusAmountInputToUSDOutRef.current) {
+      return
+    }
+    const valueSanitize = sanitizeAmountText(value, decimal)
+    setAmountOutToUSD(valueSanitize)
+    setIsUsdOutEdited(true)
+
+    const price = BigNumber(priceTokenOut || 0)
+    // USD = typed fiat ÷ rate, kept at full precision so the back-computed token amount stays
+    // accurate; only the token amount is rounded (to its own decimals) at the end.
+    const usd = BigNumber(valueSanitize || 0).div(fiatRate > 0 ? fiatRate : 1)
+
+    let amountOut = usd.dividedBy(price).decimalPlaces(decimalTokenOut, BigNumber.ROUND_DOWN).toFixed()
+    if (isNaN(amountOut) || amountOut === 'NaN' || amountOut?.includes('e-') || amountOut?.includes('-e')) {
+      amountOut = '0'
+    }
+
+    setIsExactInput(false)
+    setAmountOut(amountOut)
+    onChangeValueExchange({ amountOut })
   }
 
   const handleMax = (type = 'max') => {
@@ -625,7 +719,7 @@ const Exchange = ({ _this }) => {
       return
     }
 
-    const feeTx = estimateFake
+    const feeTx = feeGas
     let balanceUser = BigNumber(balanceTokenIn).decimalPlaces(decimalTokenIn, BigNumber.ROUND_DOWN).toFixed()
     if (isNativeTokenInput) {
       balanceUser = BigNumber(balanceUser).minus(feeTx).decimalPlaces(decimalTokenIn, BigNumber.ROUND_DOWN).toFixed()
@@ -668,7 +762,7 @@ const Exchange = ({ _this }) => {
         <MyButton
           variant='default'
           disableLiquidGlass
-          isLoading={loadingGetQuote || loadingApprove}
+          isLoading={loadingGetQuote || loadingApprove || loadingFeeProtocol}
           isDisable={loadingGetQuote}
           label={I18n.t('Initial.ExchangeApprove')}
           onPress={handleExecute}
@@ -678,7 +772,7 @@ const Exchange = ({ _this }) => {
     return (
       <MyButton
         variant='primary'
-        isLoading={loadingGetQuote || loadingExchange}
+        isLoading={loadingGetQuote || loadingExchange || loadingFeeProtocol}
         isDisable={loadingGetQuote || !!hash?.exchange}
         label={I18n.t('v2.exchange.execute')}
         onPress={handleExecute}
@@ -686,15 +780,15 @@ const Exchange = ({ _this }) => {
     )
   }
 
-  // Formatted fiat value shown in the token IN USD field when NOT being edited. Rounds the
-  // shared USD value the SAME way FiatBalance does (× rate, half-up at MAX_DECIMAL_2USD — same
-  // math as toFiatAmount), then adds thousands separators + trims trailing zeros exactly like
+  // Formatted fiat value shown in a USD field when NOT being edited. Rounds the shared USD
+  // value the SAME way FiatBalance does (× rate, half-up at MAX_DECIMAL_2USD — same math as
+  // toFiatAmount), then adds thousands separators + trims trailing zeros exactly like
   // MyNumber — so blur, focus, and the Confirm screen all render the identical number.
-  const getFormattedValue = () => {
-    if (amountInUsdForDisplay == null) {
+  const getFormattedValue = (usdValue) => {
+    if (usdValue == null) {
       return ''
     }
-    const fiatValue = Number(amountInUsdForDisplay) * (fiatRate > 0 ? fiatRate : 1)
+    const fiatValue = Number(usdValue) * (fiatRate > 0 ? fiatRate : 1)
     if (!Number.isFinite(fiatValue)) {
       return ''
     }
@@ -712,77 +806,92 @@ const Exchange = ({ _this }) => {
     return frac.length > 0 ? `${formatted.slice(0, dot)}.${frac}` : formatted.slice(0, dot)
   }
 
-  // Token OUT USD row: read-only, computed from our price API (amountOut × priceTokenOut).
-  // FiatBalance applies the fiat rate + currency symbol, so we hand it plain USD.
-  const renderTokenOutUSD = () => (
-    <View style={{ height: getSizeImgSquare('large'), opacity: amountOutUsd != null ? 1 : 0 }} className='flex flex-row items-center '>
-      {/* fractionDigits (not dynamicDecimals) so this matches the Confirm screen exactly. */}
-      <FiatBalance className='text-medium' valueUSD={amountOutUsd || '0'} fractionDigits={MAX_DECIMAL_2USD} />
-    </View>
-  )
-
-  // Token IN USD row: editable. User can type a fiat amount and we back-compute the token.
-  // `amountInToUSD` holds the fiat-side value (already × rate), kept to MAX_DECIMAL_2USD so it
-  // reads like a currency amount. While focused we show that raw value so typing stays smooth
-  // (no reformatting mid-keystroke); on blur getFormattedValue() renders the same 2-decimal
-  // number — so tapping in shows exactly what was displayed, not a long decimal.
-  const renderTokenInUSD = () => {
+  // Shared bits for an editable fiat USD input (token IN and token OUT rows). The currency
+  // symbol renders INSIDE the input value (prefix before the number, suffix after it) —
+  // never as a sibling <Text>. A separate Text can't share the TextInput's line-box on every
+  // device, so its glyph drifts off the digits' baseline. Inside the value, alignment comes free.
+  const getUsdInputConfig = (isFocus, value, usdForDisplay) => {
     const cur = CURRENCY_DATA[currencyCode] || CURRENCY_DATA.USD
     const isSuffixSymbol = cur.position === 'suffix'
-    const textValue = isFocusAmountInputToUSD ? amountInToUSD?.toString() : getFormattedValue()
+    const textValue = isFocus ? value?.toString() : getFormattedValue(usdForDisplay)
+
+    const prefixSymbol = cur.position !== 'suffix' ? cur.symbol : ''
+    const suffixSymbol = cur.position === 'suffix' ? ` ${cur.symbol}` : ''
+
+    const displayValue = isFocus
+      ? `${prefixSymbol}${textValue || ''}${suffixSymbol}`
+      : textValue ? `${prefixSymbol}${textValue}${suffixSymbol}` : ''
+
+    // Suffix: pin the caret to the END OF THE NUMBER (before the symbol) while editing, so
+    // Backspace removes a digit — never the symbol — and new digits insert before it. Prefix
+    // needs no pinning: the symbol leads, so it is unreachable from the string's end.
+    const selection = isSuffixSymbol && isFocus
+      ? { start: displayValue.length - suffixSymbol.length, end: displayValue.length - suffixSymbol.length }
+      : undefined
+
+    return { cur, prefixSymbol, suffixSymbol, displayValue, selection }
+  }
+
+  // Editable fiat USD input, shared by the token IN and token OUT rows. User types a fiat
+  // amount and `onChange` back-computes the token amount. `value` holds the fiat-side value
+  // (already × rate), kept to MAX_DECIMAL_2USD so it reads like a currency amount. While
+  // focused we show that raw value so typing stays smooth (no reformatting mid-keystroke);
+  // on blur getFormattedValue() renders the same 2-decimal number — so tapping in shows
+  // exactly what was displayed, not a long decimal.
+  const renderTokenUsdInput = ({ isFocus, setFocus, isFocusRef, value, usdForDisplay, onChange }) => {
+    const { cur, prefixSymbol, suffixSymbol, displayValue, selection } = getUsdInputConfig(isFocus, value, usdForDisplay)
 
     const onBlur = () => {
-      isFocusAmountInputToUSDRef.current = false
-      setIsFocusAmountInputToUSD(false)
+      isFocusRef.current = false
+      setFocus(false)
     }
     const onFocus = () => {
-      isFocusAmountInputToUSDRef.current = true
-      setIsFocusAmountInputToUSD(true)
+      isFocusRef.current = true
+      setFocus(true)
     }
 
     return (
       <View style={{ height: getSizeImgSquare('large'), flexDirection: 'row', display: 'flex', alignItems: 'center' }}>
-        <Text
-          style={[styles.inputToUSD, { position: 'absolute', opacity: 0, height: 0 }]}
-          onLayout={e => {
-            const w = e.nativeEvent.layout.width
-            setInputWidthTokenIn(Math.max(w + pixelByWidth(10), pixelByWidth(20)))
-          }}
-        >
-          {textValue || '0'}
-        </Text>
-
-        {!isSuffixSymbol && (
-          <Text className='text-medium' style={styles.currencyTextPrefix}>
-            {cur.symbol}
-          </Text>
-        )}
-        <View style={[{ width: inputWidthTokenIn }]}>
+        <View style={{ width: '100%', position: 'relative' }}>
           <InputCustom
             variant='empty'
             useNativePlaceholder
             onBlur={onBlur}
             onFocus={onFocus}
-            value={textValue}
-            onChangeText={value => onChangeAmountToUsd(value, MAX_DECIMAL_2USD)}
+            value={displayValue}
+            selection={selection}
+            onChangeText={value => {
+              value = value.toString()?.replace?.(cur.symbol, '')?.trim?.()
+              onChange(value, MAX_DECIMAL_2USD)
+            }}
             keyboardType='decimal-pad'
             placeholderTextColor={Colors.TEXT_MEDIUM}
-            placeholder='0'
+            placeholder={`${prefixSymbol}0${suffixSymbol}`}
             inputConfig={{
               style: { color: Colors.TEXT_MEDIUM }
             }}
           />
         </View>
-
-        {isSuffixSymbol && (
-          <Text className='text-medium' style={styles.currencyTextSuffix}>
-            {cur.symbol}
-          </Text>
-        )}
       </View>
-
     )
   }
+
+  // Token OUT USD row: read-only for now. When the customer wants it editable again,
+  // swap this back to renderTokenUsdInput({ ... }) — all the state/handler code is still here.
+  const renderTokenOutUSD = () => (
+    <View style={{ height: getSizeImgSquare('large'), opacity: amountOutUsd != null ? 1 : 0 }} className='flex flex-row items-center'>
+      <FiatBalance className='text-medium' valueUSD={amountOutUsd || '0'} fractionDigits={MAX_DECIMAL_2USD} />
+    </View>
+  )
+
+  const renderTokenInUSD = () => renderTokenUsdInput({
+    isFocus: isFocusAmountInputToUSD,
+    setFocus: setIsFocusAmountInputToUSD,
+    isFocusRef: isFocusAmountInputToUSDRef,
+    value: amountInToUSD,
+    usdForDisplay: amountInUsdForDisplay,
+    onChange: onChangeAmountToUsd
+  })
 
   const renderStepSubmit = () => {
     return (
@@ -876,14 +985,31 @@ const Exchange = ({ _this }) => {
                     </TouchableOpacity>
                   </View>
                 </View>
-                <View className='flex flex-row items-center gap-1'>
-                  <MyIcon uri={images.UIV2.icons.relayIcon} />
-                  <TouchableOpacity onPress={() => handleExplorer(TYPE_VIEW_EXPLORER.relayLink)} activeOpacity={1}>
-                    <MyText className='text-brand'>
-                      {I18n.t('v2.exchange.viewRelayExplorer')}
-                    </MyText>
-                  </TouchableOpacity>
-                </View>
+                {
+                  bridgeProvider === PLATFORM_EXCHANGE.relay && (
+                    <View className='flex flex-row items-center gap-1'>
+                      <MyIcon uri={images.UIV2.icons.relayIcon} />
+                      <TouchableOpacity onPress={() => handleExplorer(TYPE_VIEW_EXPLORER.relayLink)} activeOpacity={1}>
+                        <MyText className='text-brand'>
+                          {I18n.t('v2.exchange.viewRelayExplorer')}
+                        </MyText>
+                      </TouchableOpacity>
+                    </View>
+                  )
+                }
+
+                {
+                  requestId && bridgeProvider === PLATFORM_EXCHANGE.deBridge && (
+                    <View className='flex flex-row items-center gap-1'>
+                      <MyIcon uri={images.UIV2.icons.deBridgeExplorer} />
+                      <TouchableOpacity onPress={() => handleExplorer(TYPE_VIEW_EXPLORER.relayLink)} activeOpacity={1}>
+                        <MyText className='text-brand'>
+                          {I18n.t('v2.exchange.viewDeBridgeExplorer')}
+                        </MyText>
+                      </TouchableOpacity>
+                    </View>
+                  )
+                }
 
               </View>
             </View>
@@ -955,7 +1081,7 @@ const Exchange = ({ _this }) => {
     // rate + symbol and formats it for display.
     // Uses priceTokenIn (our price API) to stay consistent with the rest of the screen.
     const convert2USDFeeGas = () => {
-      return BigNumber(estimateFake).multipliedBy(priceTokenIn || '1').toFixed()
+      return BigNumber(feeGas).multipliedBy(priceTokenIn || '1').toFixed()
     }
 
     return (
@@ -978,9 +1104,15 @@ const Exchange = ({ _this }) => {
                   chainId={tokenIn.chainId}
                   tokenIconUri={tokenIn?.iconUrl}
                 />
-                <View style={{ flex: 1 }}>
-                  <MyBalance autoFit variant='title' fontWeight={700} value={amountIn} fractionDigits={decimalTokenIn} />
-                </View>
+                <InputAmount
+                  value={(() => {
+                    const { intPart, fracPart } = getNumberParts(amountIn, decimalTokenIn)
+                    return fracPart ? `${intPart}.${fracPart}` : intPart
+                  })()}
+                  disabled
+                  textStyle={styles.input}
+                />
+
               </View>
 
               <View style={[styles.containerRowItem2]}>
@@ -1007,9 +1139,14 @@ const Exchange = ({ _this }) => {
                     images.UIV2.icons.noTokenOutExchange
                   }
                 />
-                <View style={{ flex: 1 }}>
-                  <MyBalance autoFit variant='title' fontWeight={700} value={amountOut} fractionDigits={decimalTokenOut} />
-                </View>
+                <InputAmount
+                  value={(() => {
+                    const { intPart, fracPart } = getNumberParts(amountOut, decimalTokenOut)
+                    return fracPart ? `${intPart}.${fracPart}` : intPart
+                  })()}
+                  disabled
+                  textStyle={styles.input}
+                />
 
               </View>
 
@@ -1215,7 +1352,7 @@ const Exchange = ({ _this }) => {
                     />
                   </View>
                   <View className='flex-1'>
-                    <AutoFitAmountInput
+                    <InputAmount
                       value={amountIn?.toString()}
                       onChangeText={value => onChangeAmountIn(value, decimalTokenIn)}
                       keyboardType='decimal-pad'
@@ -1255,6 +1392,8 @@ const Exchange = ({ _this }) => {
                             handleSelectChain(true, () => {
                               setAmountOut('')
                               setAmountInToUSD('')
+                              setAmountOutToUSD('')
+                              setIsUsdOutEdited(false)
                             })
                           }}>
                           <MyIcon uri={images.UIV2.icons.network} variant='small' />
@@ -1291,7 +1430,7 @@ const Exchange = ({ _this }) => {
                     }
                   />
                   <View className='flex-1'>
-                    <AutoFitAmountInput
+                    <InputAmount
                       value={amountOut?.toString()}
                       onChangeText={value => onChangeAmountOut(value, decimalTokenOut)}
                       keyboardType='decimal-pad'

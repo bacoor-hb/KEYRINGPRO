@@ -11,6 +11,7 @@ import TxStatusTimeline from '../TxStatusTimeline'
 import X402SignModal from '../X402SignModal'
 import { runX402Gate, X402_PATH } from '../WalletActionForm/x402Gate'
 import { useX402FeeFor } from 'frontend/Hooks/useX402Fees'
+import { formatFeeLabel } from '../x402FeeLabel'
 import styles from './styles'
 
 const tt = (key, locale, opts) => I18n.t(`chatAgent.${key}`, { ...(opts || {}), locale: resolveLocale(locale) })
@@ -216,6 +217,14 @@ export default function ConfirmAddLiquidityTx ({ props, onResult, onStatusChange
     // while it still costs nothing — the x402 fee is only ever paid for a tx
     // that can actually execute. Without this the user pays, then fails.
     preflight: true,
+    // Sign with the pre-flight's estimate plus headroom rather than letting the
+    // broadcast re-estimate. An AMM mint is the tx this matters most for: it
+    // writes storage slots from zero (a new position, and any tick the range
+    // initializes), and its cost depends on where the pool's price sits — so a
+    // swap by anyone else landing between the estimate and the block can push
+    // the real cost above what was measured, and the mint reverts out of gas.
+    // That revert is expensive here: the x402 fee has already been paid by then.
+    gasBuffer: true,
     // Backend authorization + its x402 payment, last thing before signing.
     //
     // The PRICE LIST is what switches this on: the gate runs only when the
@@ -368,7 +377,7 @@ export default function ConfirmAddLiquidityTx ({ props, onResult, onStatusChange
             be quoted again, so repeating the price here would just be noise. */}
           {(isIdle || isGating) && !expired && !!x402Fee && (
             <MyText className='text-medium'>
-              {t('walletActionFeeNotice', { fee: x402Fee.label })}
+              {t('walletActionFeeNotice', { fee: formatFeeLabel(x402Fee, language) })}
             </MyText>
           )}
 

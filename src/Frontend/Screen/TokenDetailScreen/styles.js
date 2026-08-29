@@ -60,9 +60,6 @@ const createStyles = () => {
       maxWidth: width(50),
       marginLeft: pixelByWidth(8)
     },
-    heroBalance: {
-      textAlign: 'right'
-    },
     heroChangeText: {
       color: Colors.RED_TEXT
     },
@@ -81,15 +78,28 @@ const createStyles = () => {
       position: 'relative'
     },
     // ── Chart card: price + rank + multi-timeframe change row ────────────────
+    // Fixed height, not content-driven: both card variants (price and APY) hide
+    // parts of this row while their data loads, and a collapsing row would make
+    // the card — and everything below it — shorter during loading than after.
+    // 28 is the pill's own height (`rankPill` / `apyChangePill`), which is the
+    // tallest thing in the row, so pinning it changes nothing once loaded.
     chartTopRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
+      height: pixelByHeight(28),
       marginBottom: pixelByHeight(8)
     },
+    // `height: '100%'` + centred so the headline sits mid-row inside the fixed
+    // `chartTopRow` above, and the wrap keeps the row's height even while empty
+    // (APY variant, before the rate lands). Cross-axis is still baseline so the
+    // price/symbol pair keeps aligning on the text baseline.
     chartPriceWrap: {
       flexDirection: 'row',
-      alignItems: 'baseline'
+      alignItems: 'baseline',
+      height: '100%',
+      alignContent: 'center',
+      flexWrap: 'wrap'
     },
     chartPriceUp: {
       color: Colors.GREEN_TEXT
@@ -144,6 +154,66 @@ const createStyles = () => {
       height: pixelByHeight(128),
       overflow: 'hidden',
       position: 'relative'
+    },
+
+    // ── Chart card: APY variant (yield / lending tokens) ──────────────────────
+    // Same card shell as the price chart; only the two header rows differ. The
+    // APY headline is always green — it is a yield, not a price direction — while
+    // the pill on its right carries the up/down colour of the daily change.
+    apyHeadline: {
+      color: Colors.GREEN_TEXT
+    },
+    apyChangePill: {
+      borderRadius: 24,
+      backgroundColor: Colors.BG_BOX_SECONDARY,
+      height: pixelByHeight(28),
+      justifyContent: 'center',
+      paddingHorizontal: pixelByWidth(12)
+    },
+    apyChangeUp: {
+      color: Colors.GREEN_TEXT
+    },
+    apyChangeDown: {
+      color: Colors.RED_TEXT
+    },
+    // "Total supplied" (left, muted) + the amount (right, white). Occupies the
+    // same slot as the price card's timeframe row, so the chart below sits at
+    // the identical y in both variants and swapping between them never jumps.
+    // Must mirror `changeRowSlot` (height AND marginBottom) exactly — this is the
+    // APY card's stand-in for the price card's timeframe row, and any difference
+    // here makes the two cards different heights.
+    apySuppliedRow: {
+      height: pixelByHeight(22),
+      marginBottom: pixelByHeight(16),
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between'
+    },
+    apySuppliedLabel: {
+      color: Colors.TEXT_LOW
+    },
+    apySuppliedValue: {
+      color: Colors.WHITE
+    },
+    // Floating "AVG x%" badge pinned to the dashed average line. `left` is fixed
+    // (the badge hugs the chart's left edge); `top` is computed at render from
+    // where the average falls within the series range.
+    apyAvgBadge: {
+      position: 'absolute',
+      left: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderRadius: pixelByWidth(8),
+      backgroundColor: '#09090ACC',
+      paddingHorizontal: pixelByWidth(8),
+      paddingVertical: pixelByHeight(1.5),
+      gap: pixelByWidth(4)
+    },
+    apyAvgBadgeLabel: {
+      color: Colors.TEXT_MEDIUM
+    },
+    apyAvgBadgeValue: {
+      color: Colors.WHITE
     },
 
     // ── Section title ────────────────────────────────────────────────────────

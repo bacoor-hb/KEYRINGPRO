@@ -8,7 +8,10 @@ import { LIST_DEFAULT_CHAIN_ID } from 'common/constants/chain'
 const DEFAULT_MAX_SHOW = 6
 
 const ListChain = ({ maxShow = DEFAULT_MAX_SHOW, chainIdListCustom }) => {
-  const { activeEvmChainIdsRedux, blockchainListRedux } = useSelector(state => state)
+  // Per-slice selectors — a whole-state one re-rendered this list on every
+  // dispatch in the app (each icon here is an image).
+  const activeEvmChainIdsRedux = useSelector(state => state.activeEvmChainIdsRedux)
+  const blockchainListRedux = useSelector(state => state.blockchainListRedux)
   const styles = createStyles()
 
   // Default chains first (in LIST_DEFAULT_CHAIN_ID priority order), then custom chains.

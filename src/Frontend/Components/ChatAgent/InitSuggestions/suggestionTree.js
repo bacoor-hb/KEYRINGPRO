@@ -1,4 +1,5 @@
-import I18n from 'assets/Lang'
+import I18n, { resolveLocale } from 'assets/Lang'
+import { formatFeeLabel } from '../x402FeeLabel'
 import { LENDING_ENABLED } from 'frontend/Services/keyringAgent'
 
 // The init-suggestion decision TREE.
@@ -28,6 +29,20 @@ import { LENDING_ENABLED } from 'frontend/Services/keyringAgent'
 //                      `reply` ⇒ the node is a LEAF (an AI turn).
 //
 // Titles carry their own leading emoji, so no icon asset is involved.
+
+// Every label / canned line in the tree resolves through here.
+//
+// `locale` is the BCP-47 tag of the language the CONVERSATION is in — which is
+// not always the app's language: someone running the app in Vietnamese can chat
+// in English, and the menu must follow what they TYPED, not the app chrome. It
+// is threaded down from the turn the core reports (`rewrite.language`).
+//
+// Omitted (the tap path, where the pills ARE app chrome) it falls back to the
+// app language, so every existing call keeps its current behavior. Same
+// `resolveLocale` mapping the rest of ChatAgent uses (vi→vn, ja→jp, …), so an
+// unknown tag degrades to the app language rather than showing raw keys.
+const tt = (key, locale, opts) =>
+  I18n.t(key, { ...(opts || {}), ...(locale ? { locale: resolveLocale(locale) } : {}) })
 
 // ─── x402 fees ───────────────────────────────────────────────────────────────
 //
@@ -65,20 +80,24 @@ export const setX402Fees = (fees) => {
 // The fee label for an operation, e.g. "0.05 USDC on Base". Null until the spec
 // has loaded, or when the server does not price that operation up front — the
 // title then renders its no-fee variant instead of a stale or invented number.
-export const getFeeLabel = (operationId) => X402_FEES[operationId]?.label || null
+//
+// Formatted per call rather than read off the cached entry, so the phrase follows
+// the app's current language (the pills are app chrome — they have no per-turn
+// language of their own, hence no argument). See formatFeeLabel.
+export const getFeeLabel = (operationId) => formatFeeLabel(X402_FEES[operationId])
 
 // A pill's label, with the fee appended only once it is actually known. The
 // unpriced string is the same copy without the "(Fee: …)" suffix, so a slow or
 // unreachable spec degrades to a plain button rather than an empty price or a
 // flash of the wrong one.
-const withFee = (key, operationId) => () => {
+const withFee = (key, operationId) => (locale) => {
   const fee = getFeeLabel(operationId)
-  return fee ? I18n.t(`${key}WithFee`, { fee }) : I18n.t(key)
+  return fee ? tt(`${key}WithFee`, locale, { fee }) : tt(key, locale)
 }
 const LENDING_SUGGESTION = {
   key: 'lending',
-  title: () => I18n.t('AISearch.suggestions.callAgent_lending'),
-  prompt: () => I18n.t('AISearch.suggestions.callAgent_lendingPrompt')
+  title: (locale) => tt('AISearch.suggestions.callAgent_lending', locale),
+  prompt: (locale) => tt('AISearch.suggestions.callAgent_lendingPrompt', locale)
 }
 
 export const AI_SUGGESTIONS = [
@@ -87,45 +106,45 @@ export const AI_SUGGESTIONS = [
     // children and no prompt, so nothing is sent to the agent — the next turn
     // comes from whatever they write in the input.
     key: 'askQuestion',
-    title: () => I18n.t('AISearch.suggestions.askQuestion'),
-    userText: () => I18n.t('AISearch.suggestions.askQuestionUser'),
-    reply: () => I18n.t('AISearch.suggestions.askQuestionReply')
+    title: (locale) => tt('AISearch.suggestions.askQuestion', locale),
+    userText: (locale) => tt('AISearch.suggestions.askQuestionUser', locale),
+    reply: (locale) => tt('AISearch.suggestions.askQuestionReply', locale)
   },
   {
     key: 'callAgent',
-    title: () => I18n.t('AISearch.suggestions.callAgent'),
+    title: (locale) => tt('AISearch.suggestions.callAgent', locale),
     // Echoes without the pill's leading emoji — the label is a button, the echo
     // is meant to read as something the user said.
-    userText: () => I18n.t('AISearch.suggestions.callAgentUser'),
-    reply: () => I18n.t('AISearch.suggestions.callAgentReply'),
+    userText: (locale) => tt('AISearch.suggestions.callAgentUser', locale),
+    reply: (locale) => tt('AISearch.suggestions.callAgentReply', locale),
     children: [
       {
         key: 'nft',
-        title: () => I18n.t('AISearch.suggestions.callAgent_nft'),
-        reply: () => I18n.t('AISearch.suggestions.pickOption'),
+        title: (locale) => tt('AISearch.suggestions.callAgent_nft', locale),
+        reply: (locale) => tt('AISearch.suggestions.pickOption', locale),
         children: [
           {
             key: 'list',
-            title: () => I18n.t('AISearch.suggestions.nft_list'),
-            prompt: () => I18n.t('AISearch.suggestions.nft_listPrompt')
+            title: (locale) => tt('AISearch.suggestions.nft_list', locale),
+            prompt: (locale) => tt('AISearch.suggestions.nft_listPrompt', locale)
           },
           {
             key: 'send',
             // Priced by the spec's `sendNft` operation (/api/send-nft).
             title: withFee('AISearch.suggestions.nft_send', 'sendNft'),
-            prompt: () => I18n.t('AISearch.suggestions.nft_sendPrompt')
+            prompt: (locale) => tt('AISearch.suggestions.nft_sendPrompt', locale)
           }
         ]
       },
       {
         key: 'balance',
-        title: () => I18n.t('AISearch.suggestions.callAgent_balance'),
-        reply: () => I18n.t('AISearch.suggestions.pickOption'),
+        title: (locale) => tt('AISearch.suggestions.callAgent_balance', locale),
+        reply: (locale) => tt('AISearch.suggestions.pickOption', locale),
         children: [
           {
             key: 'show',
-            title: () => I18n.t('AISearch.suggestions.balance_show'),
-            prompt: () => I18n.t('AISearch.suggestions.balance_showPrompt')
+            title: (locale) => tt('AISearch.suggestions.balance_show', locale),
+            prompt: (locale) => tt('AISearch.suggestions.balance_showPrompt', locale)
           },
           {
             key: 'send',
@@ -133,7 +152,7 @@ export const AI_SUGGESTIONS = [
             // native-coin variant (`sendNative`) is the same price today, and the
             // pill covers both kinds of send — token is the representative one.
             title: withFee('AISearch.suggestions.balance_send', 'sendToken'),
-            prompt: () => I18n.t('AISearch.suggestions.balance_sendPrompt')
+            prompt: (locale) => tt('AISearch.suggestions.balance_sendPrompt', locale)
           }
         ]
       },
@@ -141,8 +160,8 @@ export const AI_SUGGESTIONS = [
         key: 'pools',
         // The ranking itself is free — the `addPool` fee is only charged if the
         // user goes on to add liquidity from it, so no price is shown here.
-        title: () => I18n.t('AISearch.suggestions.callAgent_pools'),
-        prompt: () => I18n.t('AISearch.suggestions.callAgent_poolsPrompt')
+        title: (locale) => tt('AISearch.suggestions.callAgent_pools', locale),
+        prompt: (locale) => tt('AISearch.suggestions.callAgent_poolsPrompt', locale)
       },
       // Only when the lending subagent is routable: with it off the core has
       // nothing to answer a supply/earn question with, so the pill would promise
@@ -171,16 +190,38 @@ const SESSION_SUGGESTIONS = {
   swapAndSend: [
     {
       key: 'crossChainGasCharges',
-      title: () => I18n.t('AISearch.suggestions.swapAndSend_gasCharges'),
-      prompt: () => I18n.t('AISearch.suggestions.swapAndSend_gasCharges')
+      title: (locale) => tt('AISearch.suggestions.swapAndSend_gasCharges', locale),
+      prompt: (locale) => tt('AISearch.suggestions.swapAndSend_gasCharges', locale)
     },
     {
       key: 'whyAddGasCrossChain',
-      title: () => I18n.t('AISearch.suggestions.swapAndSend_whyAddGas'),
-      prompt: () => I18n.t('AISearch.suggestions.swapAndSend_whyAddGas')
+      title: (locale) => tt('AISearch.suggestions.swapAndSend_whyAddGas', locale),
+      prompt: (locale) => tt('AISearch.suggestions.swapAndSend_whyAddGas', locale)
     }
   ]
 }
+
+// ─── Typed-text equivalent of the "Call Keyring Agent" pill ─────────────────
+//
+// The pills are app-side only, so a user who TYPES or pastes the same request
+// ("Call Keyring Agent", "what can you do?", "menu") never touches this tree —
+// their text goes to the agent, which answers in prose and leaves them with no
+// way to act. The core flags that intent on the turn it returns
+// (`rewrite.aboutAssistant`, decided by its query rewriter — no phrase matching
+// anywhere), and AISearch then plays back THIS node instead of the prose reply.
+//
+// Deliberately the same node the pill opens, not a flattened copy of the whole
+// tree: the branch level ("Which can I help you with?" + the four options) is
+// what the tap produces, so typing must produce exactly it — same canned reply,
+// same four pills, same free drill-down into the sub-levels. A flattened
+// one-shot menu would look similar but behave differently, and every sub-level
+// would then cost a real agent turn to reveal.
+export const CALL_AGENT_KEY = 'callAgent'
+
+// The node the "Call Keyring Agent" pill opens, or undefined if the tree no
+// longer carries it — callers fall back to the agent's own reply, so renaming or
+// removing the node degrades to today's prose answer instead of throwing.
+export const getCallAgentNode = () => AI_SUGGESTIONS.find((n) => n.key === CALL_AGENT_KEY)
 
 // The root pill set for a session. Unknown / undefined sessions fall back to the
 // default tree, so adding an entry point never has to touch this file.
@@ -211,11 +252,11 @@ export const getOptionsAt = (path) => {
 
 // The bot line shown when a local node is opened. Falls back to a shared prompt
 // so a new branch needs no dedicated copy to be usable.
-export const getBranchReply = (node) =>
-  (node?.reply ? node.reply() : I18n.t('AISearch.suggestions.defaultReply'))
+export const getBranchReply = (node, locale) =>
+  (node?.reply ? node.reply(locale) : tt('AISearch.suggestions.defaultReply', locale))
 
 // What the tap echoes as the user's own message. Defaults to the pill's label,
 // which is right for most nodes; nodes that should read like real speech rather
 // than a button override it with `userText`.
-export const getUserText = (node) =>
-  (node?.userText ? node.userText() : node?.title?.())
+export const getUserText = (node, locale) =>
+  (node?.userText ? node.userText(locale) : node?.title?.(locale))

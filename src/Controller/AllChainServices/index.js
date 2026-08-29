@@ -8,9 +8,16 @@ import {
 import { ethers } from 'ethers'
 import BigNumber from 'bignumber.js'
 import { LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_UNISWAP, LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_PANCAKESWAP, typeLiquidityPool } from 'common/constants/chain'
-import { numberToHex, encodeFunctionData } from 'viem'
+import { numberToHex, encodeFunctionData, decodeFunctionData, erc20Abi } from 'viem'
 
 import ViemWeb3 from 'src/Web3/ViemWeb3'
+
+// OP-Stack GasPriceOracle predeploy — same address on every rollup built on the
+// stack. See AllChainServices.hasL1DataFee.
+const L1_GAS_PRICE_ORACLE = '0x420000000000000000000000000000000000000F'
+// chainId -> whether that predeploy exists. Module-level so the probe survives
+// screen remounts; see hasL1DataFee for why only definitive answers land here.
+const L1_DATA_FEE_CHAINS = new Map()
 
 /**
  * Where to setting all function which can used by all chain
@@ -97,7 +104,9 @@ export default class AllChainServices {
   }
 
   static async estimateGasTxs (chainIdOrChainType, rawTransaction) {
+    //  Priority: estimateGas when to have gasPrice > estimateGas when to not have gasPrice
     try {
+      // option1: estimateGas when to have gasPrice
       const client = ViemWeb3.getPublicClient(chainIdOrChainType)
 
       // Normalize the raw tx (from + hex value/gasPrice) into the client's shape
@@ -113,15 +122,37 @@ export default class AllChainServices {
       if (gasPrice != null) params.gasPrice = BigInt(gasPrice)
 
       const gas = await client.estimateGas(params)
+
       // Return a Number so BigNumber(...).multipliedBy(gas) works
       // (BigNumber can't multiply by a BigInt).
       return Number(gas)
     } catch (err) {
-      // The 0 return tells the caller nothing about WHY (revert vs unreachable
-      // RPC vs a malformed param), so log the real reason in dev — every
-      // "this transaction cannot be completed" traces back to here.
-      if (__DEV__) console.log('[estimateGasTxs] failed', { chainIdOrChainType, rawTransaction, message: err?.shortMessage || err?.message, err })
-      return 0
+      try {
+        // option2: estimateGas when to not have gasPrice
+        const client = ViemWeb3.getPublicClient(chainIdOrChainType)
+
+        // Normalize the raw tx (from + hex value/gasPrice) into the client's shape
+        // (account + BigInt value/gasPrice). Callers may omit value/gasPrice — e.g.
+        // gas is estimated WITHOUT gasPrice on purpose (see postBaseSendTxs) so the
+        // node doesn't prepay gas and shrink the simulated balance.
+        const { to, from, data, value } = rawTransaction || {}
+        const params = {}
+        if (to) params.to = to
+        if (data) params.data = data
+        if (from) params.account = from
+        if (value != null && value !== '') params.value = BigInt(value)
+
+        const gas = await client.estimateGas(params)
+        // Return a Number so BigNumber(...).multipliedBy(gas) works
+        // (BigNumber can't multiply by a BigInt).
+        return Number(gas)
+      } catch (error) {
+        // The 0 return tells the caller nothing about WHY (revert vs unreachable
+        // RPC vs a malformed param), so log the real reason in dev — every
+        // "this transaction cannot be completed" traces back to here.
+        if (__DEV__) console.log('[estimateGasTxs] failed', { chainIdOrChainType, rawTransaction, message: err?.shortMessage || err?.message, err })
+        return 0
+      }
     }
   }
 
@@ -280,6 +311,14 @@ export default class AllChainServices {
           generateTxs.percent = (payload.percentGas / 100)
         }
 
+        // Optional: the caller's own gas limit, used as a FLOOR below (see
+        // postBaseSendTxs). Callers that size an amount against a fee — "send max"
+        // — must pass the limit they subtracted, or the limit charged here can be
+        // the larger of the two and the node rejects the transaction.
+        if (payload.gasLimit) {
+          generateTxs.gasLimit = payload.gasLimit
+        }
+
         this.postBaseSendTxs(chainTypeOrChainId, privateKey, [generateTxs], false, callback).then((result) => {
           resolve(result[0])
         }).catch(err => {
@@ -364,8 +403,60 @@ export default class AllChainServices {
     return Number(allowance) < Number(convertBalanceToWei(amount, tokenDecimals))
   }
 
+  static async approveTokenForSwap (chainId, privateKey, rawTransaction) {
+    const { args } = decodeFunctionData({ abi: erc20Abi, data: rawTransaction.data })
+    const spender = args[0]
+    const allowance = await this.checkAllowance(chainId, rawTransaction.to, rawTransaction.from, spender)
+
+    let simulateSuccess = false
+
+    // check amount allowance
+    if (BigInt(allowance) === 0n) {
+      simulateSuccess = true
+    } else {
+      try {
+        const client = ViemWeb3.getPublicClient(chainId)
+        // Use `call` instead of `simulateContract` to skip viem's native
+        // balance / gas preflight checks (simulateContract fails even when the
+        // user actually has enough native balance). `call` only validates the
+        // contract execution itself.
+        await client.call({
+          to: rawTransaction.to,
+          data: rawTransaction.data,
+          account: rawTransaction.from,
+          from: rawTransaction.from
+        })
+        simulateSuccess = true
+      } catch (error) {
+        simulateSuccess = false
+      }
+    }
+
+    // reset approve token
+    // Docs: https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
+    if (!simulateSuccess) {
+      const resetData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [spender, 0n]
+      })
+
+      const resetTx = {
+        ...rawTransaction,
+        data: resetData
+      }
+
+      await this.postBaseSendTxs(chainId, privateKey, [resetTx], true)
+    }
+
+    return this.postBaseSendTxsForSwap(chainId, privateKey, rawTransaction)
+  }
+
   static async postBaseSendTxsForSwap (chainId, privateKey, rawTransaction) {
-    return ViemWeb3.sendTransaction(chainId, privateKey, rawTransaction)
+    // return ViemWeb3.sendTransaction(chainId, privateKey, rawTransaction)
+    const result = await this.postBaseSendTxs(chainId, privateKey, [rawTransaction], true, rawTransaction?.callback)
+
+    return result[0]
   }
 
   static async sendSignedTransactionWithRetry (chain, signedTransaction, isWaitDone, callback) {
@@ -395,7 +486,7 @@ export default class AllChainServices {
       const promise = arrSend.map(async (item, index) => {
         return new Promise(async (resolve, reject) => {
           try {
-            const { to, data, value, percent, valueNoConvert, gasPrice } = item
+            const { to, data, value, percent, valueNoConvert, gasPrice, gasLimit } = item
 
             const gasPriceFinal = gasPrice || await this.getGasPrice(chainTypeOrChainId)
 
@@ -439,10 +530,18 @@ export default class AllChainServices {
             // prepayment 0, so the transfer simulates against the full balance. Gas
             // used is independent of gasPrice; we still sign/broadcast with it.
             const estimateTx = { ...rawTransaction }
-            delete estimateTx.gasPrice
+            // delete estimateTx.gasPrice
 
-            this.estimateGasTxs(chainTypeOrChainId, estimateTx).then(async (gasLimit) => {
-              rawTransaction.gasLimit = '0x' + gasLimit.toString(16)
+            this.estimateGasTxs(chainTypeOrChainId, estimateTx).then(async (estimatedGasLimit) => {
+              // Take whichever limit is HIGHER — the node's estimate or the one the
+              // caller passed in. Never below the estimate, or the transaction
+              // reverts out of gas; never below the caller's, or the fee charged
+              // exceeds the fee its amount was sized against and the node rejects
+              // the whole thing ("insufficient funds for gas * price + value").
+              // This also covers estimateGasTxs resolving to 0 on failure, which
+              // used to sign a transaction with a gas limit of 0x0.
+              const gasLimitFinal = BigNumber.maximum(estimatedGasLimit || 0, gasLimit || 0)
+              rawTransaction.gasLimit = numberToHex(BigInt(gasLimitFinal.toFixed(0)))
 
               rawTransaction.chainId = await this.getChainId(chainTypeOrChainId)
 
@@ -671,8 +770,39 @@ export default class AllChainServices {
     }
   }
 
+  /**
+   * Does this chain charge an L1 data fee on top of L2 execution?
+   *
+   * True on every OP-Stack rollup — they all predeploy the same GasPriceOracle
+   * at a fixed address — and false everywhere else, so the contract's bytecode
+   * IS the test. Deliberately not a hard-coded chain list: the list was the bug
+   * (only chainId 10 was ever charged the L1 fee, while Base, Ink, Katana and
+   * the rest quietly went unpriced), and a new rollup added to the app would
+   * have to be remembered here to avoid repeating it.
+   *
+   * The answer is cached per chain because a predeploy never appears or
+   * disappears, and this sits on a 30s fee-refresh loop. Only a DEFINITIVE
+   * answer is cached: an RPC failure returns false without caching, so a
+   * transient outage can't permanently mark a rollup as fee-free.
+   *
+   * @param {number|string} chainId
+   * @returns {Promise<boolean>}
+   */
+  static async hasL1DataFee (chainId) {
+    const key = Number(chainId)
+    if (L1_DATA_FEE_CHAINS.has(key)) return L1_DATA_FEE_CHAINS.get(key)
+    try {
+      const code = await ViemWeb3.getPublicClient(chainId).getCode({ address: L1_GAS_PRICE_ORACLE })
+      const has = !!code && code !== '0x'
+      L1_DATA_FEE_CHAINS.set(key, has)
+      return has
+    } catch (error) {
+      return false
+    }
+  }
+
   static async estimateL1DataFee (isMainToken, targetChainType, userAddress, tokenAddress) {
-    const gasPriceOracleContract = '0x420000000000000000000000000000000000000F'
+    const gasPriceOracleContract = L1_GAS_PRICE_ORACLE
 
     try {
       let rawTransactionForEstimateGas

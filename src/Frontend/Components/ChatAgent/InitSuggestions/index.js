@@ -16,7 +16,7 @@ export { AI_SUGGESTIONS, isLocal, hasChildren, getOptionsAt, getBranchReply, get
 // children without this component tracking any position itself. Deciding whether
 // that node drills down locally or sends a turn to the agent belongs to the
 // caller (useSuggestionTree + AISearch's page), not here.
-const InitSuggestions = ({ options, path, onSelect }) => {
+const InitSuggestions = ({ options, path, onSelect, locale }) => {
   // A paid pill's label carries the x402 fee, which comes from the price list
   // useX402Fees loads — a module cache, not a prop, so nothing here would
   // otherwise re-render when it lands. Subscribing repaints the labels once the
@@ -34,10 +34,17 @@ const InitSuggestions = ({ options, path, onSelect }) => {
           key={item.key}
           activeOpacity={0.8}
           style={styles.btnWrap}
-          onPress={() => onSelect(item, path)}
+          // `locale` rides along so the turn this tap starts — its echoed
+          // user text, its canned reply, and a leaf's prompt — stays in the
+          // language of the conversation this pill belongs to.
+          onPress={() => onSelect(item, path, locale)}
         >
           <GlassView interactive effect='clear' style={styles.btn}>
-            <MyText style={styles.btnText}>{item.title()}</MyText>
+            {/* Labelled in the CONVERSATION's language, which is not always the
+                app's: a menu reached by typing English inside a Vietnamese app
+                must read English. Undefined for the tap path — the pills are app
+                chrome there, so they follow the app language. */}
+            <MyText style={styles.btnText}>{item.title(locale)}</MyText>
           </GlassView>
         </TouchableOpacity>
       ))}

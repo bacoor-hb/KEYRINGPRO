@@ -72,7 +72,7 @@ const SwapAndSend = ({ _this }) => {
             lefIcon={(
               <TokenIconWithChain
                 chainId={chainIdOut}
-                chainIconUrl={chainOut?.iconUrl}
+                chainIconUrl={chainOut?.iconUrl || chainOut?.icon}
                 tokenIconUri={
                   tokenOut?.icon_image ||
                   tokenOut?.logoURI ||

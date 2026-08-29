@@ -2,7 +2,7 @@ import { useQuery } from 'react-query'
 import BigNumber from 'bignumber.js'
 import { sleep } from 'common/function'
 
-export const TARGET_HEALTH_FACTOR = '1.01'
+export const TARGET_HEALTH_FACTOR = '1.018'
 
 /**
  * Custom hook to calculate safe maximum withdraw amount based on Health Factor

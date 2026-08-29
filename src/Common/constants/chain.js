@@ -241,7 +241,15 @@ export const SUPPORTED_BLOCKCHAIN_DATA = {
     linkScanHash: 'https://explorer.katanarpc.com/tx/',
     linkScan: 'https://explorer.katanarpc.com/address/',
     linkScanTokenHolding: 'https://explorer.katanarpc.com/address/',
-    linkProvider: 'https://rpc.katana.network',
+    // Katana's own endpoint (same host family as the explorer above). NOT
+    // rpc.katana.network: that one is a load-balancing proxy whose upstream
+    // cannot see the sequencer's mempool, so a broadcast transaction reads back
+    // as non-existent — eth_getTransactionByHash returns null and, far worse,
+    // eth_getTransactionCount('pending') keeps returning the OLD nonce. The next
+    // send then signs the same nonce again and the sequencer rejects it as
+    // "replacement transaction underpriced", which is what made a perfectly
+    // valid send look like it had vanished.
+    linkProvider: 'https://rpc.katanarpc.com',
     chainId: 747474,
     icon: images.UIV2.defaultChains[747474],
     name: 'Katana',
@@ -279,6 +287,26 @@ export const SUPPORTED_BLOCKCHAIN_DATA = {
   },
   4217: {
     nativeCurrency: { symbol: 'USD' },
+    // Tempo has NO native coin. `eth_getBalance` answers with a sentinel
+    // (4242…42, 76 digits) instead of a balance, and gas is debited from an
+    // ERC20 stablecoin the account already holds — pathUSD when present, any
+    // other accepted stablecoin otherwise (observed on-chain: a transfer of
+    // usdt0 whose fee was charged in pathUSD, and one charged in usdt0 for an
+    // account holding only that). `gasPrice` is quoted in 18-decimal USD units,
+    // so gasPrice * gas / 1e18 is ALREADY a USD amount and needs no price
+    // lookup. Consumed via hasNativeTokenByChain (common/chain).
+    hasNativeToken: false,
+    // Tokens that may PAY the fee here. The spec allows only "TIP-20 tokens
+    // whose currency is USD", so this is NOT every token on the chain: the
+    // chain's EUR/GBP TIP-20s (eurau, gbpa) and its plain ERC20s (buidl, brsrv,
+    // gtpathusdp) are excluded — a transfer of those falls back to pathUSD.
+    // Consumed by isFeeTokenByChain; unknown tokens are simply not treated as
+    // fee tokens, which costs a check, never a wrong one.
+    feeTokens: [
+      '0x20c0000000000000000000000000000000000000', // pathUSD (protocol default)
+      '0x20c000000000000000000000b9537d11c60e8b50', // USDC.e
+      '0x20c00000000000000000000014f22ca97301eb73' // USDT0
+    ],
     linkScanHash: 'https://explore.tempo.xyz/tx/',
     linkScan: 'https://explore.tempo.xyz/address/',
     linkScanTokenHolding: 'https://explore.tempo.xyz/address/',

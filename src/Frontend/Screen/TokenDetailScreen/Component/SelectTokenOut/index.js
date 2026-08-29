@@ -23,6 +23,8 @@ import useGetTokenSearchByChain from 'frontend/Hooks/useGetTokenSearchByChain'
 import useGetListTokenByChainAndAddress from 'frontend/Hooks/useGetListTokenByChainAndAddress'
 import ContainerAnchor from 'frontend/Components/UI/ContainerAnchor'
 import { getAddressNative, isNativeToken } from 'common/tokens'
+import { resolveOnchainSymbolFor } from 'src/Services/TokenListV2/symbolOnchain'
+import { TOKEN_RECOMMEND_SWAP } from 'common/constants/swap'
 
 const MAX_SHOW_TOKEN = 20
 const CHAIN_FULL_TOKEN_RECOMMEND_FEE_GAS = ['4217']
@@ -33,7 +35,7 @@ function hasCommonChar (str1, str2) {
 
 const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _this }) => {
   const { state } = _this
-  const { chainOut, tokenIn } = isExchange ? state.exchange : state.swapAndSend
+  const { chainOut, tokenIn, tokenOut: tokenOutDefault } = isExchange ? state.exchange : state.swapAndSend
   const chainIdOut = chainOut?.chainId || tokenIn?.chainId
   const { activeAccount } = useSelector(s => s)
   const { account } = activeAccount
@@ -48,6 +50,7 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
   const { data: listTokensAPI, isLoading: loadingTokensAPI } = useGetTokenSearchByChain(chainIdOut, textSearchDebounce)
   const { data: listBalanceUser, isLoading: loadingListTokensByAddress } = useGetListTokenByChainAndAddress(account?.address, [chainIdOut])
   const styles = createStyles()
+
   const querySearchToken = useMemo(() => {
     if (tokenOut && !tokenOut?.coinGeckoId) {
       return tokenOut?.address || tokenOut?.contractAddress || zeroAddress
@@ -110,7 +113,12 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
       return []
     }
     const chain = setting?.chainSupport.find(item => item.chainId?.toString() === chainIdOut?.toString())
-    const listToken = chain?.featuredTokens || []
+    let listToken = chain?.featuredTokens || []
+
+    if (listToken?.length === 0 && TOKEN_RECOMMEND_SWAP[chain.chainId]) {
+      listToken = TOKEN_RECOMMEND_SWAP[chain.chainId]
+    }
+
     const data = []
     listToken.forEach((token) => {
       const isHaveName = hasCommonChar(token.name, textSearchDebounce)
@@ -136,7 +144,9 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
         return addressToken === lowerCase(tokenUser?.contractAddress)
       })
       if (existing && existing?.iconUrl) {
-        data[index].metadata.logoURI = existing?.iconUrl
+        if (data[index].metadata) {
+          data[index].metadata.logoURI = existing?.iconUrl
+        }
       }
     })
 
@@ -154,23 +164,24 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
     return false
   }, [tokenShow, textSearchDebounce])
 
+  const handleSelectTokenByGetSymbol = async () => {
+    const tokenMerge = { ...tokenOut, ...tokenSearch?.[0] }
+    const address = tokenMerge.address
+
+    if (isNativeToken(tokenMerge.address)) {
+      // If the token is a native token, we can directly assign the symbol from the chain's native currency
+      if (chainOut?.nativeCurrency?.symbol) {
+        tokenMerge.symbol = chainOut.nativeCurrency.symbol
+      }
+    } else {
+      tokenMerge.symbol = await resolveOnchainSymbolFor(chainIdOut, address)
+    }
+    handleSelectToken(tokenMerge)
+  }
+
   useEffect(() => {
     if (!loadingTokenSearch && tokenOut) {
-      if (tokenSearch?.length > 0) {
-        const tokenMerge = { ...tokenOut, ...tokenSearch[0] }
-        const exitTokenBalance = listBalanceUser?.find(tokenUser => {
-          if (isNativeToken(tokenUser?.contractAddress)) {
-            return zeroAddress === tokenMerge.address
-          }
-          return lowerCase(tokenUser?.contractAddress) === lowerCase(tokenMerge?.address)
-        })
-        if (exitTokenBalance?.symbol) {
-          tokenMerge.symbol = exitTokenBalance.symbol
-        }
-        handleSelectToken(tokenMerge)
-      } else {
-        handleSelectToken(tokenOut)
-      }
+      handleSelectTokenByGetSymbol()
     }
   }, [loadingTokenSearch, tokenSearch, tokenOut, listBalanceUser])
 
@@ -206,8 +217,17 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
       const isHaveName = hasCommonChar(token.name, textSearchDebounce)
       const isHaveSymbol = hasCommonChar(token.symbol, textSearchDebounce)
       const isHaveAddress = hasCommonChar(token.address || zeroAddress, textSearchDebounce)
-
+      let iconTokenDefault
       const nativeCoin = isNativeToken(addressToken, chainIdOut)
+
+      if (tokenOutDefault && tokenOutDefault?.icon_image) {
+        if (isNativeToken(tokenOutDefault) && isNativeToken(addressToken)) {
+          iconTokenDefault = tokenOutDefault.icon_image
+        }
+        if (lowerCase(tokenOutDefault.address) === lowerCase(addressToken)) {
+          iconTokenDefault = tokenOutDefault.icon_image
+        }
+      }
 
       if (isHaveName || isHaveSymbol || isHaveAddress) {
         data.push({
@@ -220,7 +240,7 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
               <View className='relative overflow-hidden  rounded-full'>
 
                 <View style={{ position: 'relative', backgroundColor: Colors.BG_ICON_NO_BG }}>
-                  <MyIcon uriDefault={images.UIV2.icons.unknowToken} uri={token?.metadata?.logoURI || token?.iconUrl || images.UIV2.icons.noTokenOutExchange} />
+                  <MyIcon uriDefault={images.UIV2.icons.unknowToken} uri={iconTokenDefault || token?.metadata?.logoURI || token?.iconUrl || images.UIV2.icons.noTokenOutExchange} />
 
                 </View>
               </View>

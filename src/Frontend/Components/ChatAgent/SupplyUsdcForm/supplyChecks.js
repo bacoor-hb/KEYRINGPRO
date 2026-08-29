@@ -226,7 +226,15 @@ export const checkUsdcBalance = async ({ chainId, from, asset, amount, language 
   const have = BigNumber(
     await ViemWeb3.getBalanceToken(toChainId(chainId), from, asset.address, true)
   )
-  if (!have.isFinite() || have.lte(0)) return null
+  // Only an unparseable figure is "cannot tell". A balance of ZERO is a real
+  // reading and must fall through to the message below — it is the clearest
+  // case of not being able to afford the supply.
+  //
+  // Note `getBalanceToken` THROWS on a failed read rather than resolving 0, so
+  // there is no unreadable-zero to fail open on here; the caller's try/catch
+  // owns that path. The old `lte(0)` guard therefore protected nothing and only
+  // swallowed the empty wallet.
+  if (!have.isFinite() || have.lt(0)) return null
   if (have.gte(want)) return null
 
   return tr('walletActionNotEnoughBalance', language, {
@@ -256,7 +264,37 @@ const FEE_BUFFER = 1.1
 // over-estimate: being asked to top up slightly early beats paying for an
 // approve and then stalling with no gas left for the deposit it exists to
 // enable.
+//
+// Budget only — it is NOT the limit the deposit is signed with. By signing time
+// the approve is mined, so `useSupplyFlow` can and does estimate the deposit for
+// real and signs with that. This figure exists purely so the affordability
+// question can be asked before the approval is paid for, and it is deliberately
+// generous: quoting a top-up slightly early beats charging for an approve and
+// then stalling with no gas left for the deposit it exists to enable.
 const SUPPLY_GAS_LIMIT = 600000
+
+// Headroom applied to a MEASURED gas estimate before it is signed with.
+//
+// `eth_estimateGas` measures the tx against state as it is right now, but the tx
+// executes against state as it will be once it is mined — and the difference is
+// paid in gas. A storage slot the estimate saw as non-zero costs 2.9k to update;
+// the same slot going 0 -> non-zero costs 20k. Any tx that lands between the
+// estimate and the broadcast (an interest-index update, another depositor
+// touching the same reserve) can move a slot across that boundary, so the real
+// cost lands ABOVE what was measured and the tx reverts out of gas with the fee
+// already spent.
+//
+// 30% covers that drift. It is not a cost to the user: the fee charged is
+// `gasUsed x gasPrice`, so an unspent limit is simply never billed - unlike the
+// gas PRICE buffers elsewhere in this flow, which are paid in full.
+export const GAS_LIMIT_BUFFER = 1.2
+
+/** A node estimate plus GAS_LIMIT_BUFFER, or 0 when there is no estimate. */
+export const withGasBuffer = (estimate) => {
+  const bn = BigNumber(estimate)
+  if (!bn.isFinite() || bn.lte(0)) return 0
+  return bn.multipliedBy(GAS_LIMIT_BUFFER).integerValue(BigNumber.ROUND_CEIL).toNumber()
+}
 
 /**
  * Can this wallet actually pay the gas for the supply?
@@ -269,9 +307,9 @@ const SUPPLY_GAS_LIMIT = 600000
  * via `preflightTx`; the supply flow does not use that hook, so it checks here.
  *
  * The budget is the sum of both legs, since both are paid from the same native
- * balance: the approve's REAL estimate, plus the supply leg at a flat ceiling
- * (see SUPPLY_GAS_LIMIT) because it cannot be simulated before the allowance
- * exists.
+ * balance: the approve at the exact limit it will be signed with, plus the
+ * supply leg at a flat ceiling (see SUPPLY_GAS_LIMIT) because it cannot be
+ * simulated before the allowance exists.
  *
  * Simulating the approve also means a genuinely broken approve is caught here,
  * before anything is signed. It says nothing about the DEPOSIT though — that
@@ -314,19 +352,35 @@ export const checkGasAffordable = async ({ chainId, from, market, asset, amount,
   // "affordable" against a zero fee — so there is nothing to check.
   if (!gasPrice || BigNumber(gasPrice).lte(0)) return null
 
-  // feeTotal = the measured approve fee + the supply leg at its flat ceiling.
-  // Both legs are paid from the same native balance, so the wallet has to cover
-  // their sum, not whichever is larger.
-  const approveFee = BigNumber(gasPrice).multipliedBy(approveGas)
+  // feeTotal = the approve fee + the supply leg at its flat ceiling. Both legs
+  // are paid from the same native balance, so the wallet has to cover their sum,
+  // not whichever is larger.
+  //
+  // The approve is budgeted at the limit it will actually be SIGNED with —
+  // `withGasBuffer(approveGas)`, not the bare estimate. The node rejects a
+  // transaction whose `gasLimit x gasPrice` exceeds the balance regardless of
+  // what it would really have spent, so budgeting the estimate while signing 30%
+  // above it would clear a wallet here and then fail it at broadcast with
+  // "insufficient funds for gas * price + value".
+  const approveFee = BigNumber(gasPrice).multipliedBy(withGasBuffer(approveGas))
   const supplyFee = BigNumber(gasPrice).multipliedBy(SUPPLY_GAS_LIMIT)
   const requiredWei = approveFee.plus(supplyFee).multipliedBy(FEE_BUFFER)
 
-  const balanceWei = BigNumber(
-    await AllChainServices.getBalanceByChain(id, from, false)
-  )
-  // An unreadable balance also comes back as 0, which would look like "no
-  // funds" and wrongly block someone who can pay.
-  if (!balanceWei.isFinite() || balanceWei.lte(0)) return null
+  const rawBalance = await AllChainServices.getBalanceByChain(id, from, false)
+
+  // A balance we could not READ must not block someone who can pay — but a
+  // balance of ZERO is the opposite answer and has to get through, since a
+  // wallet with no native coin is exactly what this check exists to catch.
+  //
+  // `getBalanceByChain` separates the two by TYPE: a successful read returns a
+  // decimal STRING ('0' for a genuinely empty wallet), while its `catch`
+  // returns the NUMBER 0. Testing the VALUE instead let the empty wallet
+  // through the one check meant to stop it.
+  if (typeof rawBalance !== 'string') return null
+
+  const balanceWei = BigNumber(rawBalance)
+  // Unparseable is the same "cannot tell" as a failed read.
+  if (!balanceWei.isFinite() || balanceWei.lt(0)) return null
   if (balanceWei.gte(requiredWei)) return null
 
   // Shown in full, to every decimal the wei difference actually has. A rounded

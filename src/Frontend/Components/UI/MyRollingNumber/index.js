@@ -4,6 +4,7 @@ import BigNumber from 'bignumber.js'
 import MyText, { VARIANT_CONFIG } from '../MyText'
 import { getNumberParts } from '../MyNumber'
 import { Colors, fontSize as scaleFont, pixelByWidth, DECIMAL_DOWN_PIXEL } from 'common/styles'
+import { markAnnounced, wasAnnounced } from './handoff'
 
 // Digits a spinning column cycles through. Only spinning columns build a reel;
 // at rest a digit is a single character (see buildRestCells).
@@ -172,6 +173,15 @@ const buildRollCells = (prevText, nextText, direction, spins, lineCount) => {
 //              on a screen the user is not looking at (a native stack keeps the
 //              previous screen mounted), so coming back from Send or Exchange
 //              shows a balance that already finished changing.
+//   handoffKey string — identifies this number ACROSS screens (see ./handoff).
+//              Two screens showing the same balance both hold a parked instance
+//              of it; whichever one is in front spins the change, and the other
+//              adopts the new value silently instead of replaying it when the
+//              user gets back to it. Opt-in: without this prop nothing is
+//              recorded or suppressed, and the two instances behave exactly as
+//              they did before. Both sides must format the number identically
+//              (same fractionDigits) — the record IS the formatted text — but a
+//              mismatch only costs the handoff, never correctness.
 /**
  * @param {number|string|BigNumber} value - Number to display
  * @param {string} identity - Stable id of the owning item; changing it swaps without animating
@@ -190,6 +200,7 @@ const buildRollCells = (prevText, nextText, direction, spins, lineCount) => {
  * @param {number} colorHold - Ms the tint lingers after landing
  * @param {boolean} active - False holds value changes until it flips true (pass screen focus)
  * @param {boolean} spinOnAppear - One-shot attention spin, no value change; fires when it turns true
+ * @param {string} handoffKey - Cross-screen id; a change already announced under this key is adopted silently
  * @param {StyleProp<TextStyle>} style - Applied to the digit/separator text
  * @param {string} className - Tailwind class for the text
  */
@@ -211,6 +222,7 @@ const MyRollingNumber = ({
   colorHold = DEFAULT_COLOR_HOLD,
   active = true,
   spinOnAppear = false,
+  handoffKey = null,
   style,
   className
 }) => {
@@ -404,7 +416,12 @@ const MyRollingNumber = ({
       prev.seq + 1
     ))
     displayed.current = nextText
-  }, [buildFrame, spins, reelLines])
+    // Recorded when the spin STARTS, not when it finishes. Once these strips are
+    // on screen the change has been shown, and if the user leaves mid-spin the
+    // completion callback never runs — recording there would let the screen they
+    // land on replay the very change they just walked away from.
+    markAnnounced(handoffKey, nextText)
+  }, [buildFrame, spins, reelLines, handoffKey])
 
   // Start the spin only once the new strips are actually on screen — kicking a
   // native-driven animation before its view mounts makes the column jump.
@@ -487,8 +504,22 @@ const MyRollingNumber = ({
     // there to achieve — latch it so the two don't fire back to back and leave
     // the value roll overwritten by a standing spin.
     appeared.current = true
+
+    // Another screen showing this same number already spun this exact change
+    // while this instance was parked behind it (see ./handoff). Take the new
+    // value the way a recycled row does — silently — instead of replaying
+    // something the user has already watched happen.
+    if (wasAnnounced(handoffKey, text)) {
+      running.current?.stop()
+      clearTimeout(holdTimer.current)
+      displayed.current = text
+      setFrame((prev) => buildFrame(buildRestCells(text), prev.seq + 1))
+      setTrend(null)
+      return
+    }
+
     roll(diff > 0 ? 1 : -1, text)
-  }, [value, text, identity, active, measuredStep, roll, buildFrame, reelLines])
+  }, [value, text, identity, active, measuredStep, roll, buildFrame, reelLines, handoffKey])
 
   // Attention spin for a number that has just appeared. Nothing about the value
   // changed, so the effect above has nothing to do — this asks for a spin

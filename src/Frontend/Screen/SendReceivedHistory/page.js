@@ -16,7 +16,7 @@ import LottieRefreshFlatList from 'frontend/Components/UI/LottieRefreshFlatList'
 import MyDotsLoading from 'frontend/Components/UI/MyDotsLoading'
 import { getHeightHeader, pixelByHeight } from 'common/styles'
 import { isNativeToken } from 'common/tokens'
-import { NATIVE_TOKEN_BY_CHAIN_ID_IN_HISTORY } from 'common/constants/app'
+import { NATIVE_TOKEN_BY_CHAIN_ID } from 'common/constants/app'
 
 const SendReceivedHistoryPage = ({ _this }) => {
   const { typeScreen, state } = _this
@@ -77,7 +77,7 @@ const SendReceivedHistoryPage = ({ _this }) => {
     return dataAll.filter(item => {
       const addressToken = item.rawContract?.address
       const isNative = !addressToken
-      const isNativeTokenConvertZeroAddress = NATIVE_TOKEN_BY_CHAIN_ID_IN_HISTORY[item.chainId] === lowerCase(addressToken)
+      const isNativeTokenConvertZeroAddress = NATIVE_TOKEN_BY_CHAIN_ID[item.chainId] === lowerCase(addressToken)
       if (isNative || (isNativeTokenConvertZeroAddress && addressToken)) {
         const token = tokenListHasPrice.find(tokenPrice => {
           return isNativeToken(tokenPrice.address)

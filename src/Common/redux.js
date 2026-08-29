@@ -2,6 +2,7 @@ import PageReduxAction from 'controller/Redux/actions/pageAction'
 import I18n from 'assets/Lang'
 import storeRedux from 'controller/Redux/store/configureStore'
 import initState from 'controller/Redux/lib/initState'
+import { flushPendingAsyncStorageWrites } from 'controller/Redux/lib/reducerConfig'
 import StorageReduxAction from 'controller/Redux/actions/storageAction'
 import { setJSExceptionHandler, setNativeExceptionHandler } from 'react-native-exception-handler'
 import {
@@ -172,6 +173,11 @@ export default class ReduxService {
       await Promise.all(storageRedux.map((itm) => {
         ReduxService.callDispatchAction(itm.action(itm.init))
       }))
+
+      // Some of the keys above persist through a debounced writer. A reset can
+      // be followed by an app restart, which would drop the pending write and
+      // leave the OLD data on disk — force it out now.
+      await flushPendingAsyncStorageWrites()
     }
     try {
       await dataReset(isResetWallet)
@@ -754,6 +760,8 @@ export default class ReduxService {
     // restored wallet doesn't inherit pools tied to a different account.
     this.callDispatchAction(StorageReduxAction.setAddressRegisteredLiquidity(initState.addressRegisteredLiquidity.slice()))
     this.callDispatchAction(StorageReduxAction.setAddressDeletedLiquidity({ ...initState.addressDeletedLiquidity }))
+    // Persist the cleared values immediately — see resetReduxData.
+    flushPendingAsyncStorageWrites()
   }
 
   static async setTokenJWT () {
@@ -916,6 +924,12 @@ export default class ReduxService {
     const { currencyRedux } = storeRedux.getState()
 
     return currencyRedux
+  }
+
+  static getActiveAccount () {
+    const { activeAccount } = storeRedux.getState()
+
+    return activeAccount
   }
 
   static getFiatRateRedux () {

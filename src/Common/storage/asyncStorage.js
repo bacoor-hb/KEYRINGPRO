@@ -16,3 +16,11 @@ export const getDataFromAsyncStorage = async (key, defaultData = null) => {
     return defaultData
   }
 }
+
+export const removeDataFromAsyncStorage = async (key) => {
+  try {
+    await AsyncStorage.removeItem(key)
+  } catch (e) {
+    // error removing value
+  }
+}

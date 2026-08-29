@@ -106,6 +106,7 @@ class WalletConnectPayScreen extends BaseContainer {
   handleGetToAddress = async (hash) => {
     try {
       let toAddress = ''
+      let blockTimestamp = ''
       const client = ViemWeb3.getPublicClient(this.state.chainId)
       const logHash = await client.getTransactionReceipt({ hash })
       logHash.logs.forEach((log) => {
@@ -122,9 +123,16 @@ class WalletConnectPayScreen extends BaseContainer {
           // console.log({ error })
         }
       })
-      return toAddress
+      if (logHash?.blockNumber) {
+        const block = await client.getBlock({ blockNumber: logHash.blockNumber })
+        if (block?.timestamp) {
+          // NOTE: *1000 =>convert second to milliseconds
+          blockTimestamp = Number(block.timestamp) * 1000
+        }
+      }
+      return { toAddress, block_timestamp: blockTimestamp }
     } catch (error) {
-      return ''
+      return {}
     }
   }
 
@@ -234,9 +242,10 @@ class WalletConnectPayScreen extends BaseContainer {
       if (resultTracking.status === 'succeeded') {
         const hash = resultTracking?.info?.txId
 
-        const toAddress = await this.handleGetToAddress(hash)
+        const { toAddress, block_timestamp: blockTimestamp } = await this.handleGetToAddress(hash)
         if (toAddress) {
           dataHistory.toAddress = toAddress
+          dataHistory.block_timestamp = blockTimestamp || dataHistory.block_timestamp
 
           if (historyWCPayObject[addressUser]) {
             historyWCPayObject[addressUser].push(dataHistory)

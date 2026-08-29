@@ -9,6 +9,7 @@ import Exchange, { STEP_EXCHANGE } from './Component/Exchange'
 import SelectChainOut from './Component/SelectChainOut'
 import SelectTokenOut from './Component/SelectTokenOut'
 import SendToken, { STEP_SEND } from './Component/SendToken'
+import WithdrawToken from './Component/WithdrawToken'
 import ChangeRegionalCurrency from 'frontend/Screen/Setting/Component/ChangeRegionalCurrency'
 import ReduxService from 'common/redux'
 import { REDUX_KEY } from 'common/constants/redux'
@@ -62,11 +63,16 @@ class TokenDetailScreen extends BaseContainer {
     // is a bare promise chain with no lifecycle of its own, so this flag is the
     // only thing that can stop it once the UI it reports to is gone.
     this.sendTrackingCancelled = false
+    // Same idea for the swap/bridge order poll (Relay/deBridge getInfoDetailTx):
+    // once the Exchange/SwapAndSend drawer closes there is no UI left to render
+    // the result into, so the provider poll must stop immediately.
+    this.exchangeTrackingCancelled = false
   }
 
   componentWillUnmount () {
     super.componentWillUnmount()
     this.cancelSendTracking()
+    this.cancelExchangeTracking()
   }
 
   // Stop polling for a send's receipt. Called when the Send drawer closes and on
@@ -74,6 +80,13 @@ class TokenDetailScreen extends BaseContainer {
   // for its whole timeout, still hitting the network from the Home screen.
   cancelSendTracking = () => {
     this.sendTrackingCancelled = true
+  }
+
+  // Stop polling for a swap/bridge order result (Relay/deBridge). Called when the
+  // Exchange/SwapAndSend drawer closes (swipe-down, backdrop, or programmatic) and
+  // on unmount, so getInfoDetailTx aborts instead of polling for its whole timeout.
+  cancelExchangeTracking = () => {
+    this.exchangeTrackingCancelled = true
   }
 
   onSend = () => {
@@ -354,19 +367,26 @@ class TokenDetailScreen extends BaseContainer {
       privateKey = remove0xFromPrivateKey(privateKey)
 
       // const hash = '0x7164c235d524423f00c2ebd6f4132850abb383fce99633fb9414094991ae7687'
-      const hash = await AllChainServices.postBaseSendTxsForSwap(chainId, privateKey, rawTransaction)
+      const hash = await AllChainServices.approveTokenForSwap(chainId, privateKey, {
+        from: address,
+        ...rawTransaction
+      })
       callback(STEP_EXCHANGE.approve, hash)
     } catch (error) {
       callback(STEP_EXCHANGE.failed, { error: formatWeb3Error(error, I18n.t('GlobalError.somethingWrongErr')) })
     }
   }
 
-  handleSubmitExchange = async (rawTransaction, callback, stateSource = 'exchange') => {
+  handleSubmitExchange = async (rawTransaction, provider, callback, stateSource = 'exchange') => {
     try {
-      const { blockchainListRedux, activeEvmChainIdsRedux } = this.props
+      // A previous exchange in this same screen may have left the flag set (drawer
+      // closed mid-poll). Clear it so this exchange's poll is allowed to run.
+      this.exchangeTrackingCancelled = false
+
+      const { blockchainListRedux, activeEvmChainIdsRedux = [] } = this.props
       callback(STEP_EXCHANGE.exchanging)
-      const currentChainActive = (activeEvmChainIdsRedux || []).map(Number)
-      const currentChainInfo = cloneData(blockchainListRedux || {})
+      const currentChainActive = activeEvmChainIdsRedux.map(Number)
+      const currentChainInfo = cloneData(blockchainListRedux)
       const sourceState = this.state[stateSource] || this.state.exchange
       const { tokenIn, tokenOut, recipientAddress = null } = sourceState
       let chainOut = cloneData(sourceState.chainOut || {})
@@ -381,7 +401,7 @@ class TokenDetailScreen extends BaseContainer {
       const isHasChainCommonInApp = LIST_DEFAULT_CHAIN_ID?.includes(Number(chainIdOut?.toString())) || LIST_DEFAULT_CHAIN_ID?.includes(chainIdOut?.toString())
       let addressIn = tokenIn?.contractAddress === 'native' ? zeroAddress : lowerCase(tokenIn?.contractAddress)
       let addressOut = (tokenOut?.address || tokenOut?.contractAddress) === 'native' ? zeroAddress : lowerCase(tokenOut?.address || tokenOut?.contractAddress)
-      const swapService = await SwapServiceFactory.getService(chainIdIn, chainIdOut)
+      const swapService = await SwapServiceFactory.getService(provider)
 
       delete rawTransaction?.requestId
       delete rawTransaction?.rawTransactionApi
@@ -431,17 +451,27 @@ class TokenDetailScreen extends BaseContainer {
 
       await sleep(1000)
 
-      // const hash = '0xb94bdaff34e8ad3ecc093128245525eca49f484b24fa4db20f3bbe70d608c4b0'
+      // const hash = '0xfc776f480fe6f304e1cb4eea83d4753ea1b35ca90d95445e53064969a2f9ddc3'
       const hash = await AllChainServices.postBaseSendTxsForSwap(chainIdIn, privateKey, rawTransaction)
 
       await sleep(1000)
 
-      const infoResult = await swapService.getInfoDetailTx({ requestId, hash, chainId: chainIdIn, rawTransactionApi })
+      const rawDataSwapService = {
+        requestId,
+        hash,
+        chainId: chainIdIn,
+        rawTransactionApi,
+        isCrossChain,
+        // Abort the provider poll the instant the drawer is closed.
+        isCancelled: () => this.exchangeTrackingCancelled
+      }
+
+      const infoResult = await swapService.getInfoDetailTx(rawDataSwapService)
       if (infoResult?.status === 'FAILED') {
         throw new Error('Transaction failed')
       }
 
-      await sleep(3000)
+      await sleep(1000)
       if (isCrossChain) {
         const arrAddressIn = [addressIn, zeroAddress].filter((url, index, arr) => arr.indexOf(url) === index)
         await refreshAccountTokens(address, {
@@ -466,7 +496,7 @@ class TokenDetailScreen extends BaseContainer {
       }
       const amountOutAfterSwap = infoResult?.data?.data?.metadata?.currencyOut?.amountFormatted
 
-      callback(STEP_EXCHANGE.exchange, { hash, amountOut: amountOutAfterSwap })
+      callback(STEP_EXCHANGE.exchange, { hash, amountOut: amountOutAfterSwap, requestId: requestId ?? infoResult?.data?.requestId })
       await sleep(1000)
       callback(STEP_EXCHANGE.success)
 
@@ -486,6 +516,9 @@ class TokenDetailScreen extends BaseContainer {
 
   onExchange = () => {
     this.openDrawer({
+      // Once this drawer is dismissed there is no UI left to render the order
+      // result into, so abort the provider poll (getInfoDetailTx) immediately.
+      onClose: this.cancelExchangeTracking,
       children: (
         <Exchange _this={this} />
       )
@@ -494,6 +527,7 @@ class TokenDetailScreen extends BaseContainer {
 
   onSwapAndSend = () => {
     this.openDrawer({
+      onClose: this.cancelExchangeTracking,
       children: (
         <SwapAndSend _this={this} />
       )
@@ -504,6 +538,48 @@ class TokenDetailScreen extends BaseContainer {
 
   onchangeState = (data) => {
     this.setState(data)
+  }
+
+  // Withdraw from the lending market this token is a receipt for.
+  //
+  // `lendingInfo` comes from useGetLendingTokenInfo and is the ONLY source for
+  // the market's identity (protocol family, pool/vault contract, underlying
+  // asset) — the wallet's token list knows the receipt token but not the pool
+  // behind it. page.js only calls this once that lookup has resolved, so the
+  // drawer never opens against a market it cannot encode a call for.
+  //
+  // Passed via `withdrawContext` rather than props on the element: the drawer is
+  // rendered by openDrawer, and this keeps the payload in one place the child
+  // reads by name (same shape the other drawers here use through `_this`).
+  onWithdraw = (payload) => {
+    const { lendingInfo, ...token } = payload || {}
+    const activeAccount = ReduxService.getReduxDataByKey(REDUX_KEY.activeAccount)
+
+    this.withdrawContext = {
+      token,
+      lendingInfo,
+      chainId: token?.chainId,
+      walletAddress: activeAccount?.account?.address,
+      // Cold (NFC keycard) accounts sign from the card, so the flow needs the
+      // container's proxy to prompt the scan.
+      nfcProxy: this.nfcProxy,
+      onClose: this.closeDrawer
+    }
+
+    // Same anchored-height treatment as the Send drawer: WithdrawToken's root is
+    // flex:1, so without an explicit height the sheet collapses to its content.
+    this.getHeightLayoutModal()
+    const anchoredHeight = this.heightPopupDefault > 0
+      ? this.heightPopupDefault
+      : getHeightScreen() - getHeightHeader(true) - pixelByHeight(16)
+
+    this.openDrawer({
+      heightDrawer: anchoredHeight,
+      keyboardBehavior: 'extend',
+      children: (
+        <WithdrawToken _this={this} />
+      )
+    })
   }
 
   render () {

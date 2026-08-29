@@ -1,7 +1,8 @@
 import { useQuery } from 'react-query'
 import AllChainServices from 'controller/AllChainServices'
 import { typeLiquidityPool } from 'common/constants/chain'
-import usePersistedQueryData from 'frontend/Hooks/usePersistedQueryData'
+import { buildPositionKey, useLiquidityPositionData, writeLiquidityPositionData } from 'frontend/Hooks/useLiquidityData'
+import { useMemo } from 'react'
 
 // Parses the on-chain Uniswap/Pancake position NFT name into its parts. The name
 // is rendered by the position-manager contract as a fixed ` - ` separated string:
@@ -35,10 +36,14 @@ const fetchPositionNftName = async ({ queryKey }) => {
   return parsePositionNftName(name)
 }
 
-// Reads + parses the position NFT name. Persisted per position so the parsed parts
-// survive an app restart and show instantly while the on-chain call refetches.
-const useGetPositionNftName = (chainId, tokenId, type = typeLiquidityPool.uniswap) => {
-  const [persisted, persist] = usePersistedQueryData(`POSITION_NFT_NAME_${chainId}_${tokenId}`)
+// Reads + parses the position NFT name. Saved per position so the parsed parts survive
+// an app restart and show instantly while the on-chain call refetches.
+const useGetPositionNftName = (chainId, tokenId, type = typeLiquidityPool.uniswap, owner) => {
+  // Stored under the position's account, alongside its chart and info. No poolId here —
+  // the NFT name belongs to the token, so the key omits the part the caller doesn't have.
+  const owners = useMemo(() => [owner], [owner])
+  const positionKey = buildPositionKey(chainId, tokenId)
+  const persisted = useLiquidityPositionData(owners, positionKey, 'nftName')
 
   const { data, isLoading } = useQuery(
     ['getPositionNftName', chainId, tokenId, type],
@@ -47,7 +52,7 @@ const useGetPositionNftName = (chainId, tokenId, type = typeLiquidityPool.uniswa
       enabled: chainId != null && tokenId != null,
       keepPreviousData: true,
       staleTime: Infinity,
-      onSuccess: persist
+      onSuccess: (value) => writeLiquidityPositionData(owners, positionKey, 'nftName', value)
     }
   )
 

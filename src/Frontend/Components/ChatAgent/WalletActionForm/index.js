@@ -8,6 +8,7 @@ import MyButton from 'frontend/Components/UI/MyButton'
 import GlassView from 'frontend/Components/UI/GlassView'
 import useSendTx, { TX_STATUS } from 'frontend/Hooks/useSendTx'
 import { useX402FeeFor } from 'frontend/Hooks/useX402Fees'
+import { formatFeeLabel } from '../x402FeeLabel'
 import TxStatusTimeline from '../TxStatusTimeline'
 import X402SignModal from '../X402SignModal'
 import { runX402Gate } from './x402Gate'
@@ -631,7 +632,7 @@ export default function WalletActionForm ({
                   // a field they failed to fill.
                   isLocked(f) && styles.lockedInput
                 ]}
-                className='text-white font-semibold'
+                className='text-white '
                 value={values[f.key]}
                 onChangeText={(v) => setValue(f, v)}
                 // Not editable once the tx is on its way (the values are what
@@ -689,7 +690,7 @@ export default function WalletActionForm ({
                           setValue(f, toFixedDown(spendableBn.times(p).div(100), amountDecimals))}
                       >
                         <GlassView interactive style={styles.quickChip}>
-                          <MyText variant='small' className='font-semibold'>{p}%</MyText>
+                          <MyText variant='small' className=''>{p}%</MyText>
                         </GlassView>
                       </TouchableOpacity>
                     ))}
@@ -720,7 +721,7 @@ export default function WalletActionForm ({
             than a placeholder or an invented number. */}
           {isPreSend && !!x402Fee && (
             <MyText className='text-medium' style={styles.feeNotice}>
-              {t('walletActionFeeNotice', { fee: x402Fee.label })}
+              {t('walletActionFeeNotice', { fee: formatFeeLabel(x402Fee, language) })}
             </MyText>
           )}
 

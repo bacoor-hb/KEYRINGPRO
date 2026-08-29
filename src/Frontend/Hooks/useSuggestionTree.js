@@ -46,8 +46,14 @@ export default function useSuggestionTree ({ onSendPrompt, onLocalTurn, onDrill 
    * @param {string[]} [path] Path of the level the node was tapped ON, so the
    *   child level can be addressed as [...path, node.key]. Empty/omitted for the
    *   root pills.
+   * @param {string} [locale] BCP-47 language of the conversation these pills
+   *   belong to, set only for a menu reached by TYPING (where the chat language
+   *   can differ from the app's). Threaded into every piece of copy this tap
+   *   produces — the echoed user text, the canned reply, AND a leaf's prompt —
+   *   so one tap cannot mix two languages. Omitted on the ordinary pill path,
+   *   where the tree falls back to the app language as before.
    */
-  const select = useCallback((node, path = []) => {
+  const select = useCallback((node, path = [], locale) => {
     if (!node) return
 
     // Local: the app answers. Echo the tap, then hand over the canned reply —
@@ -56,17 +62,21 @@ export default function useSuggestionTree ({ onSendPrompt, onLocalTurn, onDrill 
     if (isLocal(node)) {
       onDrillRef.current?.()
       onLocalTurnRef.current?.(
-        getUserText(node),
-        getBranchReply(node),
-        hasChildren(node) ? [...path, node.key] : undefined
+        getUserText(node, locale),
+        getBranchReply(node, locale),
+        hasChildren(node) ? [...path, node.key] : undefined,
+        locale
       )
       return
     }
 
-    // Leaf: a real turn, sent through the normal path.
-    const prompt = node.prompt?.()
+    // Leaf: a real turn, sent through the normal path. The prompt is app copy,
+    // so it must be written in the same language as the pill the user tapped —
+    // otherwise the agent reads an English command under a Vietnamese label and
+    // answers in the wrong language.
+    const prompt = node.prompt?.(locale)
     if (!prompt) return
-    onSendPromptRef.current?.(prompt, node)
+    onSendPromptRef.current?.(prompt, node, locale)
   }, [])
 
   return { select }

@@ -8,7 +8,7 @@ import { Provider } from 'react-redux'
 import storeRedux from 'controller/Redux/store/configureStore'
 import { KEYSTORE } from 'common/constants/redux'
 import StorageReduxAction from 'controller/Redux/actions/storageAction'
-import { mapAsyncStorageToRedux, mapSecureStorageToRedux } from 'controller/Redux/lib/reducerConfig'
+import { initPendingWritesFlush, mapAsyncStorageToRedux, mapSecureStorageToRedux } from 'controller/Redux/lib/reducerConfig'
 import { SECURE_STORAGE_REDUX_MAP, buildStorageReduxMap } from 'controller/Redux/lib/storageReduxMaps'
 import ReduxService from 'common/redux'
 import ThemeContextProvider from 'frontend/Contexts/ThemeContext'
@@ -81,6 +81,9 @@ export default class KeyringWallet extends Component {
       const initScreen = await this.resolveInitScreen(accountList)
 
       initAutoLock()
+
+      // Flush coalesced AsyncStorage writes when the app leaves the foreground.
+      initPendingWritesFlush()
 
       this.finishBoot(initScreen)
     } catch (e) {

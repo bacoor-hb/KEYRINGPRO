@@ -27,6 +27,9 @@ import { NAME_SCREEN } from 'common/constants/navigation'
 import { refreshAccountTokens } from 'src/Services/TokenListV2'
 import { REDUX_KEY } from 'common/constants/redux'
 
+// Give up on the FCM token after this long and pair without push instead.
+const PUSH_TOKEN_TIMEOUT = 8000
+
 const INITIAL_STATE = {
   QRCodeData: '',
   isTorchOn: false,
@@ -78,6 +81,10 @@ class ScanScreen extends BaseContainer {
           }
 
           if (connector) {
+            // Same registration as the scan flow — without it a deep-link session
+            // never gets background notifications for its requests.
+            await this.registerPushDeviceToken(connector)
+
             this.setState({
               lastScanTime: (new Date()).getTime(),
               connector,
@@ -220,6 +227,53 @@ class ScanScreen extends BaseContainer {
       ],
       { cancelable: false }
     )
+  }
+
+  /**
+   * Fetch the FCM device token and hand it to the WalletConnect relay, so a dApp
+   * request can wake the app while it's in the background. Shared by the scan and
+   * the deep-link flow.
+   *
+   * Never throws and never stalls: push is a bonus, pairing has to go ahead without
+   * it. Notification permission is NOT checked here — the scan flow gates on that
+   * before it ever gets this far.
+   */
+  registerPushDeviceToken = async (connector) => {
+    let tokenFireBase
+
+    try {
+      // getToken() can hang forever (FCM unreachable, broken Firebase Installations
+      // state) and try/catch cannot save us from a hang — only from a rejection. This
+      // await sits in front of pair(), so an unbounded one strands the user on the
+      // scan spinner with no popup and no connection.
+      tokenFireBase = await Promise.race([
+        messaging().getToken(),
+        new Promise((resolve) => setTimeout(() => resolve(null), PUSH_TOKEN_TIMEOUT))
+      ])
+
+      if (!tokenFireBase) {
+        ReduxService.remoteDebugLog('messaging().getToken()-timeout', `no token after ${PUSH_TOKEN_TIMEOUT}ms`)
+        return
+      }
+    } catch (error) {
+      ReduxService.remoteDebugLog('messaging().getToken()-error', error?.message || 'no error message')
+      // do nothing
+      return
+    }
+
+    try {
+      const clientId = await connector.core.crypto.getClientId()
+
+      connector.registerDeviceToken({
+        token: tokenFireBase, // device token
+        clientId,
+        notificationType: 'fcm', // notification type
+        enableEncrypted: true // flag that enabled detailed notifications
+      })
+    } catch (e) {
+      ReduxService.remoteDebugLog('registerDeviceToken() catch-error', e?.message || 'no error message')
+      // error
+    }
   }
 
   onPasteWalletConnectCode = async () => {
@@ -411,35 +465,20 @@ class ScanScreen extends BaseContainer {
                 ReduxService.remoteDebugLog('!isEnabledPushNoti', 'calling requestPermissionNoti()')
                 this.requestPermissionNoti()
               } else {
-                let tokenFireBase
                 let connector
-
-                try {
-                  tokenFireBase = await messaging().getToken()
-                } catch (error) {
-                  ReduxService.remoteDebugLog('messaging().getToken()-error', error?.message || 'no error message')
-                  // do nothing
-                }
 
                 const wcV2 = QRCodeData.includes('@2')
 
                 try {
                   connector = await getConnectorV2()
-
-                  const clientId = await connector.core.crypto.getClientId()
-
-                  connector.registerDeviceToken({
-                    token: tokenFireBase, // device token
-                    clientId,
-                    notificationType: 'fcm', // notification type
-                    enableEncrypted: true // flag that enabled detailed notifications
-                  })
                 } catch (e) {
-                  ReduxService.remoteDebugLog('registerDeviceToken() catch-error', e?.message || 'no error message')
+                  ReduxService.remoteDebugLog('scan-getConnectorV2() catch-error', e?.message || 'no error message')
                   // error
                 }
 
                 if (connector) {
+                  await this.registerPushDeviceToken(connector)
+
                   this.setState({
                     lastScanTime: (new Date()).getTime(),
                     connector,

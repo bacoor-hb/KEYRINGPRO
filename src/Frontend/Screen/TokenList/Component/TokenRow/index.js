@@ -68,7 +68,12 @@ const styles = StyleSheet.create({
 //                       wallet, so its balance spins once to announce itself.
 //                       The screen decides this — a row can't tell "new token"
 //                       from "scrolled back into view".
-const TokenRow = ({ token, onPress, noChevron, isSelected, active, spinOnAppear }) => {
+//   handoffKey  string — forwarded too: identifies this balance across screens,
+//                       so a change the token DETAIL screen already spun is
+//                       adopted here silently instead of playing again when the
+//                       user comes back. Optional — a row without it keeps the
+//                       old behaviour (the hidden-token list passes none).
+const TokenRow = ({ token, onPress, noChevron, isSelected, active, spinOnAppear, handoffKey }) => {
   if (!token) return null
   const valueUSD = token.valueUSD || 0
   const balance = token.balanceFormatted || 0
@@ -105,6 +110,7 @@ const TokenRow = ({ token, onPress, noChevron, isSelected, active, spinOnAppear 
                 className='text-medium'
                 value={balance}
                 identity={token.metaKey}
+                handoffKey={handoffKey}
                 active={active}
                 spinOnAppear={spinOnAppear}
                 fractionDigits={8}

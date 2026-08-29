@@ -29,7 +29,7 @@ import useInitSuggestions from 'frontend/Hooks/useInitSuggestions'
 import useX402Fees from 'frontend/Hooks/useX402Fees'
 import useSuggestionTree from 'frontend/Hooks/useSuggestionTree'
 import InitSuggestions from 'frontend/Components/ChatAgent/InitSuggestions'
-import { getRootSuggestions } from 'frontend/Components/ChatAgent/InitSuggestions/suggestionTree'
+import { getRootSuggestions, getCallAgentNode, hasChildren, getBranchReply } from 'frontend/Components/ChatAgent/InitSuggestions/suggestionTree'
 import GlassView from 'frontend/Components/UI/GlassView'
 import FlatListBlurHeader from 'frontend/Components/UI/FlatListBlurHeader'
 
@@ -390,9 +390,33 @@ const AISearchContent = (_this) => {
       if (seq !== requestSeqRef.current) return
       // Light tap so the reply arriving is felt, not just seen.
       ReactNativeHapticFeedback.trigger('impactLight', HAPTIC_OPTIONS)
+      // The user TYPED what the "Call Keyring Agent" pill says (or asked what the
+      // agent can do, in any language / any phrasing). The core's query rewriter
+      // classifies that intent and flags it here, so we answer with the SAME turn
+      // the pill produces — its canned line plus its four options — instead of the
+      // model's prose. Typing and tapping then reach the identical place, and the
+      // options drill down locally from there exactly as they do after a tap.
+      //
+      // Falls back to the agent's own answer whenever the node is gone or carries
+      // no children, so a tree edit can never leave the reply empty.
+      const menuNode = res?.rewrite?.aboutAssistant === true ? getCallAgentNode() : null
+      const showMenu = !!menuNode && hasChildren(menuNode)
+      // The language the user actually TYPED IN this turn, as the core detected
+      // it — not the app's language. Someone running a Vietnamese app who asks
+      // "what can you do?" in English must get an English menu, the way every
+      // other agent reply already follows the conversation. `language` is set
+      // when the turn came from a button (its prompt is synthetic), so that wins;
+      // otherwise we use what the core detected. Undefined falls back to the app
+      // language inside the tree, which is the right answer when neither is known.
+      const menuLocale = showMenu ? (language || res?.rewrite?.language || undefined) : undefined
       setMessages((prev) => [...prev, {
         role: 'assistant',
-        content: res?.answer || '...',
+        content: showMenu ? getBranchReply(menuNode, menuLocale) : (res?.answer || '...'),
+        // Attaching the tree PATH (not the nodes) is what renders the pills and
+        // keeps them tappable — the same field appendLocalTurn sets for a tap.
+        // The locale rides along so the pills re-label from the stored message
+        // after a reload, instead of snapping back to the app language.
+        ...(showMenu ? { suggestionPath: [menuNode.key], suggestionLocale: menuLocale, isLocal: true } : {}),
         timestamp: Date.now(),
         messageId: res?.messageId || null,
         // Link this reply to the question it answers, so a later open can tell
@@ -462,7 +486,7 @@ const AISearchContent = (_this) => {
   // a language switch. Because the pills ride on the MESSAGE, every level the
   // user drilled through stays in the thread and stays tappable; only the
   // floating root pair is taken down (see the dismiss in select below).
-  const appendLocalTurn = useCallback((userText, botText, path) => {
+  const appendLocalTurn = useCallback((userText, botText, path, locale) => {
     const userMessageId = makeMessageId()
     const now = Date.now()
     // The tap echoes immediately — only the ANSWER waits.
@@ -484,6 +508,9 @@ const AISearchContent = (_this) => {
         // nothing downstream mistakes it for a model response.
         isLocal: true,
         suggestionPath: path,
+        // Carried down every level so a drill-down started by typing keeps that
+        // language all the way to the leaf, instead of reverting to the app's.
+        suggestionLocale: locale,
         uiActions: [],
         actionButtons: []
       }])
@@ -495,7 +522,12 @@ const AISearchContent = (_this) => {
   // language is pinned explicitly (as the reply action buttons do) rather than
   // left for the agent to guess from the prompt text.
   const { select: selectSuggestion } = useSuggestionTree({
-    onSendPrompt: useCallback((prompt) => sendMessage(prompt, currentLanguageBcp47()), [sendMessage]),
+    // `locale` is set for a menu reached by typing; it wins over the app language
+    // so the reply comes back in the language the pill was written in.
+    onSendPrompt: useCallback(
+      (prompt, node, locale) => sendMessage(prompt, locale || currentLanguageBcp47()),
+      [sendMessage]
+    ),
     onLocalTurn: appendLocalTurn,
     // The first drill-down takes the floating root pills down for good — from
     // then on the tree lives in the thread. Leaf taps dismiss via sendMessage.

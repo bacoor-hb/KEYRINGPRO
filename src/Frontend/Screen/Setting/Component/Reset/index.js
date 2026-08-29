@@ -8,7 +8,7 @@ import MyButton from 'frontend/Components/UI/MyButton'
 import StatusMessage from 'frontend/Components/UI/StatusMessage'
 import ReduxService from 'common/redux'
 import { requestReauth } from 'common/secureVault'
-import { storeDataToAsyncStorage } from 'common/storage/asyncStorage'
+import { removeDataFromAsyncStorage } from 'common/storage/asyncStorage'
 import { KEYSTORE } from 'common/constants/redux'
 import ScrollViewBlurHeader from 'frontend/Components/UI/ScrollViewBlurHeader'
 import { pixelByHeight } from 'common/styles'
@@ -18,7 +18,7 @@ const RestWallet = () => {
 
   const clearMoreDataLocal = (keyStore = []) => {
     keyStore.forEach(key => {
-      storeDataToAsyncStorage(key, null)
+      removeDataFromAsyncStorage(key)
     })
   }
 
@@ -29,8 +29,7 @@ const RestWallet = () => {
 
     clearMoreDataLocal([
       KEYSTORE.HISTORY_BACKUP,
-      KEYSTORE.HISTORY_WC_PAY,
-      KEYSTORE.LIST_CHAIN_SUPPORT_EXCHANGE
+      KEYSTORE.HISTORY_WC_PAY
     ])
   }
 

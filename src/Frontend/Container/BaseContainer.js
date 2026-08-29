@@ -19,6 +19,10 @@ import { ANIMATION_DRAWER } from 'common/constants/drawer'
 const DEFAULT_DRAWER = {
   addDrawer: false,
   enablePanDownToClose: true,
+  // Tap-outside-to-close. null = follow enablePanDownToClose, so a drawer that can be
+  // swiped away can also be tapped away. Set true to allow the tap even with the swipe
+  // disabled, false to keep the swipe but ignore the tap.
+  closeOnBackdropPress: null,
   children: null,
   onClose: () => { },
   scrollView: false,

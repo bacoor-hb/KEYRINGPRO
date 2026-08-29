@@ -1,4 +1,6 @@
 import BigNumber from 'bignumber.js'
+import pLimit from 'p-limit'
+import { MULTICALL3_CHAIN_IDS } from 'common/constants/chain'
 import { convertWeiToBalance, getChainInfo, sleep } from 'common/function'
 import { isNativeToken } from 'common/tokens'
 import settings from 'controller/settings'
@@ -27,6 +29,20 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11'
+
+// readMulticall's fallback (chains without Multicall3) reads one contract per
+// RPC request, so it caps concurrent reads at 10 per chain via pLimit — keeps
+// the request rate under the endpoint's requests-per-second limit instead of
+// bursting every call at once.
+const MULTICALL_CALLS_PER_BATCH = 10
+
+const chainReadLimiters = new Map()
+
+const getReadLimiter = (chainId) => {
+  const key = Number(chainId)
+  if (!chainReadLimiters.has(key)) chainReadLimiters.set(key, pLimit(MULTICALL_CALLS_PER_BATCH))
+  return chainReadLimiters.get(key)
+}
 
 // trackingTx outcomes. Thrown as Error messages so callers can tell a real
 // on-chain failure (reverted) from "we simply could not confirm" (timeout) and
@@ -200,23 +216,40 @@ class ViemWeb3 {
   /**
    * @param {} chainId
    * @param {Array<{abi: Array, address: string, functionName: string, args?: Array}>} calls
-   * @param {{batchSize?: number}} [options] `batchSize` is viem's calldata-bytes
-   *   chunk size (default 1024); it splits `calls` into that many bytes per
-   *   eth_call and fires every chunk in parallel with no throttle. Pass 0 to
-   *   disable that split and send `calls` as ONE request — only do this when the
-   *   caller already chunks and meters the batches itself. Omitted elsewhere, so
-   *   existing callers keep viem's default behavior.
-   * @returns
+   * @returns {Promise<Array<{status: string, result?: *, error?: Error}>>} viem
+   *   multicall shape on every chain: `{ status: 'success', result }` or
+   *   `{ status: 'failure', error }` per call.
    */
-  static readMulticall (chainId, calls = [], options = {}) {
+  static async readMulticall (chainId, calls = []) {
     const client = this.getPublicClient(chainId)
-    const result = client.multicall({
+
+    // Chains without Multicall3 deployed can't answer a batched call — read each
+    // contract one-by-one instead. Same output shape as viem's multicall, so
+    // every caller (status/result access) works unchanged. Each read is its own
+    // RPC request, so they're metered by pLimit (10 in flight per chain at most)
+    // to avoid tripping the endpoint's requests-per-second limit.
+    // 4663 is chain robinhood, which has a Multicall3 address but the RPC doesn't support it (returns 405 Method Not Allowed). So treat it like a chain without Multicall3.
+    if (!MULTICALL3_CHAIN_IDS.has(Number(chainId)) && Number(chainId) !== 4663) {
+      const readLimit = getReadLimiter(chainId)
+      return Promise.all(
+        calls.map((call) =>
+          readLimit(async () => {
+            try {
+              const result = await client.readContract(call)
+              return { status: 'success', result }
+            } catch (error) {
+              return { status: 'failure', error }
+            }
+          })
+        )
+      )
+    }
+
+    return client.multicall({
       contracts: calls,
       allowFailure: true,
-      multicallAddress: MULTICALL3_ADDRESS,
-      ...(options.batchSize != null ? { batchSize: options.batchSize } : {})
+      multicallAddress: MULTICALL3_ADDRESS
     })
-    return result
   }
 
   // Single contract read. The public client uses a fallback() transport with
@@ -354,7 +387,9 @@ class ViemWeb3 {
       value = BigInt(0),
       callback,
       gasLimit,
-      noEstimateGas = false
+      noEstimateGas = false,
+      nonce = null,
+      noGasPrice = false
     } = rawTransaction
 
     const account = privateKeyToAccount(`0x${privateKey}`)
@@ -368,28 +403,29 @@ class ViemWeb3 {
       data,
       value
     }
+    if (!noGasPrice) {
+      if (maxPriorityFeePerGas && maxFeePerGas) {
+        const maxPriorityFeePerGas = BigNumber(txRequest.maxPriorityFeePerGas.toString()).toString()
 
-    if (maxPriorityFeePerGas && maxFeePerGas) {
-      const maxPriorityFeePerGas = BigNumber(txRequest.maxPriorityFeePerGas.toString())
-        .multipliedBy(percent)
-        .decimalPlaces(0)
-        .toString()
+        const maxFeePerGas = BigNumber(txRequest.maxFeePerGas.toString()).toString()
 
-      const maxFeePerGas = BigNumber(txRequest.maxFeePerGas.toString())
-        .multipliedBy(percent)
-        .decimalPlaces(0)
-        .toString()
+        txRequest.maxPriorityFeePerGas = BigInt(maxPriorityFeePerGas)
+        txRequest.maxFeePerGas = BigInt(maxFeePerGas)
+      } else {
+        const gasPriceDefault = await client.getGasPrice()
+        const gasCustom = BigNumber(gasPriceDefault.toString())
+          .multipliedBy(percent)
+          .decimalPlaces(0)
+          .toString()
 
-      txRequest.maxPriorityFeePerGas = BigInt(maxPriorityFeePerGas)
-      txRequest.maxFeePerGas = BigInt(maxFeePerGas)
+        txRequest.gasPrice = BigInt(gasCustom)
+      }
+    }
+
+    if (nonce) {
+      txRequest.nonce = nonce
     } else {
-      const gasPriceDefault = await client.getGasPrice()
-      const gasCustom = BigNumber(gasPriceDefault.toString())
-        .multipliedBy(percent)
-        .decimalPlaces(0)
-        .toString()
-
-      txRequest.gasPrice = BigInt(gasCustom)
+      txRequest.nonce = await client.getTransactionCount({ address: account.address })
     }
 
     if (gasLimit) {
@@ -398,8 +434,11 @@ class ViemWeb3 {
     }
 
     if (!noEstimateGas && !txRequest.gas) {
-      const gas = await walletClient.estimateGas(txRequest)
-      txRequest.gas = gas
+      const gas = await walletClient.estimateGas({
+        account: txRequest.from,
+        ...txRequest
+      })
+
       const gasCustom = BigNumber(gas.toString())
         .multipliedBy(percent)
         .decimalPlaces(0)

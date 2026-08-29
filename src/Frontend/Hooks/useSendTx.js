@@ -34,6 +34,33 @@ export const TX_STATUS = {
 // "affordable" tx into an out-of-gas failure.
 const FEE_BUFFER = 1.1
 
+// Headroom applied to a MEASURED gas estimate before it is signed with, for the
+// callers that opt into it via `gasBuffer`.
+//
+// `eth_estimateGas` measures the tx against state as it is now, but the tx runs
+// against state as it will be once mined, and the difference is paid in gas: a
+// storage slot the estimate saw as non-zero costs 2.9k to update, while the same
+// slot going 0 -> non-zero costs 20k. Any tx mined in between can move a slot
+// across that boundary, so the real cost lands ABOVE what was measured and the
+// tx reverts out of gas with the fee already spent.
+//
+// Off by default because it only pays for itself on txs whose cost depends on
+// state OTHER PEOPLE can move — an AMM mint that may cross a tick, a first-time
+// deposit that initializes storage. A plain transfer costs the same 65k whoever
+// else is trading, and buffering it would only claim block space it never uses.
+//
+// Not a cost to the user when it does apply: the fee charged is
+// `gasUsed x gasPrice`, so an unspent limit is simply never billed — unlike
+// FEE_BUFFER above, which buffers the gas PRICE and is paid in full.
+const GAS_LIMIT_BUFFER = 1.2
+
+/** A node estimate plus GAS_LIMIT_BUFFER, or 0 when there is no usable estimate. */
+export const withGasBuffer = (estimate) => {
+  const bn = BigNumber(estimate)
+  if (!bn.isFinite() || bn.lte(0)) return 0
+  return bn.multipliedBy(GAS_LIMIT_BUFFER).integerValue(BigNumber.ROUND_CEIL).toNumber()
+}
+
 const isEvmAddress = (value) => /^0x[0-9a-fA-F]{40}$/.test(String(value || '').trim())
 
 // After a successful send, re-read the sender's token balances so every
@@ -154,7 +181,7 @@ export const resolvePrivateKey = async (address, nfcProxy) => {
  * at all we let the tx through rather than block a user who could actually send
  * it — the broadcast path has its own error handling.
  */
-const preflightTx = async ({ chainId, from, txs, language }) => {
+export const preflightTx = async ({ chainId, from, txs, language, gasBuffer = false, onGasLimit }) => {
   const t = (key, opts) => I18n.t(`chatAgent.${key}`, { ...(opts || {}), locale: resolveLocale(language) })
 
   const tx = txs?.[0]
@@ -179,22 +206,48 @@ const preflightTx = async ({ chainId, from, txs, language }) => {
   const gasLimit = await AllChainServices.estimateGasTxs(chainId, rawTx)
   if (!gasLimit || BigNumber(gasLimit).lte(0)) return t('walletActionEstimateFailed')
 
+  // The limit this tx will actually be SIGNED with — buffered for the callers
+  // that asked for it (see GAS_LIMIT_BUFFER), the bare estimate otherwise.
+  //
+  // Everything below budgets against this rather than the raw estimate, and the
+  // caller signs with this same number. That identity is the point: the node
+  // rejects a transaction whose `gasLimit x gasPrice` exceeds the balance no
+  // matter what it would really have spent, so budgeting the estimate while
+  // signing 30% above it would clear a thin wallet here and then fail it at
+  // broadcast with "insufficient funds for gas * price + value".
+  const signedGasLimit = gasBuffer ? withGasBuffer(gasLimit) : gasLimit
+
+  // Handed back so the caller can sign with it instead of making
+  // `postBaseSendTxs` estimate the same transaction a second time.
+  onGasLimit?.(signedGasLimit)
+
   const gasPrice = await AllChainServices.getGasPrice(chainId)
   // Without a gas price the fee comparison is meaningless (a 0 fee is always
   // "affordable"), so skip it. The estimate above already proved it executes.
   if (!gasPrice || BigNumber(gasPrice).lte(0)) return null
 
   const requiredWei = BigNumber(gasPrice)
-    .multipliedBy(gasLimit)
+    .multipliedBy(signedGasLimit)
     .multipliedBy(FEE_BUFFER)
     .plus(valueWei)
 
   // Raw wei (isFormatBalance = false) so the comparison stays in integer wei.
-  const balanceWei = BigNumber(await AllChainServices.getBalanceByChain(chainId, from, false))
-  // An unreadable balance also resolves to 0, which would look like "no funds"
-  // and wrongly block someone who can pay. Only a balance we actually read is
-  // allowed to fail the check.
-  if (!balanceWei.isFinite() || balanceWei.lte(0)) return null
+  const rawBalance = await AllChainServices.getBalanceByChain(chainId, from, false)
+
+  // A balance we could not READ must not block someone who can pay — but a
+  // balance of ZERO is the opposite answer and has to get through, because a
+  // wallet with no native coin is exactly what this check exists to catch.
+  //
+  // `getBalanceByChain` separates the two by TYPE, which is the only signal
+  // there is: a successful read returns a decimal STRING (`0n.toString()` is
+  // '0' for a genuinely empty wallet), while its `catch` returns the NUMBER 0.
+  // Testing the VALUE instead — the bug this replaced — let an empty wallet
+  // sail through the one check that was meant to stop it.
+  if (typeof rawBalance !== 'string') return null
+
+  const balanceWei = BigNumber(rawBalance)
+  // Unparseable is the same "cannot tell" as a failed read.
+  if (!balanceWei.isFinite() || balanceWei.lt(0)) return null
   if (balanceWei.gte(requiredWei)) return null
 
   const missing = convertWeiToBalance(requiredWei.minus(balanceWei).toFixed(0))
@@ -244,6 +297,19 @@ const waitForTxSuccess = async (hash, chainId, timeout = 180000) => {
  *                                 user came back to read it.
  * @param {boolean} preflight      Simulate + fee-check before signing (default off,
  *                                 so existing callers are unchanged)
+ * @param {boolean} gasBuffer      Sign with the pre-flight's estimate plus headroom
+ *                                 instead of letting the broadcast re-estimate
+ *                                 (default off). NO-OP WITHOUT `preflight` — the
+ *                                 estimate it reuses is the one the pre-flight
+ *                                 makes, so with the pre-flight off there is
+ *                                 nothing to buffer and the broadcast estimates
+ *                                 on its own, exactly as it would anyway. For txs whose
+ *                                 gas cost depends on state other people can move —
+ *                                 an AMM mint that may cross a tick, a first-time
+ *                                 deposit that initializes storage — where an
+ *                                 estimate taken moments earlier reads LOW and the
+ *                                 tx reverts out of gas with the fee already spent.
+ *                                 See GAS_LIMIT_BUFFER.
  * @param {Function} preCheck      Optional caller-specific check run BEFORE the
  *                                 generic pre-flight. Resolves to an error string
  *                                 to abort, or null/undefined to continue. Lets a
@@ -315,7 +381,7 @@ const waitForTxSuccess = async (hash, chainId, timeout = 180000) => {
  *                                 to be scanned at signing time. Omitting it
  *                                 leaves hot accounts working exactly as before.
  */
-export default function useSendTx ({ from, chainId, buildTxs, onResult, fallbackError, initialStatus, initialTxHash, initialError, preflight = false, preCheck, gate, language, refreshBalanceOnSuccess = false, refreshTokenAddress, nfcProxy } = {}) {
+export default function useSendTx ({ from, chainId, buildTxs, onResult, fallbackError, initialStatus, initialTxHash, initialError, preflight = false, gasBuffer = false, preCheck, gate, language, refreshBalanceOnSuccess = false, refreshTokenAddress, nfcProxy } = {}) {
   // Seed from any persisted state so a remount (e.g. leaving and returning to
   // the chat) restores the same status/timeline instead of resetting to IDLE.
   const [status, setStatus] = useState(initialStatus || TX_STATUS.IDLE)
@@ -374,12 +440,24 @@ export default function useSendTx ({ from, chainId, buildTxs, onResult, fallback
         if (preErr) throw new Error(preErr)
       }
 
+      // The gas limit the pre-flight measured and budgeted against, reused below
+      // as the limit this tx is signed with. Only set when `gasBuffer` asked for
+      // it; otherwise the broadcast estimates on its own exactly as before.
+      let signedGasLimit = 0
+
       // Simulate + fee-check before touching the key, silently inside GATING —
       // the form is still on screen while it runs. A failure throws, so it
       // surfaces through the normal error path (timeline + Retry) having cost
       // nothing: no signature, no broadcast, no gas.
       if (preflight) {
-        const err = await preflightTx({ chainId, from, txs, language })
+        const err = await preflightTx({
+          chainId,
+          from,
+          txs,
+          language,
+          gasBuffer,
+          onGasLimit: (limit) => { signedGasLimit = limit }
+        })
         if (err) throw new Error(err)
       }
 
@@ -397,7 +475,17 @@ export default function useSendTx ({ from, chainId, buildTxs, onResult, fallback
         const gateErr = await gate({
           txs,
           verify: preflight
-            ? () => preflightTx({ chainId, from, txs, language })
+            ? () => preflightTx({
+              chainId,
+              from,
+              txs,
+              language,
+              gasBuffer,
+              // The re-check runs at the moment of payment, against state that
+              // has moved — take its fresher measurement over the one from
+              // before the sheet opened.
+              onGasLimit: (limit) => { signedGasLimit = limit }
+            })
             : undefined,
           // Offered so a gate that has to read the signing key anyway (the x402
           // payment is signed by this same account) can pass it back and spare a
@@ -428,7 +516,20 @@ export default function useSendTx ({ from, chainId, buildTxs, onResult, fallback
 
       // Step 1 — broadcast (isWaitDone = false): resolves with the hash as soon
       // as the tx is accepted, so the user can see/track it while it's pending.
-      const results = await AllChainServices.postBaseSendTxs(chainId, privateKey, txs, false)
+      //
+      // `gasBuffer` callers sign with the limit the pre-flight measured and
+      // budgeted against, so the fee checked and the fee charged are one number.
+      // `postBaseSendTxs` still takes the higher of this and its own estimate, so
+      // this can only ever raise the floor. Everyone else passes txs untouched
+      // and the broadcast estimates as before.
+      //
+      // Applied to txs[0] ONLY — that is the single tx the pre-flight estimated
+      // (it reads `txs?.[0]`), so it is the only one this limit describes.
+      // Stamping a second tx with another tx's limit would be a guess.
+      const txsToSend = signedGasLimit > 0
+        ? txs.map((tx, i) => (i === 0 ? { ...tx, gasLimit: signedGasLimit } : tx))
+        : txs
+      const results = await AllChainServices.postBaseSendTxs(chainId, privateKey, txsToSend, false)
       hash = results?.[0]
       if (!hash) throw new Error(fallbackError)
 
@@ -459,7 +560,7 @@ export default function useSendTx ({ from, chainId, buildTxs, onResult, fallback
       // rather than signing from something kept around since the last attempt.
       lentKey = null
     }
-  }, [status, from, chainId, buildTxs, onResult, fallbackError, preflight, preCheck, gate, language, refreshBalanceOnSuccess, refreshTokenAddress, nfcProxy])
+  }, [status, from, chainId, buildTxs, onResult, fallbackError, preflight, gasBuffer, preCheck, gate, language, refreshBalanceOnSuccess, refreshTokenAddress, nfcProxy])
 
   // Rehydrated mid-confirmation (the user left while the tx was broadcast but
   // not yet confirmed): the broadcast already happened, so don't re-send — just

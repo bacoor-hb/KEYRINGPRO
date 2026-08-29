@@ -34,6 +34,10 @@ export default function SupplyStatusTimeline ({
   onCopyHash,
   chainId,
   walletAddress,
+  // `{ amount, symbol }` the deposit actually credited, read from its receipt
+  // logs; null when it could not be derived. Only ever shown under a SUCCESS —
+  // it is the settled outcome, not a running commentary.
+  received,
   // Two switches, for the same reason the shared timeline has two: the step
   // markers and the settled result do not come alive at the same moment.
   //   • `animateIntro` — the Approve / Sending / Waiting markers. True on any
@@ -74,6 +78,23 @@ export default function SupplyStatusTimeline ({
   // never broadcast.
   const showSupplyNode = isApproved || isSupplying || !!supplyHash || isDone
   const showResult = isDone || isError
+
+  // The line under the result title, or undefined for a bare title.
+  //
+  //   • failure → why it failed, falling back to a generic reason so a failed
+  //     card is never unexplained
+  //   • success → what was actually received, when the receipt gave it up
+  //
+  // Also decides the layout below, since the two are the same question: a
+  // StatusMessage with a second line centres its icon differently from one
+  // without. Computed once so the text and the style can never disagree.
+  const resultMessage = (() => {
+    if (isError) return error || t('txFailedDesc')
+    if (isDone && received?.amount) {
+      return t('supplyReceivedAmount', { amount: received.amount, symbol: received.symbol })
+    }
+    return undefined
+  })()
 
   // Between the deposit being broadcast and its receipt coming back, the flow is
   // waiting on the chain — `useSupplyFlow` is inside `waitForReceipt`. The shared
@@ -226,16 +247,21 @@ export default function SupplyStatusTimeline ({
       )}
 
       {/* Terminal result — icon centred against the text either way.
-          Success is a lone title, so the shared `statusResult` centres it like
-          every other flow. A failure adds the reason underneath, and the icon
-          centres on title + reason TOGETHER, so the block reads as one unit. */}
+          A lone title centres against the icon via the shared `statusResult`,
+          exactly as every other flow does. When there IS a second line — the
+          failure reason, or the amount actually received — the icon centres on
+          both lines TOGETHER so the block reads as one unit.
+
+          The received line is best-effort: a success whose figure could not be
+          read from the receipt renders as the bare "Success" it always did,
+          rather than an empty second line or a guessed number. */}
       {showResult && (
         <StatusMessage
           variant={isDone ? 'success' : 'error'}
           title={isDone ? t('statusSuccess') : t('statusFailed')}
           titleConfig={{ className: isDone ? 'text-green' : 'text-red', variant: 'subTitle' }}
-          message={isError ? (error || t('txFailedDesc')) : undefined}
-          style={isError ? styles.statusResultWithMessage : timelineStyles.statusResult}
+          message={resultMessage}
+          style={resultMessage ? styles.statusResultWithMessage : timelineStyles.statusResult}
           autoplay={animate}
         />
       )}

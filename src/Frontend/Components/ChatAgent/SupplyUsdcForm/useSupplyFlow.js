@@ -8,7 +8,14 @@ import { refreshAccountTokens } from 'src/Services/TokenListV2'
 import { isNativeToken } from 'common/tokens'
 import { zeroAddress } from 'viem'
 import { buildApproveTxs, buildSupplyTxs } from './buildSupplyTx'
-import { needsApprovalFor, previewShares, supplyPreCheck, waitForAllowance } from './supplyChecks'
+import {
+  needsApprovalFor,
+  previewShares,
+  supplyPreCheck,
+  waitForAllowance,
+  withGasBuffer
+} from './supplyChecks'
+import { parseReceivedAmount } from './parseReceivedAmount'
 
 // One tap, both transactions.
 //
@@ -62,13 +69,19 @@ const toChainId = (chainId) => {
  * Mirrors `useSendTx`'s own waiter: 1 confirmation, 3-minute ceiling. A chain
  * with no configured RPC can't be polled, so it optimistically returns true —
  * the same trade-off the shared hook makes.
+ *
+ * Returns `{ ok, receipt }` rather than a bare boolean because the deposit's
+ * receipt carries the logs the "Received X" line is read from. `receipt` is null
+ * on the un-pollable path, where `ok` is an assumption rather than an
+ * observation — so callers must treat a missing receipt as "unknown", never as
+ * "nothing was received".
  */
 const waitForReceipt = async (hash, chainId, timeout = 180000) => {
   const rpcUrl = getRpcUrlByChain(toChainId(chainId))
-  if (!rpcUrl) return true
+  if (!rpcUrl) return { ok: true, receipt: null }
   const provider = new ethers.providers.JsonRpcProvider(rpcUrl)
   const receipt = await provider.waitForTransaction(hash, 1, timeout)
-  return receipt?.status === 1
+  return { ok: receipt?.status === 1, receipt: receipt || null }
 }
 
 const errText = (err, fallback) =>
@@ -210,6 +223,12 @@ export default function useSupplyFlow ({
   const [approveHash, setApproveHash] = useState(restored?.approveHash ?? null)
   const [supplyHash, setSupplyHash] = useState(restored?.supplyHash ?? null)
   const [error, setError] = useState(restored?.error ?? null)
+  // What the deposit actually credited, read from its receipt logs — see
+  // `parseReceivedAmount`. `{ amount, symbol }` when it could be derived, null
+  // otherwise, in which case the timeline shows a plain "Success". Restored
+  // pre-formatted, so a card that comes back from history never re-reads a chain
+  // (and never re-derives an old deposit against today's metadata).
+  const [received, setReceived] = useState(restored?.received ?? null)
 
   // Guards a double-tap: the button is disabled while busy, but a fast second
   // press can land before React re-renders with the new step.
@@ -220,6 +239,7 @@ export default function useSupplyFlow ({
     setApproveHash(null)
     setSupplyHash(null)
     setError(null)
+    setReceived(null)
   }, [])
 
   const execute = useCallback(async (amount) => {
@@ -231,6 +251,7 @@ export default function useSupplyFlow ({
     setApproveHash(null)
     setSupplyHash(null)
     setError(null)
+    setReceived(null)
 
     const fail = (message) => {
       setError(message)
@@ -315,7 +336,21 @@ export default function useSupplyFlow ({
 
       if (needsApproval) {
         setStep(SUPPLY_STEP.APPROVING)
-        const approveTxs = buildApproveTxs({ market, asset, amount })
+        const [approveTx] = buildApproveTxs({ market, asset, amount })
+
+        // Sign with the estimate PLUS headroom, not the bare estimate.
+        // `postBaseSendTxs` takes the higher of this and its own estimate, so
+        // passing a buffered limit raises the floor without ever dropping below
+        // what the node says the tx needs. See `withGasBuffer` for why a bare
+        // estimate is not enough. A 0 here (nothing could be estimated) simply
+        // leaves the broadcast's own estimate in charge, exactly as before.
+        const approveGas = await AllChainServices.estimateGasTxs(toChainId(chainId), {
+          to: approveTx.to,
+          from: walletAddress,
+          data: approveTx.data || '0x'
+        })
+        const approveTxs = [{ ...approveTx, gasLimit: withGasBuffer(approveGas) }]
+
         const approveResults = await AllChainServices.postBaseSendTxs(
           toChainId(chainId), privateKey, approveTxs, false
         )
@@ -349,7 +384,8 @@ export default function useSupplyFlow ({
         // actually failed on-chain, so the user is told which of the two it was:
         // a reverted approval, or one that landed but is not visible yet.
         if (!allowanceReady) {
-          const mined = await waitForReceipt(aHash, chainId, 15000).catch(() => false)
+          const { ok: mined } = await waitForReceipt(aHash, chainId, 15000)
+            .catch(() => ({ ok: false, receipt: null }))
           return fail(tr(mined ? 'supplyApproveNotVisible' : 'supplyApproveFailed', language))
         }
 
@@ -369,7 +405,38 @@ export default function useSupplyFlow ({
       }
 
       setStep(SUPPLY_STEP.SUPPLYING)
-      const supplyTxs = buildSupplyTxs({ market, asset, walletAddress, amount, minShares })
+      const [depositTx] = buildSupplyTxs({ market, asset, walletAddress, amount, minShares })
+
+      // The deposit is the leg that actually ran out of gas, and it is the one
+      // worth measuring: unlike the pre-check — which runs before the approval
+      // and so cannot simulate a call that spends an allowance not yet granted —
+      // by this point the approve is mined and `waitForAllowance` has confirmed
+      // the market can pull the funds. `estimateGas` therefore executes the real
+      // deposit against real state, and its answer beats any fixed number.
+      //
+      // The headroom on top is what fixes the revert. The estimate measures the
+      // deposit against state as it is now, but it executes against state as it
+      // will be when mined, and the difference is paid in gas: a first-time
+      // supply writes storage slots from zero (20k each, against 2.9k for a
+      // rewrite), and a tx landing in between — an interest-index update,
+      // another depositor touching the same reserve — moves a slot across that
+      // boundary. The estimate then reads LOW and the deposit reverts with the
+      // approve's fee already spent.
+      //
+      // The measured estimate is the whole basis — no flat floor is applied on
+      // top. The pre-check budgets this leg at a deliberately roomy ceiling
+      // because it runs before the approval and cannot simulate the deposit at
+      // all, but that ceiling is a spending allowance, not a target: signing a
+      // ~180k deposit at 600k would only make the transaction claim block space
+      // it never uses, and push a thinly-funded wallet past what the node will
+      // accept. `postBaseSendTxs` still floors this at its own estimate, so a
+      // zero here (nothing could be measured) is not signed as a zero limit.
+      const depositGas = await AllChainServices.estimateGasTxs(toChainId(chainId), {
+        to: depositTx.to,
+        from: walletAddress,
+        data: depositTx.data || '0x'
+      })
+      const supplyTxs = [{ ...depositTx, gasLimit: withGasBuffer(depositGas) }]
       const supplyResults = await AllChainServices.postBaseSendTxs(
         toChainId(chainId), privateKey, supplyTxs, false
       )
@@ -377,8 +444,15 @@ export default function useSupplyFlow ({
       if (!sHash) return fail(tr('txFailed', language))
       setSupplyHash(sHash)
 
-      const ok = await waitForReceipt(sHash, chainId)
+      const { ok, receipt } = await waitForReceipt(sHash, chainId)
       if (!ok) return fail(tr('txFailed', language))
+
+      // What the deposit actually credited, taken from the receipt already in
+      // hand. Deliberately AFTER the success check and deliberately unable to
+      // change it: the supply has settled, and a figure that cannot be derived
+      // (no RPC to poll, an unrecognized crediting pattern) only means the
+      // timeline shows "Success" without a line under it.
+      setReceived(parseReceivedAmount({ receipt, market, asset, walletAddress }))
 
       setStep(SUPPLY_STEP.DONE)
       runningRef.current = false
@@ -408,5 +482,5 @@ export default function useSupplyFlow ({
     }
   }, [market, asset, walletAddress, chainId, language, onResult, gate, nfcProxy])
 
-  return { step, approveHash, supplyHash, error, execute, reset }
+  return { step, approveHash, supplyHash, error, received, execute, reset }
 }

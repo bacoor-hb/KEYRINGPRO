@@ -5,6 +5,7 @@ import { useIsFocused } from '@react-navigation/native'
 import { getVisibleTotalUSD, refreshAccountTokens, isStaleForActiveChains } from 'src/Services/TokenListV2'
 import { lowerCase } from 'common/function'
 import MyText from 'frontend/Components/UI/MyText'
+import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
 import MyIcon from 'frontend/Components/UI/MyIcon'
 import FiatBalance from 'frontend/Components/UI/FiatBalance'
 import MyDotsLoading from 'frontend/Components/UI/MyDotsLoading'
@@ -16,7 +17,6 @@ import ItemOption from '../ItemOption'
 import ContainerBox from '../ContainerBox'
 import { NavigationActions } from 'src/navigation/NavigationService'
 import createStyles from './styles'
-import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
 import { STANDARD_CHAIN } from 'common/constants/app'
 import AvatarAccount from 'frontend/Components/UI/AvatarAccount'
 import { ACCOUNT_TYPE } from 'common/constants/account'
@@ -25,8 +25,11 @@ import StorageReduxAction from 'controller/Redux/actions/storageAction'
 
 const ItemAccount = ({ indexAccount, accountData }) => {
   const dispatch = useDispatch()
-  const { activeAccount } = useSelector(s => s)
-  const { accountsUsing } = activeAccount
+  // `activeAccount` is deliberately NOT subscribed to. Nothing in this render
+  // depends on it — it is only read at mount (initial expand state) and at press
+  // time (openAccountToUse) — while subscribing to it (worse: to the whole
+  // store, as `useSelector(s => s)` did) re-rendered every account row on every
+  // dispatch in the app, including each per-chain token commit of a refresh.
   const address = accountData?.address || ''
   const localeRedux = useSelector(state => state.localeRedux)
 
@@ -37,8 +40,17 @@ const ItemAccount = ({ indexAccount, accountData }) => {
   const addressBookAvatar = useSelector(
     (state) => (state.addressBookInfo?.[lowerCase(address)]?.info?.avatar || '').trim()
   )
-  const accountEntry = useSelector(
-    (state) => state.accountTokenListRedux?.[lowerCase(address)]
+  // Subscribe to the DERIVED total, never to the entry object.
+  //
+  // The entry is replaced on EVERY per-chain commit — a dozen times per sweep —
+  // even when nothing this row displays has changed. Subscribing to it made
+  // react-redux re-render this row synchronously inside `dispatch`, measured on
+  // device at ~340ms per commit: 4.1s of a 6.5s sweep for an account that holds
+  // nothing at all. A number compares by value, so a chain that adds no balance
+  // now costs zero renders, and the progressive total still lands the moment it
+  // actually changes.
+  const totalUSD = useSelector(
+    (state) => getVisibleTotalUSD(state.accountTokenListRedux?.[lowerCase(address)])
   )
   const walletConnectRedux = useSelector((state) => state.walletConnectRedux)
   // Number of dApps this account is connected to over WalletConnect V2. Each
@@ -53,27 +65,46 @@ const ItemAccount = ({ indexAccount, accountData }) => {
         return !owner || owner === addr
       }).length
   }, [walletConnectRedux, address])
-  // Derive from live tokens (filtered by !isHidden) so the total stays in sync
-  // with the TokenList screen when the user hides/unhides tokens.
-  const totalUSD = useMemo(() => getVisibleTotalUSD(accountEntry), [accountEntry])
   const isTokenLoading = useSelector((state) => !!state.tokenLoadingRedux?.[lowerCase(address)])
+  // Has this account ever been LOOKED AT? Selected as a BOOLEAN on purpose: it
+  // flips once in the account's lifetime, so it costs no extra renders during a
+  // sweep — unlike subscribing to the timestamps themselves, which change on
+  // every chain.
+  //
+  // `lastAttemptAt` counts as well as `lastSyncedAt`: a sweep where every chain
+  // failed (offline) never sets a synced stamp, and gating on that alone would
+  // spin the loader forever instead of falling back to the cached/zero total.
+  const hasEverSynced = useSelector((state) => {
+    const entry = state.accountTokenListRedux?.[lowerCase(address)]
+    return !!(entry?.lastSyncedAt || entry?.lastAttemptAt)
+  })
   // Track whether this account has ever finished a FULL token load. Used to keep
   // the loader visible for the whole first load — `lastSyncedAt` is set on the
   // first chain commit, so gating on it would flash an intermediate 0/partial
   // total as the remaining chains commit progressively. Initialized from a
   // persisted snapshot if one already exists (restored/previous session).
-  const hasLoadedOnceRef = useRef(!!accountEntry?.lastSyncedAt)
+  const syncedAt = () => ReduxService.getAccountTokenList()?.[lowerCase(address)]?.lastSyncedAt
+  const hasLoadedOnceRef = useRef(!!syncedAt())
   useEffect(() => {
     // A full refresh is done once the loading flag clears with tokens present.
-    if (!isTokenLoading && accountEntry?.lastSyncedAt) {
+    // The entry is read here rather than subscribed to — see the total above.
+    if (!isTokenLoading && syncedAt()) {
       hasLoadedOnceRef.current = true
     }
-  }, [isTokenLoading, accountEntry?.lastSyncedAt])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTokenLoading, address])
   // Show the three-dot loader only during the FIRST load (until ALL chains
   // settle); later silent refreshes keep showing the existing balance.
-  const showTokenLoader = isTokenLoading && !hasLoadedOnceRef.current
+  //
+  // `!hasEverSynced` covers the gap between the row opening and the refresh
+  // actually starting: for those frames the loading flag is still false and
+  // `totalUSD` is 0, so the row flashed "$0" — telling the user they hold
+  // nothing before anyone had looked. Zero-because-checked and
+  // zero-because-unchecked are different states and must not render the same.
+  const showTokenLoader = !hasEverSynced || (isTokenLoading && !hasLoadedOnceRef.current)
 
   useEffect(() => {
+    const { accountsUsing } = ReduxService.getActiveAccount() || {}
     if (!accountsUsing) {
       if (indexAccount === 0) {
         setIsShow(true)
@@ -110,13 +141,16 @@ const ItemAccount = ({ indexAccount, accountData }) => {
   useEffect(() => {
     if (!isFocused || !isShow || !address) return
     if (accountData?.chain !== STANDARD_CHAIN.Evm) return
-    if (!isStaleForActiveChains(accountEntry, activeEvmChainIds)) return
+    const entry = ReduxService.getAccountTokenList()?.[lowerCase(address)]
+    if (!isStaleForActiveChains(entry, activeEvmChainIds)) return
     if (ReduxService.isTokenLoading(address)) return
     refreshAccountTokens(address)
-    // accountEntry read for the staleness check; listing only its sync markers
-    // (not the whole object) avoids re-running on every progressive token commit.
+    // `isTokenLoading` is the re-check trigger: it flips false exactly once, when
+    // a sweep finishes, which is when staleness can meaningfully have changed.
+    // The old deps listed the entry's sync markers, which re-ran this on every
+    // progressive commit — and required subscribing to the entry to do it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFocused, isShow, address, accountData?.chain, activeEvmChainIds, accountEntry?.lastSyncedAt, accountEntry?.syncedChainIds])
+  }, [isFocused, isShow, address, accountData?.chain, activeEvmChainIds, isTokenLoading])
 
   const handleRoutePage = (screenName) => {
     ReduxService.setActiveAccount(accountData)
@@ -195,6 +229,10 @@ const ItemAccount = ({ indexAccount, accountData }) => {
   }, [accountData, addressBookAvatar, totalUSD, address, connectedDappCount, showTokenLoader, localeRedux])
 
   const openAccountToUse = () => {
+    // Read at press time: this row no longer subscribes to activeAccount, and a
+    // fresh read also avoids writing back a stale copy of its other fields.
+    const activeAccount = ReduxService.getActiveAccount() || {}
+    const { accountsUsing } = activeAccount
     if (isShow) {
       setIsShow(false)
       let arrTemp = [...(accountsUsing || [])]
@@ -259,4 +297,8 @@ const ItemAccount = ({ indexAccount, accountData }) => {
   )
 }
 
-export default ItemAccount
+// The home screen renders one of these per account and re-renders whenever the
+// list re-sorts by balance; without memo every row (and its expanded box) would
+// re-render on each of those passes. Props are an accountListRedux element (a
+// stable ref) plus a number, so the default shallow compare is enough.
+export default React.memo(ItemAccount)

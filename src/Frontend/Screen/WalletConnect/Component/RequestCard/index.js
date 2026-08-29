@@ -318,8 +318,16 @@ const RequestCard = (props) => {
           {/* Reserve the spending-cap space from the very first render for approves
               only (detected synchronously from the calldata selector), so the rows
               fill the reserved area without pushing the buttons down. Non-approve
-              txs (e.g. transfer) never reserve it -> no empty gap that collapses. */}
-          {isApproveLikely ? (
+              txs (e.g. transfer) never reserve it -> no empty gap that collapses.
+
+              The reservation is also dropped once the spending-cap data has SETTLED
+              with nothing to show (calldata that can't be decoded, an ERC721 approve,
+              a failed isERC20 / token-info read on a chain the scan API doesn't
+              cover). Those cases used to keep an empty ~2-line box forever. The
+              happy path is unchanged: isLoadingApproveTokenInfo is already true on
+              the first render for an approve, so the space is still reserved before
+              the data arrives and the buttons never move. */}
+          {isApproveLikely && (isLoadingApproveTokenInfo || showSpendingCap) ? (
             <View style={styles.spendingCapReserved}>
               {showSpendingCap ? (
                 <>

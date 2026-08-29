@@ -1,7 +1,7 @@
 import BottomSheet, { BottomSheetView, useBottomSheetInternal, useBottomSheetTimingConfigs } from '@gorhom/bottom-sheet'
 import { Colors, height, pixelByWidth, width } from 'common/styles'
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { Keyboard, View, Modal as RNModal, StyleSheet } from 'react-native'
+import { Keyboard, Pressable, View, Modal as RNModal, StyleSheet } from 'react-native'
 import { Extrapolation, interpolate, ReduceMotion, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated'
 import MyLinearGradient from '../MyLinearGradient'
 import { mergeStyle } from 'common/tailwind'
@@ -101,7 +101,7 @@ const Content = ({ children, animation }) => {
   }
 }
 
-const BackDrop = ({ isHasBackdrop, index }) => {
+const BackDrop = ({ isHasBackdrop, index, onPress }) => {
   // Fade backdrop opacity 0 -> 1 on mount for a smooth appearance
   // instead of rendering dark color immediately (causes flickering).
   const opacity = useSharedValue(0)
@@ -129,7 +129,18 @@ const BackDrop = ({ isHasBackdrop, index }) => {
           zIndex: 10 + (index + 1) * 2 - 1
         },
         animatedStyle
-      ]} />
+      ]}>
+      {/* Tap-outside-to-close. A child Pressable rather than a handler on the view
+          itself, because react-native-animatable's View has no press handling.
+          Only mounted for drawers the caller allows to be dismissed this way — see
+          the backdrop map below — so a drawer that opted out keeps a plain,
+          touch-swallowing backdrop exactly as before. */}
+      {!!onPress && (
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={onPress} />
+      )}
+    </Animated.View>
   )
 }
 
@@ -260,6 +271,22 @@ const MyDrawerUI = forwardRef((props, ref) => {
 
   }), [drawers])
 
+  // Backdrop tap → close that drawer. Deliberately does NOT touch `drawers`: it only
+  // calls the sheet's own close(), so the stack still shrinks in exactly one place
+  // (the BottomSheet onClose below), the same path a swipe-down and the imperative
+  // closeDrawer() take. Clearing the ref first makes a second tap during the close
+  // animation a no-op, so a double tap can't tear down the drawer underneath.
+  const onBackdropPress = (index) => {
+    const idDrawer = `drawer-${index}`
+    const sheet = drawersRef.current.get(idDrawer)
+    if (!sheet) {
+      return
+    }
+
+    drawersRef.current.set(idDrawer, null)
+    sheet.close()
+  }
+
   return (
     <>
       {
@@ -373,11 +400,22 @@ const MyDrawerUI = forwardRef((props, ref) => {
         drawers.map((drawer, index) => {
           const isHasBackdrop = index === 0 || drawer.backdrop
 
+          // `closeOnBackdropPress` is a tri-state: true/false force the behaviour,
+          // unset falls back to "can the user already dismiss this by swiping down".
+          // That fallback keeps a drawer which disabled the swipe from gaining a new
+          // accidental exit, while a caller that wants both (X402SignModal: no swipe,
+          // but tap-outside = cancel) opts back in explicitly. `position: 'center'`
+          // drawers render inside an RNModal above this backdrop and their ref is not
+          // a BottomSheet — never wire them.
+          const closeByBackdrop = drawer?.position !== 'center' &&
+            (drawer?.closeOnBackdropPress ?? drawer?.enablePanDownToClose !== false)
+
           return (
             <BackDrop
               key={`backdrop-debounce-${index}`}
               isHasBackdrop={isHasBackdrop}
-              index={index} />
+              index={index}
+              onPress={closeByBackdrop ? () => onBackdropPress(index) : null} />
           )
         })
       }

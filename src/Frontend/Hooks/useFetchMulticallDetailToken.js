@@ -1,11 +1,9 @@
 
-import { getDataFromAsyncStorage, storeDataToAsyncStorage } from 'common/storage/asyncStorage'
 import BaseAPI from 'controller/API/BaseAPI'
 import { useQuery } from 'react-query'
-import usePersistedQueryData from 'frontend/Hooks/usePersistedQueryData'
 import { resolveOnchainSymbols } from 'src/Services/TokenListV2/symbolOnchain'
+import { useLiquidityData, writeLiquidityData } from 'frontend/Hooks/useLiquidityData'
 
-export const STORAGE_KEY = 'LIST_DATA_TOKEN_LIQUIDITY_DETAIL'
 export const QUERY_KEY = 'getDataMuticall'
 
 // Fetch token details for a batch of addresses on the same chain (one API call)
@@ -31,6 +29,7 @@ const getDataTokenDetailByChain = async (chainId, addresses) => {
 
 const getDataMuticall = async ({ queryKey }) => {
   const listLiquidityPool = queryKey[1]
+  const addressRegisteredLiquidity = queryKey[2]
 
   // Group unique token addresses by chainId so each chain needs only one request
   const addressesByChain = {}
@@ -48,36 +47,35 @@ const getDataMuticall = async ({ queryKey }) => {
     getDataTokenDetailByChain(chainId, [...set])
   )
 
-  try {
-    const result = await Promise.all(listPromise)
+  const result = await Promise.all(listPromise)
+  const mergeResult = result.flatMap((item) => item).filter((item) => item !== null)
 
-    const mergeResult = result.flatMap((item) => item).filter((item) => item !== null)
+  // An empty result means the API answered for none of these tokens. Throwing keeps the
+  // saved details in place rather than replacing good pair labels and icons with blanks.
+  if (!mergeResult.length) throw new Error('No token details returned')
 
-    if (mergeResult?.length > 0) {
-      storeDataToAsyncStorage(STORAGE_KEY, mergeResult ?? [])
-      return mergeResult
-    } else {
-      const cache = await getDataFromAsyncStorage(STORAGE_KEY)
-      return cache || []
-    }
-  } catch (error) {
-    const cache = await getDataFromAsyncStorage(STORAGE_KEY)
-    return cache || []
-  }
+  writeLiquidityData(addressRegisteredLiquidity, 'tokensDetail', mergeResult)
+  return mergeResult
 }
 
-const useFetchMulticallDetailToken = (listLiquidityPool) => {
-  // Last persisted result, hydrated from AsyncStorage on mount. `hydrated` gates the
-  // loader so we don't flash it on cold-start before the persisted read settles.
-  const [persisted, , hydrated] = usePersistedQueryData(STORAGE_KEY)
+const useFetchMulticallDetailToken = (listLiquidityPool, addressRegisteredLiquidity = []) => {
+  // Saved details for THIS address — the pool list's other half (pair labels + icons).
+  // Both come from the same Redux entry, so they are in hand on the same first render
+  // and a row never paints with a fallback symbol and a blank icon.
+  const persisted = useLiquidityData(addressRegisteredLiquidity, 'tokensDetail')
+
+  // No pools means nothing to look up — the query stays idle, and react-query reports
+  // isLoading=true forever for an idle query, so this must gate the flag below. The
+  // address is required too, since it's what the result is saved under.
+  const isQueryEnabled = listLiquidityPool?.length > 0 && addressRegisteredLiquidity?.length > 0
 
   const { data, isLoading } = useQuery(
-    [QUERY_KEY, listLiquidityPool],
+    [QUERY_KEY, listLiquidityPool, addressRegisteredLiquidity],
     getDataMuticall,
     {
-      enabled: listLiquidityPool?.length > 0,
+      enabled: isQueryEnabled,
       staleTime: 10 * 60 * 1000, // 10 minutes
-      keepPreviousData: true
+      keepPreviousData: false
     }
 
   )
@@ -85,7 +83,9 @@ const useFetchMulticallDetailToken = (listLiquidityPool) => {
   const source = data ?? persisted
 
   return {
-    isLoading: isLoading && source == null && hydrated,
+    // Same shape as the other two liquidity hooks: loading only when nothing is saved
+    // for this address and nothing has been fetched yet.
+    isLoading: isQueryEnabled && isLoading && source == null,
     data: source || []
   }
 }

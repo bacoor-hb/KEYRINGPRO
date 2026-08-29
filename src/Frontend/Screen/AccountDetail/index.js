@@ -90,8 +90,12 @@ class AccountDetailScreen extends BaseContainer {
     const accountListRedux = ReduxService.getReduxDataByKey('accountListRedux')
     const activeAccount = ReduxService.getReduxDataByKey(REDUX_KEY.activeAccount)
     const { account, indexAccount } = activeAccount
+    // Replace the element instead of mutating it in place: `slice()` is a shallow
+    // copy, so the old assignment also mutated the object still referenced by the
+    // current redux state — and memoized consumers (the home account rows) saw an
+    // unchanged reference and skipped the rename.
     const accountListReduxNew = accountListRedux.slice()
-    accountListReduxNew[indexAccount].name = name
+    accountListReduxNew[indexAccount] = { ...accountListReduxNew[indexAccount], name }
 
     setAccountList(accountListReduxNew)
     ReduxService.setActiveAccount({ ...account, name })

@@ -41,6 +41,7 @@ import {
   inpreciseRound,
   isObject,
   isValidContract,
+  isValidEVMAddressFormat as isValidAddress,
   lowerCase
 } from 'common/function'
 import ReduxService from 'common/redux'
@@ -49,9 +50,8 @@ import BaseAPI from 'controller/API/BaseAPI'
 import queryClient from 'common/queryClient'
 import StorageReduxAction from 'controller/Redux/actions/storageAction'
 import { removeDecimalsFromNumber } from 'common/web3'
-import { getNativeTokenSymbolByChain, getUrlExplorerHash, handleOpenExplorerHash, handleOpenExplorerUserAddress } from 'common/chain'
+import { getNativeTokenSymbolByChain, getUrlExplorerHash, handleOpenExplorerHash, handleOpenExplorerUserAddress, hasNativeTokenByChain, isFeeTokenByChain } from 'common/chain'
 import { isNativeToken } from 'common/tokens'
-import { chainType } from 'common/constants/chain'
 import { CURRENCY_DATA } from 'common/constants/app'
 import AllChainServices from 'controller/AllChainServices'
 import { refreshAccountTokens } from 'src/Services/TokenListV2'
@@ -76,6 +76,34 @@ export const STEP_SEND = {
 
 // EVM chains whose fee is dominated by an L1 data component; use a finer slider.
 const LAYER_2_CHAIN_IDS = [10, 8453, 42161, 59144, 130]
+
+// Chains observed to take a near-total-balance transfer into the mempool and
+// then never include it, mapped to the fraction of the balance Max holds back to
+// stay clear of it. Purely empirical — see getMaxSendable — so a chain belongs
+// here only once that behaviour has actually been reproduced on it.
+const CHAIN_MAX_RESERVE_RATIO = {
+  747474: 0.01 // Katana
+}
+
+// How many transaction fees Max holds back on a ROLLUP, instead of the single
+// one it costs. Rollups only (see getMaxSendable) because there a whole extra
+// fee is a fraction of a cent, while on L1 it would be real money.
+//
+// Measured on Mantle, where a Max transfer was rejected by the sequencer with
+// "insufficient funds ... overshot 162811646109908". That is 7.75 gwei per gas
+// over 21000 gas: the node wanted ~68.25 gwei/gas while the app had reserved
+// 60.5 (eth_gasPrice 50, bumped x1.1 by getGasPrice and x1.1 again by calcFee).
+// Not a gas-limit mismatch — eth_estimateGas answers a flat 21000 there whatever
+// the value or recipient — and not the L1 data fee either, which is ~2.2e10 wei,
+// four orders of magnitude too small. The node simply prices the transaction
+// above the gas price it quotes, and a Max amount leaves ZERO slack to absorb
+// that. A non-Max amount always has some, which is why only Max ever failed.
+//
+// So this is deliberately a margin, not a model: reproducing each rollup's fee
+// accounting (Mantle scales by its own tokenRatio/scalar) would be guesswork
+// with a wrong answer on the next chain. x2 covers the measured 1.365x overshoot
+// with room to spare and costs ~0.0025 MNT (~$0.003) on the Mantle case.
+const MAX_FEE_SAFETY = 2
 
 // Fiat amount input limit: the integer part is unrestricted; only the fraction
 // part is capped at 6 digits.
@@ -245,9 +273,43 @@ const SendToken = ({ _this }) => {
   const rateValue = priceUSD ? priceUSD * localFiatRate : 0
   const isLayer2 = LAYER_2_CHAIN_IDS.includes(Number(chainId))
 
-  // Native token price → used to show the transaction fee in fiat.
+  // Chains with no native coin (Tempo) charge gas in a stablecoin and answer
+  // eth_getBalance with a sentinel — every native-balance-derived piece of this
+  // screen is skipped for them. Every other chain keeps the existing behaviour.
+  const chainHasNative = hasNativeTokenByChain(chainId)
+
+  // With no native coin the fee is charged in a TIP-20, and Tempo's fee spec
+  // resolves which one in this order: the tx's own `fee_token` field (Tempo-type
+  // transactions only) -> the account's FeeManager preference -> THE TOKEN WHOSE
+  // `transfer` IS BEING CALLED -> pathUSD. This screen always sends a plain
+  // `transfer`, so rule 3 applies and the fee comes out of the very balance
+  // being sent — the same "one balance pays for both" case native sends have
+  // always had, which is why the guards below simply widen to cover it.
+  //
+  // Rule 3 only fires for a token that is ALLOWED to pay fees — a TIP-20 whose
+  // currency is USD. Sending anything else on the chain (a plain ERC20, or a
+  // EUR/GBP TIP-20) is charged to pathUSD instead, so isFeeTokenByChain gates
+  // this: an unrecognised token reserves nothing and asserts nothing, which is
+  // the pre-existing behaviour rather than a reserve held against the wrong
+  // balance.
+  //
+  // Known gap: an account that set a FeeManager preference is charged in THAT
+  // token instead (rule 2 outranks rule 3), so the reserve below would be held
+  // against the wrong balance. Reading the preference needs a FeeManager call
+  // and belongs with letting the user pick a fee token — until then this covers
+  // the default every account starts with.
+  const feeFromSendToken = !chainHasNative && !isNative && isFeeTokenByChain(chainId, tokenAddress)
+
+  // The balance the fee is actually charged against — the footer row and the
+  // shortfall figure both speak about this one, not about "the native token".
+  const feeBalanceSymbol = feeFromSendToken ? symbol : nativeSymbol
+
+  // Native token price → used to show the transaction fee in fiat. On a chain
+  // with no native coin the gas unit IS the dollar (gasPrice is quoted in
+  // 18-decimal USD), so calcFee() is already a USD amount: price it at 1 rather
+  // than looking up a token that doesn't exist (which returns 0 → fee shows $0).
   const { data: nativePriceData } = useGetTokenPrice(chainId, zeroAddress)
-  const nativePriceUSD = isNative ? priceUSD : Number(nativePriceData || 0)
+  const nativePriceUSD = !chainHasNative ? 1 : (isNative ? priceUSD : Number(nativePriceData || 0))
 
   // Selected regional currency → drives the fee symbol's prefix/suffix placement.
   const currencyInfo = CURRENCY_DATA[localCurrency] || CURRENCY_DATA.USD
@@ -327,13 +389,25 @@ const SendToken = ({ _this }) => {
   // would otherwise capture the initial [1] and re-validate the fee at ×1 every 30s —
   // wiping a fee error that the slider position legitimately triggered.
   const sliderMultiplierRef = useRef(1)
+  // The amount field is holding a Max value. Max is DERIVED (balance − fee), so
+  // it goes stale the moment the fee moves and has to be recomputed in place.
+  const isMaxRef = useRef(false)
+  // Last gas limit an estimate actually returned (see estimateGasLimit).
+  const lastGasLimitRef = useRef(0)
   const [sliderW, setSliderW] = useState(0)
   const [gasPrice, setGasPrice] = useState(0)
   const [gasPriceL1, setGasPriceL1] = useState(0)
   const [gasLimit, setGasLimit] = useState(0)
   const [nativeBalance, setNativeBalance] = useState(0)
+  // Is this a rollup (charges an L1 data fee)? Drives the Max safety margin —
+  // see MAX_FEE_SAFETY. Kept as state rather than derived from `gasPriceL1 > 0`
+  // so a transient failure of the L1 ESTIMATE can't silently drop the margin.
+  const [hasL1Fee, setHasL1Fee] = useState(false)
   const [spendable, setSpendable] = useState(0)
   const [isLoadInit, setIsLoadInit] = useState(true)
+  // Companion to feeBalanceSymbol: `spendable` holds the RAW balance of the token
+  // being sent, which is the fee token when the chain has no native coin.
+  const feeBalanceValue = feeFromSendToken ? spendable : nativeBalance
 
   // Submit / result state
   const [tableView, setTableView] = useState('enter')
@@ -357,7 +431,7 @@ const SendToken = ({ _this }) => {
   const { data: isContractAddr, isLoading: isLoadingContract } = useQuery(
     ['isRecipientContract', txtAddress, chainId],
     () => isValidContract(chainId, txtAddress),
-    { enabled: !isOwnAccount && !!txtAddress && txtAddress.startsWith('0x') && txtAddress.length === 42 && !!chainId }
+    { enabled: !isOwnAccount && isValidAddress(txtAddress) && !!chainId }
   )
 
   // "Sent before" history status. Moralis is keyed by numeric chainId (NOT chainType),
@@ -383,15 +457,76 @@ const SendToken = ({ _this }) => {
     return new BigNumber(fee * 1.1).toString()
   }
 
-  // Spendable balance for the current slider position.
+  // Spendable balance for the current slider position — the ceiling an entered
+  // amount is validated against. Max deliberately stops SHORT of this (see
+  // getMaxSendable): this stays the true limit, so typing a larger amount by
+  // hand is still allowed.
+  // Fee and amount are drawn from ONE balance in two cases: a native send, and a
+  // token send on a chain with no native coin (feeFromSendToken). Both have to
+  // reserve the fee, or the node rejects an amount that leaves nothing to pay it.
+  // `spendable` stays the RAW token balance so the reserve tracks the slider.
+  //
+  // The fee is a USD amount and the balance is in token units; on Tempo the fee
+  // tokens are USD stablecoins charged at par (the protocol takes
+  // `ceil(fee_usd * 10^6)` units, see the fee spec), so the two are directly
+  // comparable. Off-peg tokens would only shift a fraction of a cent here.
   const getAvailable = (multiplier = sliderValue[0]) => {
-    if (!isNative) return new BigNumber(spendable)
-    const avail = new BigNumber(nativeBalance).minus(calcFee(multiplier))
+    if (!isNative && !feeFromSendToken) return new BigNumber(spendable)
+    const balance = isNative ? nativeBalance : spendable
+    const avail = new BigNumber(balance).minus(calcFee(multiplier))
     return avail.isLessThan(0) ? new BigNumber(0) : avail
+  }
+
+  // What the Max button fills in — the whole spendable balance everywhere except
+  // the chains in CHAIN_MAX_RESERVE_RATIO, where sending that much silently
+  // fails: the transaction is ACCEPTED into the mempool (a hash comes back), is
+  // then never included, and holds its nonce until it is evicted. The wallet
+  // reports a send that never happened, and every later send collides with the
+  // nonce it is still holding.
+  //
+  // Reproduced on Katana (chainId 747474) three times, across two accounts and
+  // two recipients: leaving ~1e10 wei behind stalls, leaving 1% of the balance
+  // goes through every time. That 1% is the smallest margin with evidence behind
+  // it, not the smallest that might work — the untested range below it spans a
+  // factor of 290. Lower it only against a real send.
+  //
+  // NOT the L1 data fee, which is the intuitive suspect and was measured to rule
+  // it out. Post-blob it is a rounding error next to L2 execution — 0.5% of the
+  // total fee on Katana (7.1e-10 vs 1.3e-7 ETH for a 65k-gas transfer), 2.1% on
+  // Optimism, 0.3% on Base — so it cannot explain a margin this size, and pricing
+  // it (getGasFeeLayer1 now does, on every rollup) does not remove the need for
+  // this reserve. The likelier story is that Max leaves ZERO slack, so any upward
+  // move in the required fee between signing and inclusion strands the
+  // transaction; a margin shaped as "one extra fee" rather than a share of the
+  // balance would fit that, but 1% is what has actually been proven to work.
+  const getMaxSendable = (multiplier = sliderValue[0]) => {
+    const avail = getAvailable(multiplier)
+    // Both hold-backs only make sense when the fee leaves the SAME balance being
+    // sent. On an ERC20 send the fee is paid in the native coin, so taking it out
+    // of the token amount would shrink Max for no reason.
+    if (!isNative && !feeFromSendToken) return avail
+
+    let sendable = avail
+    // Rollup: keep MAX_FEE_SAFETY-1 extra fees back (the fee itself is already
+    // out, via getAvailable).
+    if (hasL1Fee) {
+      sendable = sendable.minus(new BigNumber(calcFee(multiplier)).multipliedBy(MAX_FEE_SAFETY - 1))
+    }
+    // Chain-specific empirical reserve on top (Katana, see above).
+    const ratio = CHAIN_MAX_RESERVE_RATIO[Number(chainId)]
+    if (isNative && ratio) {
+      sendable = sendable.minus(new BigNumber(nativeBalance).multipliedBy(ratio))
+    }
+    return sendable.isLessThan(0) ? new BigNumber(0) : sendable
   }
   // <- Fee helpers ------------------------------------------------------------
 
   const estimateGasLimit = async () => {
+    // Last limit an estimate actually returned. A transient RPC failure then costs
+    // the previous good number rather than the coarse constant below, which on a
+    // thin native balance could wrongly report "not enough for the fee".
+    const fallbackLimit = () => lastGasLimitRef.current || (isNative ? 50000 : 300000)
+
     try {
       let rawTx
       if (isNative) {
@@ -400,17 +535,37 @@ const SendToken = ({ _this }) => {
         const data = await AllChainServices.generateDataTx(chainId, tokenAddress, userAddress)
         rawTx = { to: tokenAddress, from: userAddress, data }
       }
-      return await AllChainServices.estimateGasTxs(chainId, rawTx)
+      const limit = await AllChainServices.estimateGasTxs(chainId, rawTx)
+      if (limit > 0) {
+        lastGasLimitRef.current = limit
+        return limit
+      }
+      // estimateGasTxs SWALLOWS failures and resolves to 0 rather than throwing,
+      // and a limit of 0 makes the fee 0, which hands Max the ENTIRE balance —
+      // an amount no node will accept. So a failed estimate must never reach the
+      // fee: fall back to the last good limit, then to a constant. An
+      // over-estimated fee only costs a slightly smaller Max; a free one
+      // guarantees a rejected transaction.
+      return fallbackLimit()
     } catch (e) {
-      return isNative ? 50000 : 300000
+      return fallbackLimit()
     }
   }
 
+  // The L1 data fee every OP-Stack rollup charges on top of L2 execution — NOT
+  // an Optimism-only cost. It used to be gated to chainId 10 AND read off
+  // Optimism's own oracle, so Base, Ink, Katana and every other rollup priced
+  // their transactions with the L1 half missing. hasL1DataFee decides by looking
+  // for the predeploy, so a rollup added later is covered without touching this
+  // file. Measured, the L1 half is small everywhere post-blob (0.3–2% of the
+  // fee), so this is a correctness fix, not the answer to a failing Max — that
+  // is MAX_FEE_SAFETY's job, and `isRollup` is reported back for it.
   const getGasFeeLayer1 = async () => {
-    // Only Optimism exposes a measurable L1 data fee through this helper.
-    if (Number(chainId) !== 10) return 0
     try {
-      const feeWei = await AllChainServices.estimateL1DataFee(isNative, chainType.optimism, userAddress, tokenAddress)
+      const isRollup = await AllChainServices.hasL1DataFee(chainId)
+      setHasL1Fee(isRollup)
+      if (!isRollup) return 0
+      const feeWei = await AllChainServices.estimateL1DataFee(isNative, chainId, userAddress, tokenAddress)
       return convertWeiToBalance(feeWei, 18)
     } catch (e) {
       return 0
@@ -421,7 +576,9 @@ const SendToken = ({ _this }) => {
     const limit = await estimateGasLimit()
     const price = await AllChainServices.getGasPrice(chainId)
     const feeL1 = await getGasFeeLayer1()
-    const nativeBal = await AllChainServices.getBalanceByChain(chainId, userAddress)
+    // No native coin → nothing to read; eth_getBalance would hand back the
+    // sentinel and every comparison below it would be meaningless.
+    const nativeBal = chainHasNative ? await AllChainServices.getBalanceByChain(chainId, userAddress) : 0
 
     // Validate against the CURRENT slider position (not a fixed ×1), so the periodic
     // refresh stays consistent with validateGas and doesn't wipe a fee error that the
@@ -445,8 +602,16 @@ const SendToken = ({ _this }) => {
       }
     } else {
       spendableBal = await AllChainServices.getTokenBalanceByChain(chainId, tokenAddress, userAddress, decimals)
-      feeErr = Number(nativeBal) - Number(txFee) < 0
+      // Weigh the fee against whichever balance actually pays it: the native coin
+      // normally, the token being sent when the chain has none. `spendableBal`
+      // stays RAW in both cases — getAvailable applies the reserve per slider
+      // position, so the ceiling still moves with the gas slider.
+      feeErr = feeFromSendToken
+        ? Number(spendableBal) - Number(txFee) < 0
+        : chainHasNative && Number(nativeBal) - Number(txFee) < 0
     }
+    // The balance the fee is charged against — drives the shortfall figure below.
+    const feeTokenBal = feeFromSendToken ? spendableBal : nativeBal
 
     setGasLimit(limit)
     setGasPrice(price)
@@ -454,7 +619,7 @@ const SendToken = ({ _this }) => {
     setNativeBalance(inpreciseRound(nativeBal, 8))
     setSpendable(spendableBal)
     setIsFeeError(feeErr)
-    setMissingFee(feeErr ? formatNumberBro(Number(txFee) - Number(nativeBal), 8) : '0')
+    setMissingFee(feeErr ? formatNumberBro(Number(txFee) - Number(feeTokenBal), 8) : '0')
     setIsLoadInit(false)
   }
 
@@ -486,14 +651,6 @@ const SendToken = ({ _this }) => {
   }, [localFiatRate, rateValue])
 
   // -> Address ----------------------------------------------------------------
-  const isValidAddress = (address) => {
-    try {
-      return address.startsWith('0x') && address.length === 42 && !!address.match(/^[0-9a-zA-Z]+$/)
-    } catch (e) {
-      return false
-    }
-  }
-
   const onInputAddress = async (newAddress, isFromScan = false) => {
     const address = isFromScan ? getAddressFromQR(newAddress) : newAddress
     setTxtAddress(address)
@@ -571,6 +728,8 @@ const SendToken = ({ _this }) => {
   }
 
   const onChangeAmount = (value) => {
+    // Typing takes the field off Max, so it stops tracking the fee.
+    isMaxRef.current = false
     // Some keyboards / locales emit a comma as the decimal separator; the app
     // only supports '.', so normalize before parsing (matches onChangeUSDAmount).
     const formatted = formatInputNumberDecimal(value.replace(/,/g, '.'), decimals)
@@ -594,6 +753,8 @@ const SendToken = ({ _this }) => {
   }
 
   const onChangeUSDAmount = (value) => {
+    // Typing takes the field off Max, so it stops tracking the fee.
+    isMaxRef.current = false
     // Fraction part capped at 6 digits (integer part unrestricted).
     const sanitized = sanitizeUsdAmount(value)
     setTxtAmountUSD(sanitized)
@@ -612,13 +773,43 @@ const SendToken = ({ _this }) => {
     syncBalanceErr(amount)
   }
 
-  const onGetMax = () => {
+  // Write the current maximum into both amount fields. Shared by the Max button
+  // and by every recompute below, so the two can never drift apart.
+  const applyMaxAmount = (multiplier = sliderValue[0]) => {
     // Round to the TOKEN's own decimals
-    const max = getAvailable().decimalPlaces(decimals, BigNumber.ROUND_DOWN).toFixed()
+    const max = getMaxSendable(multiplier).decimalPlaces(decimals, BigNumber.ROUND_DOWN).toFixed()
     setTxtAmount(max)
     setTxtAmountUSD(rateValue ? BigNumber(max).multipliedBy(rateValue).decimalPlaces(USD_MAX_FRACTION_DIGITS, BigNumber.ROUND_DOWN).toFixed() : '0')
     setIsBalanceErr(false)
   }
+
+  const onGetMax = () => {
+    isMaxRef.current = true
+    applyMaxAmount()
+  }
+
+  // Keep a Max amount in step with the fee it was derived from — the 30s refresh,
+  // a fresh estimate for the recipient, or a new balance all move it. Left stale,
+  // the amount is one the node rejects outright: it was sized against a smaller
+  // fee than the one finally charged, so value + fee overshoots the balance.
+  // Only while the form is on screen: once Send is pressed the amount is locked
+  // into the transaction, and rewriting it under the confirmation summary would
+  // misreport what is actually being sent. sliderValue is deliberately NOT a
+  // dependency — the slider is settled on release by onGasChange (same reason
+  // validateGas stays off the live drag path).
+  useEffect(() => {
+    if (!isMaxRef.current || isLoadInit || tableView !== 'enter') return
+    // Nothing available is usually a balance read that momentarily failed —
+    // getBalanceByChain / getTokenBalanceByChain resolve to 0 instead of throwing.
+    // Blanking the amount the user is looking at over a dropped RPC call would be
+    // worse than leaving it: a send that genuinely cannot be paid for is already
+    // stopped by the fee-error row and by canSend.
+    if (getMaxSendable().lte(0)) return
+    applyMaxAmount()
+    // hasL1Fee is in the list because it lands with the first fee load and changes
+    // the size of the Max reserve — a Max filled in before it resolved must be redone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gasPrice, gasPriceL1, gasLimit, nativeBalance, spendable, isLoadInit, tableView, hasL1Fee])
 
   // GasSlider drives the thumb on the UI thread (reanimated); it reports the
   // stepped multiplier live while dragging (onChanging) and the final value on
@@ -631,15 +822,23 @@ const SendToken = ({ _this }) => {
   const validateGas = (value) => {
     if (txtAmount) setIsBalanceErr(BigNumber(txtAmount).isGreaterThan(getAvailable(value)))
     const fee = calcFee(value)
-    const feeErr = BigNumber(nativeBalance).minus(fee).isLessThan(0)
+    // Same fee-token rule as loadFee: the sent token pays on a chain with no
+    // native coin, the native balance pays everywhere else.
+    const feeErr = (chainHasNative || feeFromSendToken) && BigNumber(feeBalanceValue).minus(fee).isLessThan(0)
     setIsFeeError(feeErr)
-    setMissingFee(feeErr ? formatNumberBro(Number(fee) - Number(nativeBalance), 8) : '0')
+    setMissingFee(feeErr ? formatNumberBro(Number(fee) - Number(feeBalanceValue), 8) : '0')
   }
   // Release: commit the final value AND its validation.
   const onGasChange = (value) => {
     sliderMultiplierRef.current = value
     setSliderValue([value])
     validateGas(value)
+    // A Max amount is derived from the fee, so it has to follow the slider too.
+    // Applied AFTER validateGas on purpose: state updates are not visible inside
+    // this handler, so validateGas judges the amount still in the field and would
+    // flag the stale Max as over-balance — this settles both the amount and that
+    // flag with the new multiplier.
+    if (isMaxRef.current) applyMaxAmount(value)
   }
 
   // Live updates as the thumb moves, throttled (~60ms): only drives the gwei/fee
@@ -765,6 +964,18 @@ const SendToken = ({ _this }) => {
         toAddress: txtAddress,
         amount: txtAmount,
         gasPrice,
+        // ONLY for a Max amount. That amount was sized against this exact limit,
+        // so the broadcast layer must not charge a bigger one — it takes the
+        // larger of this and its own estimate, which keeps the fee from
+        // overshooting what the amount left behind.
+        //
+        // Deliberately NOT sent otherwise: `gasLimit` may be the coarse fallback
+        // (300k for an ERC20) from a failed estimate, and forcing that as a floor
+        // makes the node demand `300000 * gasPrice + value` in balance. On a
+        // thin native balance that rejects a transfer whose real cost is a
+        // fraction of it — a send that works today. A non-Max amount doesn't
+        // depend on the fee, so it has nothing to protect.
+        gasLimit: isMaxRef.current ? gasLimit : undefined,
         contractAddress: isNative ? null : tokenAddress,
         tokenDecimal: decimals,
         percentGas: sliderValue[0] * 100,
@@ -1004,7 +1215,11 @@ const SendToken = ({ _this }) => {
             ERC20: the token balance and the native gas balance are distinct, so keep
             them separate — "need X native for fee" vs "insufficient token balance". */}
             <View style={styles.amountErrorSpace}>
-              {isNative
+              {/* feeFromSendToken joins the native case here for the same reason:
+              the fee leaves the balance being sent, so "need X <native> for the
+              fee" would name a token that doesn't exist on the chain and read as
+              a second, separate shortfall. */}
+              {isNative || feeFromSendToken
                 ? (isBalanceErr || isFeeError) && (
                   <HintRow className='text-red' text={I18n.t('Content.notEnoughBalance')} />
                 )
@@ -1026,10 +1241,17 @@ const SendToken = ({ _this }) => {
 
             {/* Balance + transaction fee */}
             <View style={styles.footer}>
-              <View style={styles.footerRow}>
-                <MyText className='text-medium'>{I18n.t('v2.sendToken.nativeBalance', { symbol: nativeSymbol })}</MyText>
-                <MyNumber className='text-white' value={nativeBalance} fractionDigits={8} suffix={` ${nativeSymbol}`} />
-              </View>
+              {/* The balance the FEE is charged against — which is what this row
+              is for. Normally the native coin; on a chain without one it's the
+              token being sent (feeFromSendToken), so the row keeps its meaning
+              instead of showing a native balance that doesn't exist. Hidden only
+              when neither applies, i.e. nothing real is left to show. */}
+              {(chainHasNative || feeFromSendToken) && (
+                <View style={styles.footerRow}>
+                  <MyText className='text-medium'>{I18n.t('v2.sendToken.nativeBalance', { symbol: feeBalanceSymbol })}</MyText>
+                  <MyNumber className='text-white' value={feeBalanceValue} fractionDigits={8} suffix={` ${feeBalanceSymbol}`} />
+                </View>
+              )}
               <View style={styles.footerRow}>
                 <MyText className='text-medium'>{I18n.t('v2.sendToken.transactionFee')}</MyText>
                 {isLoadInit
@@ -1092,7 +1314,7 @@ const SendToken = ({ _this }) => {
       </View>
 
       {/* Hash */}
-      {!!hash && (
+      {hash ? (
         <View style={styles.stepRow}>
           <View style={styles.stepLineCol}>
             <View style={styles.stepLine} />
@@ -1110,7 +1332,7 @@ const SendToken = ({ _this }) => {
             <MyIcon variant='small' uri={images.UIV2.icons.copyWhite} />
           </TouchableOpacity>
         </View>
-      )}
+      ) : null}
 
       {/* No hash yet → "Checking explorer" fallback (opens explorer at our address). */}
       {!hash && step === STEP_SEND.sending && (

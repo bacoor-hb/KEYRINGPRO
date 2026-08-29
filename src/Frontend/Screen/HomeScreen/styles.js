@@ -1,7 +1,7 @@
 import { StyleSheet } from 'react-native'
 import { Colors, fontSize, getSafeAreaValues, getSizeImgSquare, pixelByHeight, pixelByWidth, sizeImageSquare } from 'common/styles'
 
-const createStyles = () => {
+const buildStyles = () => {
   return StyleSheet.create({
     container: {
       // paddingTop lives on the header-anchor wrapper (see page.js) instead of
@@ -72,6 +72,18 @@ const createStyles = () => {
       padding: 0
     }
   })
+}
+
+// Built once, then cached. These values are static (the app is dark-mode only),
+// so rebuilding the sheet on every render only burned CPU and — worse — handed
+// children a brand new style identity each time, defeating their memoization.
+let cachedStyles = null
+
+const createStyles = () => {
+  if (!cachedStyles) {
+    cachedStyles = buildStyles()
+  }
+  return cachedStyles
 }
 
 export default createStyles

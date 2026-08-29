@@ -1,5 +1,5 @@
 import { StyleSheet } from 'react-native'
-import { Colors, fontSize, pixelByHeight, pixelByWidth } from 'common/styles'
+import { Colors, fontSize, getFontFamily, pixelByHeight, pixelByWidth } from 'common/styles'
 
 // Layout only — colors live in Tailwind className, text sizing in MyText
 // variants. TextInput keeps fontSize here because it has no MyText equivalent.
@@ -10,6 +10,12 @@ import { Colors, fontSize, pixelByHeight, pixelByWidth } from 'common/styles'
 // when pressed. Any scroller/box that clips must leave this much room around a
 // glass child, or the press effect is visibly sliced off.
 const GLASS_BLEED = pixelByWidth(6)
+
+// Height the amount field is pinned to, sized for its FILLED state (the larger
+// of the two font sizes) so switching between them never moves anything.
+// 1.4 is a plain-Latin line box with a little slack; the bundled faces report a
+// taller box than their nominal size, and CJK taller still.
+const INPUT_HEIGHT = Math.ceil(fontSize(18) * 1.4) + pixelByHeight(10) * 2
 
 const styles = StyleSheet.create({
   card: { marginTop: pixelByHeight(12) },
@@ -56,6 +62,10 @@ const styles = StyleSheet.create({
   // formBox's gap, so nothing here needs a margin.
   fieldGroup: { gap: pixelByHeight(8) },
 
+  // Label + the amount's "(~$X)" beside it, same row shape WalletActionForm uses
+  // so the two cards read identically.
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: pixelByWidth(8) },
+
   // The market contract the supply is approved to and sent to. A stated value
   // rather than an input, but it shares the pill shape of the fields around it.
   contractBox: {
@@ -71,7 +81,45 @@ const styles = StyleSheet.create({
     borderRadius: pixelByWidth(50),
     paddingHorizontal: pixelByWidth(12)
   },
-  input: { flex: 1, fontSize: fontSize(16.5), paddingVertical: pixelByHeight(10) },
+  // Empty field = placeholder look: the row's default size, so the hint reads
+  // as a hint. `placeholderTextColor` supplies TEXT_LOW at the call site.
+  //
+  // `minHeight` is the FILLED height, reserved from the start: the field grows
+  // 16.5 -> 18px the instant a character is typed, and without a floor the whole
+  // card below (error slot, chips, submit) would jump down by that difference on
+  // the first keystroke and back up on delete. Holding the taller box always
+  // means only the glyphs change size, never the layout.
+  input: {
+    flex: 1,
+    fontSize: fontSize(16.5),
+    paddingVertical: pixelByHeight(10),
+    minHeight: INPUT_HEIGHT,
+    // Default is `center` on iOS but `top` on Android for a multiline-capable
+    // box; pinned so the placeholder sits on the same baseline as the value it
+    // is standing in for, rather than riding high in the reserved space.
+    textAlignVertical: 'center'
+  },
+  // The amount is the loudest thing in the card — bigger and bold. Bold needs
+  // the explicit family: on a TextInput `fontWeight` alone doesn't reach the
+  // bundled Geist/LINE Seed faces. Now applied unconditionally (see the shell):
+  // the input holds one style for its whole life, so nothing about it restyles
+  // mid-edit.
+  inputFilled: { fontSize: fontSize(18), fontFamily: getFontFamily(700) },
+
+  // Takes the row's free space so the input keeps filling the width now that a
+  // wrapper sits between them; the placeholder is positioned against this box.
+  inputWrap: { flex: 1, justifyContent: 'center' },
+  // The hint, overlaid on the empty field rather than being the native
+  // placeholder. Absolute so it never contributes height — the reserved
+  // INPUT_HEIGHT on the input alone governs the row. Centred vertically to match
+  // the value's line box, and inset by nothing horizontally so it starts on the
+  // same x as a typed character. `text-low` supplies the colour that
+  // `placeholderTextColor` used to.
+  inputPlaceholder: {
+    position: 'absolute',
+    left: 0,
+    right: 0
+  },
 
   // Reserved space for an inline error so showing/hiding it never shifts the
   // layout; the message is positioned absolute inside the slot (same as

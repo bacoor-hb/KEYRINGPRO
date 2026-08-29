@@ -21,6 +21,7 @@ import { isNativeToken } from 'common/tokens'
 import { zeroAddress } from 'viem'
 import { lowerCase } from 'common/function'
 import useGetTokenSearchByChain from 'frontend/Hooks/useGetTokenSearchByChain'
+import { resolveOnchainSymbolFor } from 'src/Services/TokenListV2/symbolOnchain'
 
 const SelectChainOut = ({ isExchange, handleChangeChain, handleBack, _this }) => {
   const [textSearch, setTextSearch] = useState('')
@@ -31,7 +32,7 @@ const SelectChainOut = ({ isExchange, handleChangeChain, handleBack, _this }) =>
 
   const { state } = _this
   const { activeAccount } = useSelector(s => s)
-  const { tokenOut } = isExchange ? state.exchange : state.swapAndSend
+  const { tokenOut, chainOut } = isExchange ? state.exchange : state.swapAndSend
 
   const { account } = activeAccount
   const styles = createStyles()
@@ -45,7 +46,7 @@ const SelectChainOut = ({ isExchange, handleChangeChain, handleBack, _this }) =>
     return null
   }, [tokenOut])
 
-  const { data: setting, isLoading } = useGetSettingExchange()
+  const { isLoading, getAllChain } = useGetSettingExchange()
   const { data: listBalanceUser, isLoading: loadingListTokensByAddress } = useGetListTokenByChainAndAddress(account?.address, chain ? [chain?.chainId] : [])
   const { data: tokenSearch, isLoading: loadingTokenSearch } = useGetTokenSearchByChain(chain?.chainId, querySearchToken)
 
@@ -56,39 +57,32 @@ const SelectChainOut = ({ isExchange, handleChangeChain, handleBack, _this }) =>
   }, [])
 
   useEffect(() => {
-    if (chain && !loadingListTokensByAddress && !loadingTokenSearch) {
+    const getToken = async () => {
       const addressToken = tokenOut?.address || tokenOut?.contractAddress
-      const exitTokenBalance = listBalanceUser?.find(tokenUser => {
-        if (isNativeToken(tokenUser?.contractAddress)) {
-          return zeroAddress === addressToken || isNativeToken(addressToken)
-        }
-        return lowerCase(tokenUser?.contractAddress) === lowerCase(addressToken) || tokenUser?.coinGeckoId === tokenOut?.coinGeckoId
-      })
 
       if (tokenOut) {
+        const exitTokenBalance = listBalanceUser?.find(tokenUser => {
+          if (isNativeToken(tokenUser?.contractAddress)) {
+            return zeroAddress === addressToken || isNativeToken(addressToken)
+          }
+          return lowerCase(tokenUser?.contractAddress) === lowerCase(addressToken) || tokenUser?.coinGeckoId === tokenOut?.coinGeckoId
+        })
+
         if (exitTokenBalance) {
           handleChangeChain(chain, exitTokenBalance)
         } else {
           if (tokenSearch?.length > 0) {
-            // Match on BOTH of the selected token's tickers. Its `symbol` may
-            // already be the contract's own (resolveTokenOutSymbol patches it in
-            // after a pick), while `tokenSearch` rows carry the listing symbol
-            // only — so comparing one against the other can miss the equivalent
-            // token and fall through to "first result", i.e. an unrelated one.
-            const wantedSymbols = [tokenOut.symbolOnchain, tokenOut.symbol]
-              .filter(Boolean)
-              .map(lowerCase)
-            // `lowerCase` passes a falsy value straight through, so a row with no
-            // symbol would throw on .startsWith — hence the `|| ''`.
-            const exitToken = tokenSearch.find(e => {
-              const candidate = lowerCase(e?.symbol) || ''
-              return wantedSymbols.some(wanted => candidate.startsWith(wanted))
-            })
-            if (exitToken) {
-              handleChangeChain(chain, exitToken)
+            const token = tokenSearch?.[0]
+            if (isNativeToken(token.address)) {
+              // If the token is a native token, we can directly assign the symbol from the chain's native currency
+              if (chainOut?.nativeCurrency?.symbol) {
+                token.symbol = chainOut.nativeCurrency.symbol
+              }
             } else {
-              handleChangeChain(chain, tokenSearch?.[0])
+              token.symbol = await resolveOnchainSymbolFor(chain?.chainId, token.address)
             }
+
+            handleChangeChain(chain, token)
           } else {
             handleChangeChain(chain, null)
           }
@@ -97,12 +91,16 @@ const SelectChainOut = ({ isExchange, handleChangeChain, handleBack, _this }) =>
         handleChangeChain(chain, null)
       }
     }
+
+    if (chain && !loadingListTokensByAddress && !loadingTokenSearch) {
+      getToken()
+    }
   }, [loadingTokenSearch, tokenSearch, chain, tokenOut, loadingListTokensByAddress, listBalanceUser])
 
   const renderChains = () => {
     const data = []
 
-    setting.chainSupport.forEach((chain, index) => {
+    getAllChain().forEach((chain, index) => {
       if (textSearchDebounce) {
         const isHasName = chain?.name?.toLowerCase()?.includes(textSearchDebounce.toLowerCase())
         const isHashChainId = chain?.chainId?.toString()?.includes(textSearchDebounce)
@@ -182,7 +180,7 @@ const SelectChainOut = ({ isExchange, handleChangeChain, handleBack, _this }) =>
                 )
               }
               {
-                setting?.chainSupport && !isLoading && renderChains()
+                getAllChain()?.length > 0 && !isLoading && renderChains()
               }
 
             </ScrollView>

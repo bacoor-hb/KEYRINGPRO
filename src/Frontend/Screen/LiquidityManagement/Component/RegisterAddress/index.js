@@ -27,10 +27,10 @@ import {
   typeLiquidityPool
 } from 'common/constants/chain'
 import styles from './styles'
-import { getCheckAddressCoinPool, STORAGE_KEY as COIN_POOL_STORAGE_KEY, QUERY_KEY as COIN_POOL_QUERY_KEY } from 'frontend/Hooks/useCheckAddressCoinPool'
-import { STORAGE_KEY as POOL_LIST_STORAGE_KEY, QUERY_KEY as POOL_LIST_QUERY_KEY } from 'frontend/Hooks/useGetListPoolLiquidity'
-import { STORAGE_KEY as TOKEN_DETAIL_STORAGE_KEY, QUERY_KEY as TOKEN_DETAIL_QUERY_KEY } from 'frontend/Hooks/useFetchMulticallDetailToken'
-import { storeDataToAsyncStorage } from 'common/storage/asyncStorage'
+import { getCheckAddressCoinPool, QUERY_KEY as COIN_POOL_QUERY_KEY } from 'frontend/Hooks/useCheckAddressCoinPool'
+import { QUERY_KEY as POOL_LIST_QUERY_KEY } from 'frontend/Hooks/useGetListPoolLiquidity'
+import { QUERY_KEY as TOKEN_DETAIL_QUERY_KEY } from 'frontend/Hooks/useFetchMulticallDetailToken'
+import { clearLiquidityData } from 'frontend/Hooks/useLiquidityData'
 import { queryClient } from 'common/queryClient'
 import { lowerCase, getActiveLiquidityAddress } from 'common/function'
 import { ACCOUNT_TYPE } from 'common/constants/account'
@@ -267,21 +267,16 @@ const RegisterAddress = ({ _this }) => {
     }
   }
 
-  // Wipe the cached liquidity data from the previous registration. Each data hook keeps
-  // two layers of cache keyed off the old address: a react-query entry (kept visible via
-  // keepPreviousData) and an AsyncStorage snapshot (replayed by usePersistedQueryData on
-  // mount). Clearing both stops the new address from briefly showing the old address's
-  // pools / token details / coin-pool result before its own fetch resolves.
-  const clearLiquidityCaches = async () => {
+  // Drop the outgoing registration's data: the react-query entries plus the Redux copy
+  // (which the action also removes from AsyncStorage). Without this the replaced address
+  // keeps a saved entry that would be replayed if it were ever registered again.
+  const clearLiquidityCaches = () => {
     queryClient.removeQueries([POOL_LIST_QUERY_KEY])
     queryClient.removeQueries([TOKEN_DETAIL_QUERY_KEY])
     queryClient.removeQueries([COIN_POOL_QUERY_KEY])
 
-    await Promise.all([
-      storeDataToAsyncStorage(POOL_LIST_STORAGE_KEY, []),
-      storeDataToAsyncStorage(TOKEN_DETAIL_STORAGE_KEY, []),
-      storeDataToAsyncStorage(COIN_POOL_STORAGE_KEY, { dataListAddressChecked: [], isExistAddressCoinPool: false })
-    ])
+    const previousAddress = getActiveLiquidityAddress(ReduxService.getLiquidityList())
+    if (previousAddress) clearLiquidityData([previousAddress])
   }
 
   // Shared success path: persist the registered address and switch the drawer to the
@@ -290,8 +285,8 @@ const RegisterAddress = ({ _this }) => {
     // Un-register the address we're replacing on the server first (qualifying cases only).
     await removeActiveAddressOnServer()
 
-    // Drop the previous address's cached data before swapping in the new one.
-    await clearLiquidityCaches()
+    // Drop the previous address's saved data before swapping in the new one.
+    clearLiquidityCaches()
 
     await ReduxService.callDispatchAction(StorageReduxAction.setAddressRegisteredLiquidity([trimmed]))
 

@@ -14,6 +14,7 @@ import SendTokenForm from './SendTokenForm'
 import SendNftForm from './SendNftForm'
 import ApproveTokenForm from './ApproveTokenForm'
 import SupplyUsdcForm from './SupplyUsdcForm'
+import LendingMarketList from './LendingMarketList'
 import WalletNftList from './WalletNftList'
 import InitSuggestions from './InitSuggestions'
 import { getOptionsAt } from './InitSuggestions/suggestionTree'
@@ -38,6 +39,38 @@ const selectableMarkdownRules = {
       {children}
     </Text>
   )
+}
+
+// Marker a reply may carry to say "render what follows BELOW the widgets".
+// Must match MARKET_LIST_SPLIT in keyring-agent-core (marketButtons.ts) — the
+// agent asks the model to emit this literal, and only that side can change it.
+const SPLIT_MARKER = '[[LIST]]'
+
+/**
+ * Cut a bot reply into the part shown above the widgets and the part shown
+ * below them.
+ *
+ * Only the lending market list asks for this today: a framing sentence belongs
+ * before the list and the takeaway plus disclaimer belong after it, but the
+ * model returns a single string that the bubble would otherwise render entirely
+ * above the widget.
+ *
+ * Written to degrade safely, because the marker is model-produced and the model
+ * does not always comply:
+ *   - no marker (the overwhelming majority of replies) → everything stays above,
+ *     exactly as before;
+ *   - marker emitted more than once → split on the FIRST, and strip the rest, so
+ *     a stray copy is never printed as raw text;
+ *   - marker with nothing after it → the outro is empty and nothing renders.
+ * The regex tolerates surrounding whitespace and the blank lines around it, so
+ * the two halves never start or end with an orphaned newline.
+ */
+const splitAround = (content) => {
+  if (typeof content !== 'string' || !content.includes(SPLIT_MARKER)) return [content, '']
+  const [first, ...rest] = content.split(SPLIT_MARKER)
+  // Any further markers were not asked for; drop them rather than show them.
+  const tail = rest.join(' ')
+  return [first.trim(), tail.trim()]
 }
 
 // A bubble only pops if it was appended while the screen was open. Restored
@@ -141,6 +174,12 @@ const UIWidget = ({ action, onSend, onResult, onStatusChange, onCopyHash, onPers
       // onSend is only used in picker mode ('which of these NFTs?'), where
       // tapping a card submits that NFT's prompt as the next turn.
       return <WalletNftList props={action.props} onSend={onSend} language={language} />
+    // The lending-market shortlist. Rendered rather than written into the reply
+    // because each market carries its OWN "More detail" button, and
+    // `actionButtons` below can only stack under the whole message — see the
+    // component's own notes.
+    case 'LendingMarketList':
+      return <LendingMarketList props={action.props} onSend={onSend} language={language} />
     default:
       return null
   }
@@ -162,15 +201,19 @@ const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, 
   const suggestionPath = message.suggestionPath
   const popStyle = usePopIn(message, isUser)
 
+  // A bot reply may be written in two parts, split by SPLIT_MARKER: the intro
+  // renders above the widgets and the closing notes below them. See splitAround.
+  const [intro, outro] = isUser ? [message.content, ''] : splitAround(message.content)
+
   return (
     <Animated.View style={[styles.row, isUser ? styles.rowUser : styles.rowBot, popStyle]}>
       <View style={isUser ? (hasUI ? styles.bubbleWithUI : undefined) : styles.botContainer}>
-        {!!message.content && (
+        {!!intro && (
           isUser ? (
             <View style={[styles.bubble, styles.bubbleUser]}>
               <MyText
                 selectable
-              >{message.content}
+              >{intro}
               </MyText>
               <View style={styles.timestampRow}>
                 <MyText variant='small' className='text-medium'>{formatTime(message.timestamp)}</MyText>
@@ -182,7 +225,7 @@ const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, 
             // In selectable mode a custom text rule keeps the text long-press
             // selectable/copyable while link titles stay tappable.
             <Markdown style={mdStyles} rules={selectable ? selectableMarkdownRules : undefined}>
-              {message.content}
+              {intro}
             </Markdown>
           )
         )}
@@ -203,6 +246,15 @@ const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, 
             onPersist={onPersist ? (txState) => onPersist(message, idx, txState) : undefined}
           />
         ))}
+
+        {/* The second half of a split reply — the takeaway and the caveats that
+            belong AFTER a list, which is where a reader looks for them. Empty
+            for every reply that carries no marker, i.e. almost all of them. */}
+        {!!outro && (
+          <Markdown style={mdStyles} rules={selectable ? selectableMarkdownRules : undefined}>
+            {outro}
+          </Markdown>
+        )}
 
         {/* Action buttons below the reply (token / chain picks, etc.) — stacked
             one per row, each a colorless (clear) liquid-glass pill. */}
@@ -234,6 +286,10 @@ const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, 
             options={getOptionsAt(suggestionPath)}
             path={suggestionPath}
             onSelect={onSelectSuggestion}
+            // Set only when the menu was reached by TYPING, where the
+            // conversation's language can differ from the app's. Absent on the
+            // tap path, which stays on the app language.
+            locale={message.suggestionLocale}
           />
         )}
       </View>
@@ -247,6 +303,7 @@ export default memo(MessageBubble, (prev, next) =>
   prev.message.uiActions === next.message.uiActions &&
   prev.message.actionButtons === next.message.actionButtons &&
   prev.message.suggestionPath === next.message.suggestionPath &&
+  prev.message.suggestionLocale === next.message.suggestionLocale &&
   prev.selectable === next.selectable
 )
 
@@ -262,7 +319,7 @@ const mdStyles = {
   heading3: { color: Colors.WHITE, fontSize: fontSize(16), lineHeight: fontSize(16) * 1.5, fontFamily: getFontFamily(), marginTop: pixelByHeight(5) },
   strong: { color: Colors.WHITE },
   em: { fontStyle: 'italic' },
-  link: { color: Colors.BLUE5, textDecorationLine: 'underline' },
+  link: { color: Colors.BRAND, textDecorationLine: 'underline' },
   bullet_list: { marginVertical: pixelByHeight(2) },
   ordered_list: { marginVertical: pixelByHeight(2) },
   list_item: { marginVertical: pixelByHeight(2) },

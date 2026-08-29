@@ -331,13 +331,13 @@ class WelcomeScreen extends BaseContainer {
     this.onDrawerClosed = null
     this.closeAllDrawer()
     this.setModalOpen(false)
-    NavigationActions.navigate(NAME_SCREEN.home)
+    NavigationActions.reset(NAME_SCREEN.home)
   }
 
   handleAccountCreated = () => {
     this.onDrawerClosed = () => {
       this.setModalOpen(false)
-      NavigationActions.navigate(NAME_SCREEN.home)
+      NavigationActions.reset(NAME_SCREEN.home)
     }
   }
 

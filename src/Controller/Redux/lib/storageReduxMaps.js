@@ -25,6 +25,7 @@ export const buildStorageReduxMap = (localeInit) => [
   { key: KEYSTORE.AI_SEARCH_HISTORY, action: StorageReduxAction.setAiSearchHistory, init: initState.aiSearchHistory },
   { key: KEYSTORE.SET_ADDRESS_REGISTERED_LIQUIDITY, action: StorageReduxAction.setAddressRegisteredLiquidity, init: initState.addressRegisteredLiquidity },
   { key: KEYSTORE.SET_ADDRESS_DELETED_LIQUIDITY, action: StorageReduxAction.setAddressDeletedLiquidity, init: initState.addressDeletedLiquidity },
+  { key: KEYSTORE.SET_LIQUIDITY_DATA, action: StorageReduxAction.setLiquidityData, init: initState.liquidityData },
   { key: KEYSTORE.ADDRESS_BOOK_HISTORY, action: StorageReduxAction.setAddressBookHistory, init: initState.arrInit },
   { key: KEYSTORE.ADDRESS_BOOK_INFO, action: StorageReduxAction.setAddressBookInfo, init: initState.objInit },
   { key: KEYSTORE.SET_MIGRATION_FLAGS, action: StorageReduxAction.setMigrationFlags, init: initState.migrationFlags },
@@ -32,5 +33,6 @@ export const buildStorageReduxMap = (localeInit) => [
   { key: KEYSTORE.AUTO_LOCK_MINUTES, action: StorageReduxAction.setAutoLockMinutes, init: initState.autoLockMinutes },
   { key: REDUX_KEY.activeAccount, action: StorageReduxAction.setActiveAccount, init: initState.activeAccount },
   { key: KEYSTORE.SET_ACCOUNT_TOKEN_LIST, action: StorageReduxAction.setAccountTokenList, init: initState.accountTokenList },
-  { key: KEYSTORE.NOTIFICATION_READ_IDS, action: StorageReduxAction.setNotificationReadIds, init: initState.arrInit }
+  { key: KEYSTORE.NOTIFICATION_READ_IDS, action: StorageReduxAction.setNotificationReadIds, init: initState.arrInit },
+  { key: KEYSTORE.SET_SETTING_EXCHANGE, action: StorageReduxAction.setSettingExchange, init: initState.settingExchangeInit }
 ]

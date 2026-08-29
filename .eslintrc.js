@@ -78,7 +78,8 @@ module.exports = {
     ISIOS: false,
     ISMAC: false,
     __DEV__: true,
-    BigInt: true
+    BigInt: true,
+    globalThis: false
   },
   overrides: [
     {

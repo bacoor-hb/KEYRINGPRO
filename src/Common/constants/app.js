@@ -1,6 +1,7 @@
 import images from 'assets/Image'
 import Keys from 'react-native-keys'
 import Config from 'react-native-config'
+import { PLATFORM_EXCHANGE } from './swap'
 
 export const errOverTime = 'OverTime'
 
@@ -60,6 +61,7 @@ export const NULL_ADDRESS_OTHER = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
 export const BRIDE_API = {
   // DLN_API: 'https://api.dln.trade',\
   DLN_API: 'https://dln.debridge.finance',
+  DLN_API_TRACKING: 'https://dln-api.debridge.finance',
   TOKEN_LIST: 'https://tokens.1inch.io/v1.1',
   TOKEN_PRICE: 'https://token-prices.1inch.io/v1.1',
   DLN_TRADE_DETAIL: 'https://app.debridge.finance/order?orderId=',
@@ -75,11 +77,12 @@ export const BRIDGE_SLIPAGE = 1
 export const SWAP_SERVICE_CONFIG = {
   // Provider configurations
   providers: {
-    debridge: {
+    [PLATFORM_EXCHANGE.deBridge]: {
       key: 'debridge',
       shortName: 'deSwap',
       name: 'deBridge Finance',
       apiBaseUrl: 'https://dln.debridge.finance',
+      apiTrackingBaseUrl: 'https://dln-api.debridge.finance',
       accessToken: Keys.secureFor('DEBRIDGE_ACCESS_TOKEN'),
       features: {
         crossChain: true,
@@ -90,6 +93,7 @@ export const SWAP_SERVICE_CONFIG = {
         hasFeeProtocol: true
       },
       documentation: 'https://docs.debridge.finance/',
+      linkExplorer: 'https://app.debridge.com',
       urlTermsOfService: BRIDE_API.TERMS_OF_USE,
       urlPrivacyPolicy: BRIDE_API.PRIVACY_POLICY,
       logo: {
@@ -101,7 +105,7 @@ export const SWAP_SERVICE_CONFIG = {
         Darkmode: images.deBridgeIcon
       }
     },
-    relay: {
+    [PLATFORM_EXCHANGE.relay]: {
       key: 'relay',
       name: 'Relay',
       shortName: 'relay',
@@ -115,6 +119,7 @@ export const SWAP_SERVICE_CONFIG = {
       fees: {
         hasFeeProtocol: false
       },
+      linkExplorer: 'https://relay.link',
       documentation: 'https://docs.relay.link/references/api',
       urlTermsOfService: 'https://relay.link/terms',
       urlPrivacyPolicy: 'https://relay.link/privacy-policy',
@@ -148,7 +153,7 @@ export const DEFAULT_WC_APP_METADATA = {
   }
 }
 
-export const APP_VERSION = '6.1.0'
+export const APP_VERSION = '6.2.0'
 
 export const IconType = {
   // AntDesign: require('react-native-vector-icons/AntDesign').default,
@@ -238,17 +243,12 @@ export const STATUS_RANGE = {
 }
 
 export const NATIVE_TOKEN_BY_CHAIN_ID = {
-  988: '0x779ded0c9e1022225f8e0630b35a9b54be713736'// stable chain: https://stablescan.xyz/address/0x779ded0c9e1022225f8e0630b35a9b54be713736
-}
+  988: '0x779ded0c9e1022225f8e0630b35a9b54be713736', // stable chain: https://stablescan.xyz/address/0x779ded0c9e1022225f8e0630b35a9b54be713736
+  42220: '0x471ece3750da237f93b8e339c536989b8978a438', // celo
+  // Cronos chain
+  // https://explorer.cronos.com/address/0x3d7f2c478aafdb65542bcb44bceec05849999d2d
+  25: '0x3d7f2c478aafdb65542bcb44bceec05849999d2d'
 
-export const NATIVE_TOKEN_BY_CHAIN_ID_IN_HISTORY = {
-  988: '0x779ded0c9e1022225f8e0630b35a9b54be713736', // stable
-  42220: '0x471ece3750da237f93b8e339c536989b8978a438'// celo
-}
-
-export const PLATFORM_EXCHANGE = {
-  relay: 'relay',
-  deBridge: 'deBridge'
 }
 
 export const KEY_STORE_ID = {

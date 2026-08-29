@@ -32,6 +32,15 @@
     android:allowBackup="false"
     android:theme="@style/AppTheme"
     android:supportsRtl="true">
+
+    <!-- Android 16 (targetSdk 36) ignores android:screenOrientation / resizability on
+        displays with smallest width >= 600dp (tablets, unfolded foldables, desktop mode).
+        The app is portrait-only and its layout metrics (MYWIDTH / MYHEIGHT in
+        src/Common/styles.js) are captured once at startup and never recomputed on resize,
+        so opt out of adaptive resizing for now. This opt-out stops working at targetSdk 37. -->
+    <property
+      android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
+      android:value="true" />
     <activity
       android:name=".MainActivity"
       android:label="@string/app_name"

@@ -34,6 +34,7 @@ import { resolveKeyringTokenPriceUSD } from 'src/Services/TokenListV2'
 import { resolveOnchainSymbolFor } from 'src/Services/TokenListV2/symbolOnchain'
 import { getAddress, formatUnits } from 'viem'
 import { FIELD_MIN_HEIGHT } from 'frontend/Screen/TokenDetailScreen/Component/SendToken/styles'
+import { filterTokenToShow } from 'frontend/Screen/TokenList/page'
 
 // EVM contract address is at most 42 chars (0x + 40 hex) — cap input length,
 // mirroring RegisterAddress.
@@ -118,9 +119,14 @@ const AddTokenDrawer = ({ _this }) => {
     const metaKey = buildMetaKey(chainId, lowerCase(contractAddr))
     const entry = ReduxService.getAccountTokenList()?.[address]
     const existing = (entry?.tokens || []).find((t) => t.metaKey === metaKey)
-    // Only count it as "already added" when it's actually shown (not hidden) —
-    // a hidden token should still be re-addable to bring it back into the list.
-    return !!existing && !existing.isHidden && !!existing.isManuallyShown
+    if (!existing) return false
+    // Reuse the token list's own visibility predicate so "already added" means
+    // exactly "a row the user can already see". Checking isManuallyShown alone
+    // only caught manually added tokens — an auto-discovered token with a real
+    // balance is just as visible and must be blocked too. Conversely a hidden
+    // or dust-filtered token stays re-addable, since adding is what brings it
+    // back into the list.
+    return filterTokenToShow(existing)
   }
 
   const handleSearch = async () => {
@@ -206,12 +212,12 @@ const AddTokenDrawer = ({ _this }) => {
     const entry = list[address] || { tokens: [], totalUSD: 0, lastSyncedAt: 0 }
     const existing = (entry.tokens || []).find((t) => t.metaKey === metaKey)
     if (existing) {
-      // Already tracked — force it fully visible: clear isHidden AND set
-      // isManuallyShown so it bypasses BOTH the hidden filter and the
-      // MIN_VALUE filter. A token can be un-hidden yet still filtered out for
-      // having no price/value (e.g. after it was dropped from the Keyring list),
-      // in which case only isManuallyShown brings it back into the list.
-      if (existing.isHidden || !existing.isManuallyShown) {
+      // Already tracked. If it's currently invisible — hidden by the user, or
+      // filtered out for having no price/value (e.g. dropped from the Keyring
+      // list) — force it fully visible: clear isHidden AND set isManuallyShown
+      // so it bypasses BOTH the hidden filter and the MIN_VALUE filter. When
+      // it's already visible there is nothing to change; just close the drawer.
+      if (!filterTokenToShow(existing)) {
         const tokens = entry.tokens.map((t) => (
           t.metaKey === metaKey ? { ...t, isHidden: false, hiddenByUser: false, isManuallyShown: true } : t
         ))

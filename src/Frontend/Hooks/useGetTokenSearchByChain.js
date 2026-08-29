@@ -4,6 +4,7 @@ import { zeroAddress } from 'viem'
 import { isNativeToken } from 'common/tokens'
 import Config from 'react-native-config'
 import { sanitizeUrl } from 'common/function'
+import { resolveKeyringTokenPriceUSD } from 'src/Services/TokenListV2'
 const getData = async ({ queryKey }) => {
   try {
     let [, chainId, optionSearch] = queryKey
@@ -39,19 +40,25 @@ const getData = async ({ queryKey }) => {
       new Map(arr.map(item => [item.address, item])).values()
     )
 
-    arr = arr.filter(token => {
-      try {
-        const price = Number(token.price || '0')
-
-        if (isNaN(price) || !price || price === 0) {
-          return false
+    // Not the raw `token.price` directly: for a share-based yield vault (tagged
+    // with yieldProtocol/yieldAsset) that field is the UNDERLYING asset's price,
+    // not the price of one share the user holds. resolveKeyringTokenPriceUSD
+    // returns the per-SHARE price for those (and the API price unchanged, with no
+    // RPC, for every other token) — matching useGetTokenPrice so the search list
+    // and the rest of the app never disagree. Tokens with no usable price (invalid
+    // API price, or a vault whose on-chain read failed) are dropped.
+    arr = await Promise.all(
+      arr.map(async token => {
+        try {
+          const price = await resolveKeyringTokenPriceUSD(chainId, token)
+          if (!price || price <= 0) return null
+          return { ...token, price, priceUSD: price }
+        } catch {
+          return null
         }
-
-        return true
-      } catch (error) {
-        return false
-      }
-    })
+      })
+    )
+    arr = arr.filter(Boolean)
 
     return arr || []
   } catch (error) {

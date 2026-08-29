@@ -1,5 +1,5 @@
 import { StyleSheet } from 'react-native'
-import { pixelByHeight, pixelByWidth, sizeImageSquare, Colors, fontSize, getSafeAreaValues, getFontFamily, getSizeImgSquare, getHeightHeaderDrawer } from 'common/styles'
+import { pixelByHeight, pixelByWidth, sizeImageSquare, Colors, getSafeAreaValues, getFontFamily, getSizeImgSquare, getHeightHeaderDrawer } from 'common/styles'
 
 const createStyles = () => {
   return StyleSheet.create({
@@ -67,27 +67,6 @@ const createStyles = () => {
     input: {
       color: Colors.WHITE,
       fontFamily: getFontFamily(700)
-    },
-    inputToUSD: {
-      fontSize: fontSize(),
-      color: Colors.TEXT_MEDIUM,
-      // flex: 1,
-      fontFamily: getFontFamily(),
-      paddingVertical: 0,
-      paddingTop: 0,
-      paddingBottom: 0,
-      textAlignVertical: 'center',
-      includeFontPadding: false
-    },
-    currencyTextPrefix: {
-      fontSize: fontSize(),
-      fontFamily: getFontFamily()
-      // marginRight: pixelByWidth(4)
-    },
-    currencyTextSuffix: {
-      fontSize: fontSize(),
-      fontFamily: getFontFamily()
-      // marginLeft: pixelByWidth(4)
     },
     containerConfirm: {
       gap: pixelByHeight(14),
