@@ -1,4 +1,4 @@
-import { abstract, apeChain, arbitrum, avalanche, base, berachain, blast, bsc, celo, genesys, gnosis, ink, lens, linea, mainnet, optimism, polygon, ronin, rootstock, scroll, shape, soneium, unichain, worldchain, zksync, zora } from 'viem/chains'
+import { abstract, apeChain, arbitrum, avalanche, base, berachain, blast, bsc, celo, gnosis, ink, lens, linea, mainnet, optimism, polygon, ronin, rootstock, scroll, shape, soneium, unichain, worldchain, zksync, zora } from 'viem/chains'
 
 export const ALCHEMY_ENDPOINT = {
   // chain common
@@ -16,6 +16,7 @@ export const ALCHEMY_ENDPOINT = {
   143: 'monad-mainnet',
   [ink.id]: 'ink-mainnet',
   4663: 'robinhood-mainnet',
+  5042: 'arc-mainnet',
 
   // more chain
   [linea.id]: 'linea-mainnet',
@@ -29,8 +30,13 @@ export const ALCHEMY_ENDPOINT = {
   [soneium.id]: 'soneium-mainnet',
   [rootstock.id]: 'rootstock-mainnet',
   [ronin.id]: 'ronin-mainnet',
-  [genesys.id]: 'gensyn-mainnet',
 
+  // DELIBERATELY ABSENT — 16507. This map used to send it to `gensyn-mainnet`,
+  // but 16507 is **Genesys Network** (native GSYS, gchainexplorer.genesys.network)
+  // and Gensyn is an unrelated project, so every call for that chain was answered
+  // by ANOTHER chain's node. SUPPORTED_CHAINS_BY_SERVICE_ALCHEMY
+  // (common/constants/chain) already excluded it for the same reason. Do not
+  // re-add it unless Alchemy actually runs a Genesys node.
   42018: 'mythos-mainnet',
   [zora.id]: 'zora-mainnet',
   [blast.id]: 'blast-mainnet',

@@ -9,11 +9,13 @@ import GlassView from 'frontend/Components/UI/GlassView'
 import useSendTx, { TX_STATUS } from 'frontend/Hooks/useSendTx'
 import { useX402FeeFor } from 'frontend/Hooks/useX402Fees'
 import { formatFeeLabel } from '../x402FeeLabel'
+import { applyFeeReserve } from '../x402FeeReserve'
 import TxStatusTimeline from '../TxStatusTimeline'
 import X402SignModal from '../X402SignModal'
 import { runX402Gate } from './x402Gate'
 import styles from './styles'
 import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
+import { useChatKeyboard } from '../KeyboardAware'
 
 const tt = (key, locale, opts) => I18n.t(`chatAgent.${key}`, { ...(opts || {}), locale: resolveLocale(locale) })
 
@@ -207,6 +209,13 @@ export default function WalletActionForm ({
   // `values`): the lock must reflect where the value CAME FROM, not what it
   // currently is. Deriving it from `values` would re-lock the field the moment
   // the user typed a valid address into it.
+  // Keeps the focused field visible above the keyboard — no-op outside the chat
+  // thread (see the hook), so this form still works anywhere else unchanged.
+  const { scrollInputIntoView } = useChatKeyboard()
+  // One node per field, keyed like `fields`, so the focus handler can hand the
+  // right group to the scroller.
+  const fieldRefs = useRef({})
+
   const lockedFieldsRef = useRef(
     fields.reduce((acc, f) => {
       // `txState.values` is a previous submit of THIS form, so a value restored
@@ -250,7 +259,38 @@ export default function WalletActionForm ({
   const parsedAmount = BigNumber(effectiveAmount)
   const validAmount = parsedAmount.isFinite() && parsedAmount.gt(0)
 
-  const spendableBn = BigNumber(spendable)
+  // The wallet's own figure, before the x402 fee. Kept as its own value because
+  // the unit price below is recovered by dividing it into `spendableUsd`, and
+  // those two must stay the exact pair the core multiplied — dividing the
+  // fee-reduced figure would invent a higher price for every token.
+  const grossSpendableBn = BigNumber(spendable)
+
+  // The token this action is about to move, as far as the FORM knows it. Only a
+  // form that moves a fungible token supplies `spend`, and only that form can
+  // say which of its fields holds the contract — so a form without one (an NFT
+  // send, an edition count) reserves nothing, which is correct: an x402 charge
+  // is settled in an ERC-20 and cannot collide with those.
+  //
+  // Read from the CURRENT values so switching the contract field re-decides the
+  // collision live, while the user is still typing.
+  const spentToken = spend ? spend({ values, parameters, chainId }) : null
+
+  // The x402 fee comes out of the same balance whenever it is charged in the
+  // very token being sent, so the amount has to be sized against what is left
+  // AFTER it. This is what makes Max executable: without it, 100% of a 10 USDC
+  // balance is 10 USDC and the 0.05 USDC fee has nothing to settle from.
+  //
+  // Reserves nothing for a different token or chain — see x402FeeReserve.
+  const {
+    spendable: netSpendable,
+    reserved: feeReserved
+  } = applyFeeReserve(spendable, x402Fee, spentToken)
+
+  // Everything that SIZES or JUDGES an amount uses the net figure from here on:
+  // the percentage chips, the ceiling, and the submit gate. They have to agree —
+  // a Max that produces a value the validator then rejects is the exact failure
+  // this replaces.
+  const spendableBn = BigNumber(netSpendable)
   const exceedsBalance =
     validAmount && spendableBn.isFinite() && parsedAmount.gt(spendableBn)
 
@@ -269,10 +309,21 @@ export default function WalletActionForm ({
   const unitPriceUsd = (() => {
     const usd = BigNumber(spendableUsd)
     if (!usd.isFinite() || usd.lte(0)) return null
-    if (!spendableBn.isFinite() || !spendableBn.gt(0)) return null
-    return usd.div(spendableBn)
+    // The GROSS balance on purpose — `spendableUsd` was computed as
+    // `spendable × price` from it, so only that pair recovers the true price.
+    if (!grossSpendableBn.isFinite() || !grossSpendableBn.gt(0)) return null
+    return usd.div(grossSpendableBn)
   })()
   const amountUsd = validAmount && unitPriceUsd ? parsedAmount.times(unitPriceUsd) : null
+
+  // The dollar value of what is actually spendable. Re-derived from the unit
+  // price instead of reusing `spendableUsd`, which prices the gross balance:
+  // printing that beside a fee-reduced token amount would state two figures that
+  // do not describe the same quantity. Falls back to the core's own value when
+  // nothing was reserved, so an unaffected form shows exactly what it did before.
+  const netSpendableUsd = feeReserved && unitPriceUsd
+    ? spendableBn.times(unitPriceUsd)
+    : spendableUsd
 
   // Per-field error. The `touched` gate only gags complaints about what the user
   // has not filled in yet, so an untouched form never opens covered in red. It
@@ -593,6 +644,10 @@ export default function WalletActionForm ({
 
         {fields.map((f) => (
           <View
+            // The whole GROUP is the scroll anchor, not the bare input: bringing
+            // the label and the (~$x) line up with the field is what makes the
+            // form readable once the keyboard covers the rest of the screen.
+            ref={(node) => { fieldRefs.current[f.key] = node }}
             pointerEvents={isLocked(f) ? 'none' : 'auto'}
             key={f.key}
             style={styles.fieldGroup}>
@@ -652,6 +707,11 @@ export default function WalletActionForm ({
                 returnKeyType={f.type === 'address' ? 'done' : undefined}
                 autoCapitalize='none'
                 autoCorrect={false}
+                // Lift this field clear of the keyboard. The chat thread is an
+                // inverted FlatList whose window never pans, so without this a
+                // field low in the thread is simply covered (or pushed fully
+                // off-screen) the moment the IME appears.
+                onFocus={() => scrollInputIntoView(fieldRefs.current[f.key])}
                 placeholder={f.placeholder(t)}
                 placeholderTextColor={Colors.TEXT_LOW}
               />
@@ -700,11 +760,17 @@ export default function WalletActionForm ({
                   <MyText className='text-medium'>{t('spendable')}:</MyText>
                   <View style={styles.spendableValue}>
                     <MyTextTicker className='text-medium'>
-                      {fmt(spendable)}{spendableSymbol ? ` ${spendableSymbol}` : ''}
+                      {/* The NET figure — what the chips divide and the validator
+                          allows. Showing the gross here while Max produced the net
+                          would put two different "spendable" numbers on one card. */}
+                      {fmt(netSpendable)}{spendableSymbol ? ` ${spendableSymbol}` : ''}
                       {/* USD value of the spendable balance, when the core priced
-                          it — a dim "(~$X)" after the token amount. */}
-                      {fmtUsd(spendableUsd) && (
-                        <MyText variant='small' className='text-low'> (~{fmtUsd(spendableUsd)})</MyText>
+                          it — a dim "(~$X)" after the token amount. Recomputed
+                          from the unit price rather than reusing `spendableUsd`,
+                          which prices the GROSS balance and would overstate a
+                          figure the fee has been taken out of. */}
+                      {fmtUsd(netSpendableUsd) && (
+                        <MyText variant='small' className='text-low'> (~{fmtUsd(netSpendableUsd)})</MyText>
                       )}
                     </MyTextTicker>
                   </View>

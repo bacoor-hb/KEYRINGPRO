@@ -1,4 +1,6 @@
 import '@walletconnect/react-native-compat'
+// Must sit between the compat polyfills and WalletKit — see the file for why.
+import './textDecoderShim'
 import { Core } from '@walletconnect/core'
 import { WalletKit } from '@reown/walletkit'
 import ReduxService from './redux'
@@ -56,7 +58,31 @@ export const isWalletConnectPattern = (uri = '') => {
   }
 }
 
+// getConnectorV2 runs on every cold start, so reporting the same failure every time
+// would flood the remote debug log. Report each distinct step+message once per session.
+const reportedInitErrors = new Set()
+
+const reportInitError = (from, step, error) => {
+  const message = error?.message || 'no error message'
+  const key = `${step}|${message}`
+
+  if (reportedInitErrors.has(key)) {
+    return
+  }
+  reportedInitErrors.add(key)
+
+  const stack = String(error?.stack || '-').slice(0, 500)
+  ReduxService.remoteDebugLog(
+    'getConnectorV2-catch-error',
+    `[from=${from}][step=${step}] ${message} | stack: ${stack}`
+  )
+}
+
 export const getConnectorV2 = async (from = '?') => {
+  // Which init step we reached, reported on failure. Release builds are minified, so
+  // the stack alone can't say where it died — this marker is a plain string and survives.
+  let step = 'core'
+
   try {
     if (!walletconnectV2Core) {
       walletconnectV2Core = new Core({
@@ -65,27 +91,27 @@ export const getConnectorV2 = async (from = '?') => {
     }
 
     if (!walletKit) {
-      walletKit = await WalletKit.init({
+      step = 'init'
+
+      // Build into a local and publish the singleton only once every listener is
+      // attached. Assigning walletKit up front means a throw further down leaves a
+      // connector that still pairs but never emits session_request — the dApp then
+      // waits forever while the wallet shows no popup, and no further error is logged
+      // because the next call sees a truthy walletKit and skips this whole block.
+      const kit = await WalletKit.init({
         core: walletconnectV2Core,
         metadata: DEFAULT_WC_APP_METADATA
       })
 
-      messaging().onTokenRefresh(async token => {
-        await walletKit.registerDeviceToken({
-          token: await messaging().getToken(), // device token
-          clientId: await walletKit.core.crypto.getClientId(), // your instance clientId
-          notificationType: 'fcm', // notification type
-          enableEncrypted: true // flag that enabled detailed notifications
-        })
-      })
+      step = 'listeners'
 
-      walletKit.on('session_delete', (session) => {
+      kit.on('session_delete', (session) => {
         // The WalletConnect screen is a reactive list bound to walletConnectRedux,
         // so removing the session here updates the UI in place — no navigation needed.
         ReduxService.disconnectWalletConnectV2(session.topic, true)
       })
 
-      walletKit.on('session_request', async (requestEvent) => {
+      kit.on('session_request', async (requestEvent) => {
         const method = requestEvent?.params?.request?.method
 
         // Always respond so the dApp's pending promise resolves — otherwise dApp blocks its own queue
@@ -93,7 +119,7 @@ export const getConnectorV2 = async (from = '?') => {
           try {
             const result = buildGetCapabilitiesResult(requestEvent)
             const response = formatJsonRpcResult(requestEvent.id, result)
-            await walletKit.respondSessionRequest({ topic: requestEvent.topic, response })
+            await kit.respondSessionRequest({ topic: requestEvent.topic, response })
           } catch (err) {
             // do nothing
           }
@@ -102,7 +128,7 @@ export const getConnectorV2 = async (from = '?') => {
 
         if (UNSUPPORTED_EIP5792_METHODS.includes(method)) {
           try {
-            await walletKit.respondSessionRequest({
+            await kit.respondSessionRequest({
               topic: requestEvent.topic,
               response: {
                 id: requestEvent.id,
@@ -122,10 +148,37 @@ export const getConnectorV2 = async (from = '?') => {
           // do nothing
         }
       })
+
+      step = 'onTokenRefresh'
+
+      // Keeping the relay's device token fresh is a bonus — it must never abort init,
+      // so it gets its own guard and its own log key.
+      try {
+        messaging().onTokenRefresh(async (token) => {
+          try {
+            await kit.registerDeviceToken({
+              token, // device token, already provided by the event
+              clientId: await kit.core.crypto.getClientId(), // your instance clientId
+              notificationType: 'fcm', // notification type
+              enableEncrypted: true // flag that enabled detailed notifications
+            })
+          } catch (e) {
+            ReduxService.remoteDebugLog('onTokenRefresh-register-error', e?.message || 'no error message')
+          }
+        })
+      } catch (e) {
+        ReduxService.remoteDebugLog('onTokenRefresh-listen-error', e?.message || 'no error message')
+      }
+
+      step = 'ready'
+      walletKit = kit
     }
+
     return walletKit
   } catch (error) {
-    ReduxService.remoteDebugLog('getConnectorV2-catch-error', error?.message || 'no error message')
+    // walletconnectV2Core is deliberately left in place: building a fresh Core on every
+    // retry would leak the previous relay socket.
+    reportInitError(from, step, error)
     return null
   }
 }

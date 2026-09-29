@@ -281,78 +281,110 @@ const RequestCard = (props) => {
     })
   }
 
-  const showSpendingCap = isConfirmApprove && isObject(approveTokenInfo, true) && approveTokenInfo?.symbol
+  // ONE loading gate for the whole body. The method name and the spending cap are
+  // fed by two different queries that settle at different times, so gating each
+  // block on its own flag let them pop in separately: the spending cap (fed by the
+  // synchronous local calldata decode) painted while the dots were still spinning
+  // for the scan-API decode, and the method name arrived after it.
+  const isLoadingBody = isLoadingDecodeDataData || isLoadingApproveTokenInfo
+
+  const showSpendingCap = !isLoadingBody && isConfirmApprove && isObject(approveTokenInfo, true) && approveTokenInfo?.symbol
+
+  // Whether the spending-cap space is held open: while the approve is still loading
+  // (detected synchronously from the calldata selector) and once it actually shows.
+  // Both the label slot and the amount slot below gate on this, so the two halves of
+  // the block are reserved and released together.
+  const reserveSpendingCap = isApproveLikely && (isLoadingBody || showSpendingCap)
 
   return (
     <View style={styles.wrapper} className='border-b border-box-small'>
       <View style={styles.card} className='bg-box-secondary'>
-        {/* Header: timestamp + info (?) then the connected chain + account address */}
+        {/* Header: timestamp over the connected chain + account address, with the
+            info (?) icon standing alone to the right of BOTH lines, centered against
+            the pair. Keeping the icon out of the timestamp row is what keeps the two
+            lines their natural distance apart — inside it, the 44px icon set the row
+            height and visibly spread them. */}
         <View style={styles.header}>
-          <View style={styles.rowBetween}>
+          <View style={styles.headerTextColumn}>
             <MyText variant='small' className='text-low'>{formatDate(item?.params?.[0]?.createAt || item?.createAt)}</MyText>
-            <TouchableOpacity disabled={isLoadingDecodeDataData} onPress={onHandleShowInfoReqest}>
-              <MyIcon uri={images.UIV2.icons.information} style={styles.icon18} resizeMode='contain' />
-            </TouchableOpacity>
+            <View style={styles.accountRow}>
+              <ChainIcon chainId={item?.chainId} />
+              <MyText numberOfLines={1}>{convertAddressArrToString([item?.addressAccount], 6, 6)}</MyText>
+            </View>
           </View>
-          <View style={styles.accountRow}>
-            <ChainIcon chainId={item?.chainId} />
-            <MyText numberOfLines={1}>{convertAddressArrToString([item?.addressAccount], 6, 6)}</MyText>
-          </View>
+
+          <TouchableOpacity disabled={isLoadingDecodeDataData} onPress={onHandleShowInfoReqest}>
+            <MyIcon uri={images.UIV2.icons.informationRound} style={styles.icon44} resizeMode='contain' />
+          </TouchableOpacity>
         </View>
 
         {/* Body: method name (+ spending cap & editable amount for approve) */}
         <View style={styles.body}>
-          {
-            // For an approve, keep the loading row until the spending-cap token
-            // info is ready, so the method name and the spending cap appear in the
-            // same frame instead of the name popping in first.
-            (isLoadingDecodeDataData || isLoadingApproveTokenInfo) ? (
-              <View style={styles.methodLoadingRow}>
-                <LottieView style={styles.loadingDots} source={images.threeDotsLoading} autoPlay loop />
-              </View>
-            ) : (
-              <MyTextTicker fontWeight={700}>{requestMethodNameWithLabel}</MyTextTicker>
-            )
-          }
+          {/* The method name and the "Spending cap" label stack in the left column;
+              the edit icon stands alone to the right of BOTH lines, centered against
+              the pair. The amount row below spans the full width. */}
+          <View style={[styles.methodRow, reserveSpendingCap && styles.methodRowReserved]}>
+            <View style={styles.methodTextColumn}>
+              {
+                // For an approve, keep the loading row until the spending-cap token
+                // info is ready, so the method name and the spending cap appear in the
+                // same frame instead of one popping in before the other.
+                isLoadingBody ? (
+                  <View style={styles.methodLoadingRow}>
+                    <LottieView style={styles.loadingDots} source={images.threeDotsLoading} autoPlay loop />
+                  </View>
+                ) : (
+                  <MyTextTicker fontWeight={700}>{requestMethodNameWithLabel}</MyTextTicker>
+                )
+              }
 
-          {/* Reserve the spending-cap space from the very first render for approves
-              only (detected synchronously from the calldata selector), so the rows
-              fill the reserved area without pushing the buttons down. Non-approve
-              txs (e.g. transfer) never reserve it -> no empty gap that collapses.
+              {/* Label slot: held open while loading so the second line of the column
+                  exists before the text arrives and nothing below moves. */}
+              {reserveSpendingCap ? (
+                <View style={styles.spendingCapLabelReserved}>
+                  {showSpendingCap ? (
+                    <MyText variant='small' className='text-medium'>{I18n.t('WalletConnect.spendingCap')}</MyText>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
 
-              The reservation is also dropped once the spending-cap data has SETTLED
+            {showSpendingCap ? (
+              <TouchableOpacity onPress={handleOpenModalEditApproveAmount}>
+                <MyIcon uri={images.UIV2.icons.editBrandRound} style={styles.icon44} resizeMode='contain' />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          {/* Amount slot: reserved from the very first render for approves only
+              (detected synchronously from the calldata selector), so the row fills
+              the reserved area without pushing the buttons down. Non-approve txs
+              (e.g. transfer) never reserve it -> no empty gap that collapses.
+
+              The reservation is also dropped once the body has SETTLED
               with nothing to show (calldata that can't be decoded, an ERC721 approve,
               a failed isERC20 / token-info read on a chain the scan API doesn't
               cover). Those cases used to keep an empty ~2-line box forever. The
-              happy path is unchanged: isLoadingApproveTokenInfo is already true on
-              the first render for an approve, so the space is still reserved before
-              the data arrives and the buttons never move. */}
-          {isApproveLikely && (isLoadingApproveTokenInfo || showSpendingCap) ? (
-            <View style={styles.spendingCapReserved}>
+              happy path is unchanged: isLoadingBody is already true on the first
+              render for an approve, so the space is still reserved before the data
+              arrives and the buttons never move. */}
+          {reserveSpendingCap ? (
+            <View style={styles.amountReserved}>
               {showSpendingCap ? (
-                <>
-                  <View style={styles.rowBetween}>
-                    <MyText variant='small' className='text-medium'>{I18n.t('WalletConnect.spendingCap')}</MyText>
-                    <TouchableOpacity onPress={handleOpenModalEditApproveAmount}>
-                      <MyIcon uri={images.UIV2.icons.editBrand} style={styles.icon18} resizeMode='contain' />
-                    </TouchableOpacity>
+                <View style={styles.amountRow}>
+                  <View>
+                    <ImageRender uri={approveTokenInfo.icon} style={styles.tokenIcon} resizeMode='contain' />
                   </View>
-                  <View style={styles.amountRow}>
-                    <View>
-                      <ImageRender uri={approveTokenInfo.icon} style={styles.tokenIcon} resizeMode='contain' />
-                    </View>
-                    <View
-                      style={{
-                        flex: 1
-                      }}>
-                      <MyTextTicker style={styles.amountText}>
-                        {customApproveAmount || (approveTokenInfo.isUnlimited ? I18n.t('WalletConnect.approveUnlimited') : approveTokenInfo.amount)}
-                        <MyText className='text-medium'>{' '}{approveTokenInfo.symbol}</MyText>
-                      </MyTextTicker>
-                    </View>
-
+                  <View
+                    style={{
+                      flex: 1
+                    }}>
+                    <MyTextTicker style={styles.amountText}>
+                      {customApproveAmount || (approveTokenInfo.isUnlimited ? I18n.t('WalletConnect.approveUnlimited') : approveTokenInfo.amount)}
+                      <MyText className='text-medium'>{' '}{approveTokenInfo.symbol}</MyText>
+                    </MyTextTicker>
                   </View>
-                </>
+                </View>
               ) : null}
             </View>
           ) : null}

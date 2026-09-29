@@ -1,4 +1,3 @@
-import { arbitrum, avalanche, base, bsc, cronos, linea, mainnet, optimism, polygon } from 'viem/chains'
 
 export const PLATFORM_EXCHANGE = {
   relay: 'relay',
@@ -8,27 +7,9 @@ export const PLATFORM_EXCHANGE = {
 // https://docs.debridge.com/dln-details/overview/deployed-contracts
 export const CONTRACT_FEE_PROTOCOL = {
   [PLATFORM_EXCHANGE.deBridge]: {
-    [arbitrum.id]: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    [avalanche.id]: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    [bsc.id]: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    [mainnet.id]: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    [polygon.id]: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    // Robinhood
-    4663: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    [linea.id]: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    [optimism.id]: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    [base.id]: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    // story
-    1514: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    [cronos.id]: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    // HyperEVM
-    999: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    // Injective
-    1776: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    // monad
-    143: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
-    // MegaETH
-    4326: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66'
+    DEFAULT: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66'
+    // Contract other
+    // 4326: '0xeF4fB24aD0916217251F553c0596F8Edc630EB66'
 
   }
 

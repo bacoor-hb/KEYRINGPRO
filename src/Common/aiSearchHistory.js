@@ -118,6 +118,16 @@ export const dismissSuggestions = (address, session) => {
   suggestionsState[buildKey(session, address)] = { leftAt: 0 }
 }
 
+// Put ONE thread back to SHOWING on demand — the user asked for the pills back
+// from the floating support button, which is the deliberate inverse of
+// `dismissSuggestions`. Deleting the entry (rather than flagging it) is what
+// makes the thread SHOWING again by the same rule as the idle clock, so a later
+// dismissal starts from a clean state instead of an expired stamp.
+export const restoreSuggestions = (address, session) => {
+  if (!address) return
+  delete suggestionsState[buildKey(session, address)]
+}
+
 // Put threads back to SHOWING because their conversation no longer exists.
 //
 // The idle clock is the only OTHER way out of HIDDEN, and it is deliberately

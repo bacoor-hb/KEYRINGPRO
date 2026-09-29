@@ -74,7 +74,7 @@ class ScanScreen extends BaseContainer {
 
           try {
             // Scan - Step 1 - init connector
-            connector = await getConnectorV2()
+            connector = await getConnectorV2('deep-link')
           } catch (e) {
             ReduxService.remoteDebugLog('didMount-getConnectorV2() catch-error', e?.message || 'no error message')
             // error
@@ -454,14 +454,42 @@ class ScanScreen extends BaseContainer {
             isFocusPasteView: false
           }, async () => {
             try {
-              // eslint-disable-next-line no-unused-vars
-              const notiSettings = await requestNotifications(['alert'])
+              // Notification permission is a deliberate gate: a session is only created
+              // once push is enabled, so a request can reach the user in the background.
+              //
+              // The one exception is iOS refusing the prompt outright (UNError code 1,
+              // "Notifications are not allowed for this application" — MDM, Screen Time or
+              // a configuration profile). The user cannot grant it from Settings either, so
+              // gating there would lock them out of WalletConnect for good; pair without
+              // push instead. A plain denial still goes through the gate as before.
+              let isEnabledPushNoti = false
+              let isPushNotiBlockedByOS = false
 
-              const authStatus = await messaging().requestPermission()
-              const isEnabledPushNoti = authStatus === messaging.AuthorizationStatus.AUTHORIZED || authStatus === messaging.AuthorizationStatus.PROVISIONAL
-              // const isEnabledPushNotiAndroid = await NotificationManager.areNotificationsEnabled()
+              try {
+                await requestNotifications(['alert'])
 
-              if (!isEnabledPushNoti) {
+                const authStatus = await messaging().requestPermission()
+                isEnabledPushNoti = authStatus === messaging.AuthorizationStatus.AUTHORIZED || authStatus === messaging.AuthorizationStatus.PROVISIONAL
+                // const isEnabledPushNotiAndroid = await NotificationManager.areNotificationsEnabled()
+              } catch (error) {
+                // A throw only means the OS would not let us ask — the permission itself may
+                // already be granted, so read the real status before deciding.
+                try {
+                  const authStatus = await messaging().hasPermission()
+                  isEnabledPushNoti = authStatus === messaging.AuthorizationStatus.AUTHORIZED || authStatus === messaging.AuthorizationStatus.PROVISIONAL
+                } catch (e) {
+                  // Status unreadable too — treat as blocked by the OS.
+                }
+
+                isPushNotiBlockedByOS = !isEnabledPushNoti
+
+                ReduxService.remoteDebugLog(
+                  'requestPermission-error',
+                  `${error?.message || 'no error message'} -> ${isPushNotiBlockedByOS ? 'blocked by OS, pairing without push' : 'already granted, continue'}`
+                )
+              }
+
+              if (!isEnabledPushNoti && !isPushNotiBlockedByOS) {
                 ReduxService.remoteDebugLog('!isEnabledPushNoti', 'calling requestPermissionNoti()')
                 this.requestPermissionNoti()
               } else {
@@ -470,14 +498,18 @@ class ScanScreen extends BaseContainer {
                 const wcV2 = QRCodeData.includes('@2')
 
                 try {
-                  connector = await getConnectorV2()
+                  connector = await getConnectorV2('scan')
                 } catch (e) {
                   ReduxService.remoteDebugLog('scan-getConnectorV2() catch-error', e?.message || 'no error message')
                   // error
                 }
 
                 if (connector) {
-                  await this.registerPushDeviceToken(connector)
+                  // Skip the token round-trip entirely when the OS blocks push — there is
+                  // no token to get, only an 8s wait before giving up.
+                  if (isEnabledPushNoti) {
+                    await this.registerPushDeviceToken(connector)
+                  }
 
                   this.setState({
                     lastScanTime: (new Date()).getTime(),
@@ -536,7 +568,7 @@ class ScanScreen extends BaseContainer {
   // Scan - Step 2 - pairing and listen event
   subscribeToEventsV2 = async (isFromDeepLink = false) => {
     const { uri } = this.state
-    const connectorV2 = await getConnectorV2()
+    const connectorV2 = await getConnectorV2('subscribe-events')
 
     // let canConnect = false
     // setTimeout(() => {

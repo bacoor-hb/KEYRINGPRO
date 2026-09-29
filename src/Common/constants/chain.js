@@ -23,104 +23,83 @@ export const chainType = {
 }
 
 // List chain ids default
-export const LIST_DEFAULT_CHAIN_ID = [1, 10, 56, 8453, 42161, 43114, 137, 130, 9745, 999, 988, 5000, 42220, 4326, 100, 747474, 143, 57073, 4217, 4663]
+export const LIST_DEFAULT_CHAIN_ID = [1, 10, 56, 8453, 42161, 43114, 137, 130, 9745, 999, 988, 5000, 42220, 4326, 100, 747474, 143, 57073, 4217, 4663, 1329, 81457, 5042]
 
 export const SUPPORTED_BLOCKCHAIN_DATA = {
   1: {
     nativeCurrency: { symbol: 'ETH' },
     linkScanHash: 'https://etherscan.io/tx/',
     linkScan: 'https://etherscan.io/address/',
-    linkScanTokenHolding: 'https://etherscan.io/tokenholdings?a=',
     linkProvider: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
     chainId: 1,
     icon: images.UIV2.defaultChains[1],
     name: 'Ethereum',
-    status: false,
     chain: 'ether',
-    chainCoingecko: 'ethereum',
-    isSupportedChain: true
+    chainCoingecko: 'ethereum'
   },
   10: {
     nativeCurrency: { symbol: 'ETH' },
     linkScanHash: 'https://optimistic.etherscan.io/tx/',
     linkScan: 'https://optimistic.etherscan.io/address/',
-    linkScanTokenHolding: 'https://optimistic.etherscan.io/tokenholdings?a=',
     linkProvider: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.optimism.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
     chainId: 10,
     icon: images.UIV2.defaultChains[10],
     name: 'Optimism',
-    status: false,
     chain: 'optimism',
-    chainCoingecko: 'optimistic-ethereum',
-    isSupportedChain: true
+    chainCoingecko: 'optimistic-ethereum'
   },
   56: {
     nativeCurrency: { symbol: 'BNB' },
     linkScanHash: 'https://bscscan.com/tx/',
     linkScan: 'https://bscscan.com/address/',
-    linkScanTokenHolding: 'https://bscscan.com/tokenholdings?a=',
     linkProvider: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.bsc.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
     chainId: 56,
     icon: images.UIV2.defaultChains[56],
     name: 'Binance Smart Chain',
-    status: false,
     chain: 'bsc',
-    chainCoingecko: 'binance-smart-chain',
-    isSupportedChain: true
+    chainCoingecko: 'binance-smart-chain'
   },
   137: {
     nativeCurrency: { symbol: 'POL' },
     linkScanHash: 'https://polygonscan.com/tx/',
     linkScan: 'https://polygonscan.com/address/',
-    linkScanTokenHolding: 'https://polygonscan.com/tokenholdings?a=',
     linkProvider: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.matic.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
     chainId: 137,
     icon: images.UIV2.defaultChains[137],
     name: 'Polygon',
-    status: false,
     chain: 'matic',
-    chainCoingecko: 'polygon-pos',
-    isSupportedChain: true
+    chainCoingecko: 'polygon-pos'
   },
   42161: {
     nativeCurrency: { symbol: 'ETH' },
     linkScanHash: 'https://arbiscan.io/tx/',
     linkScan: 'https://explorer.arbitrum.io/address/',
-    linkScanTokenHolding: 'https://arbiscan.io/tokenholdings?a=',
     linkProvider: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.arbitrum-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
     chainId: 42161,
     icon: images.UIV2.defaultChains[42161],
     name: 'Arbitrum',
-    status: false,
     chain: 'arbitrum',
-    chainCoingecko: 'arbitrum-one',
-    isSupportedChain: true
+    chainCoingecko: 'arbitrum-one'
   },
   43114: {
     nativeCurrency: { symbol: 'AVAX' },
     linkScanHash: 'https://cchain.explorer.avax.network/tx/',
     linkScan: 'https://cchain.explorer.avax.network/address/',
-    linkScanTokenHolding: 'https://snowtrace.io/tokenholdings?a=',
     linkProvider: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.avalanche-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}/ext/bc/C/rpc`,
     chainId: 43114,
     icon: images.UIV2.defaultChains[43114],
     name: 'Avalanche',
-    status: false,
     chain: 'avax',
-    chainCoingecko: 'avalanche',
-    isSupportedChain: true
+    chainCoingecko: 'avalanche'
   },
   8453: {
     nativeCurrency: { symbol: 'ETH' },
-    isSupportedChain: true,
-    status: false,
     chainId: 8453,
     name: 'Base',
     chain: 'base',
     chainCoingecko: 'base',
     icon: images.UIV2.defaultChains[8453],
     linkProvider: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.base-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
-    linkScanTokenHolding: 'https://basescan.org/address/',
     linkScan: 'https://basescan.org/address/',
     linkScanHash: 'https://basescan.org/tx/'
   },
@@ -128,119 +107,94 @@ export const SUPPORTED_BLOCKCHAIN_DATA = {
     nativeCurrency: { symbol: 'ETH' },
     linkScanHash: 'https://uniscan.xyz/tx/',
     linkScan: 'https://uniscan.xyz/address/',
-    linkScanTokenHolding: 'https://uniscan.xyz/tokenholdings?a=',
     linkProvider: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.unichain-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
     chainId: 130,
     icon: images.UIV2.defaultChains[130],
     name: 'Unichain',
-    status: false,
     chain: 'unichain',
-    chainCoingecko: 'unichain',
-    isSupportedChain: true
+    chainCoingecko: 'unichain'
   },
   9745: {
     nativeCurrency: { symbol: 'XPL' },
     linkScanHash: 'https://plasmascan.to/tx/',
     linkScan: 'https://plasmascan.to/address/',
-    linkScanTokenHolding: 'https://plasmascan.to/address/',
     linkProvider: 'https://rpc.plasma.to',
     chainId: 9745,
     icon: images.UIV2.defaultChains[9745],
     name: 'Plasma',
-    status: false,
     chain: 'plasma',
-    chainCoingecko: 'plasma',
-    isSupportedChain: true
+    chainCoingecko: 'plasma'
   },
   999: {
     nativeCurrency: { symbol: 'HYPE' },
     linkScanHash: 'https://hyperevmscan.io/tx/',
     linkScan: 'https://hyperevmscan.io/address/',
-    linkScanTokenHolding: 'https://hyperevmscan.io/address/',
     linkProvider: 'https://rpc.hyperliquid.xyz/evm',
     chainId: 999,
     icon: images.UIV2.defaultChains[999],
     name: 'HyperEVM',
-    status: false,
     chain: 'hyperevm',
-    chainCoingecko: 'hyperevm',
-    isSupportedChain: true
+    chainCoingecko: 'hyperevm'
   },
   988: {
     nativeCurrency: { symbol: 'USDT0' },
     linkScanHash: 'https://stablescan.xyz/tx/',
     linkScan: 'https://stablescan.xyz/address/',
-    linkScanTokenHolding: 'https://stablescan.xyz/address/',
     linkProvider: 'https://rpc.stable.xyz',
     chainId: 988,
     icon: images.UIV2.defaultChains[988],
     name: 'Stable',
-    status: false,
     chain: 'stable',
-    chainCoingecko: 'stable',
-    isSupportedChain: true
+    chainCoingecko: 'stable'
   },
   5000: {
     nativeCurrency: { symbol: 'MNT' },
     linkScanHash: 'https://mantlescan.xyz/tx/',
     linkScan: 'https://mantlescan.xyz/address/',
-    linkScanTokenHolding: 'https://mantlescan.xyz/address/',
     linkProvider: 'https://rpc.mantle.xyz',
     chainId: 5000,
     icon: images.UIV2.defaultChains[5000],
     name: 'Mantle',
-    status: false,
     chain: 'mantle',
-    chainCoingecko: 'mantle',
-    isSupportedChain: true
+    chainCoingecko: 'mantle'
   },
   42220: {
     nativeCurrency: { symbol: 'CELO' },
     linkScanHash: 'https://celoscan.io/tx/',
     linkScan: 'https://celoscan.io/address/',
-    linkScanTokenHolding: 'https://celoscan.io/address/',
     linkProvider: 'https://forno.celo.org',
     chainId: 42220,
     icon: images.UIV2.defaultChains[42220],
     name: 'Celo',
-    status: false,
     chain: 'celo',
-    chainCoingecko: 'celo',
-    isSupportedChain: true
+    chainCoingecko: 'celo'
   },
   4326: {
     nativeCurrency: { symbol: 'ETH' },
     linkScanHash: 'https://megaeth.blockscout.com/tx/',
     linkScan: 'https://megaeth.blockscout.com/address/',
-    linkScanTokenHolding: 'https://megaeth.blockscout.com/address/',
     linkProvider: 'https://mainnet.megaeth.com/rpc',
     chainId: 4326,
     icon: images.UIV2.defaultChains[4326],
     name: 'MegaETH',
-    status: false,
     chain: 'megaeth',
-    chainCoingecko: 'megaeth',
-    isSupportedChain: true
+    chainCoingecko: 'megaeth'
   },
   100: {
     nativeCurrency: { symbol: 'xDAI' },
     linkScanHash: 'https://blockscout.com/xdai/mainnet/tx/',
     linkScan: 'https://blockscout.com/xdai/mainnet/address/',
-    linkScanTokenHolding: 'https://blockscout.com/xdai/mainnet/address/',
     linkProvider: 'https://rpc.gnosischain.com',
     chainId: 100,
     icon: images.UIV2.defaultChains[100],
     name: 'Gnosis',
-    status: false,
     chain: 'xdai',
-    chainCoingecko: 'xdai',
-    isSupportedChain: true
+    chainCoingecko: 'xdai'
   },
   747474: {
     nativeCurrency: { symbol: 'ETH' },
     linkScanHash: 'https://explorer.katanarpc.com/tx/',
     linkScan: 'https://explorer.katanarpc.com/address/',
-    linkScanTokenHolding: 'https://explorer.katanarpc.com/address/',
     // Katana's own endpoint (same host family as the explorer above). NOT
     // rpc.katana.network: that one is a load-balancing proxy whose upstream
     // cannot see the sequencer's mempool, so a broadcast transaction reads back
@@ -253,37 +207,29 @@ export const SUPPORTED_BLOCKCHAIN_DATA = {
     chainId: 747474,
     icon: images.UIV2.defaultChains[747474],
     name: 'Katana',
-    status: false,
-    chain: 'katana',
-    isSupportedChain: true
+    chain: 'katana'
   },
   143: {
     nativeCurrency: { symbol: 'MON' },
     linkScanHash: 'https://monadscan.com/tx/',
     linkScan: 'https://monadscan.com/address/',
-    linkScanTokenHolding: 'https://monadscan.com/address/',
     linkProvider: 'https://rpc.monad.xyz',
     chainId: 143,
     icon: images.UIV2.defaultChains[143],
     name: 'Monad',
-    status: false,
     chain: 'monad',
-    chainCoingecko: 'monad',
-    isSupportedChain: true
+    chainCoingecko: 'monad'
   },
   57073: {
     nativeCurrency: { symbol: 'ETH' },
     linkScanHash: 'https://explorer.inkonchain.com/tx/',
     linkScan: 'https://explorer.inkonchain.com/address/',
-    linkScanTokenHolding: 'https://explorer.inkonchain.com/address/',
     linkProvider: 'https://rpc-gel.inkonchain.com',
     chainId: 57073,
     icon: images.UIV2.defaultChains[57073],
     name: 'INK',
-    status: false,
     chain: 'ink',
-    chainCoingecko: 'ink',
-    isSupportedChain: true
+    chainCoingecko: 'ink'
   },
   4217: {
     nativeCurrency: { symbol: 'USD' },
@@ -309,29 +255,56 @@ export const SUPPORTED_BLOCKCHAIN_DATA = {
     ],
     linkScanHash: 'https://explore.tempo.xyz/tx/',
     linkScan: 'https://explore.tempo.xyz/address/',
-    linkScanTokenHolding: 'https://explore.tempo.xyz/address/',
     linkProvider: 'https://rpc.mainnet.tempo.xyz',
     chainId: 4217,
     icon: images.UIV2.defaultChains[4217],
     name: 'Tempo',
-    status: false,
     chain: 'tempo',
-    chainCoingecko: 'tempo',
-    isSupportedChain: true
+    chainCoingecko: 'tempo'
   },
   4663: {
     nativeCurrency: { symbol: 'ETH' },
-    linkScanHash: 'https://robinhoodchain.blockscout.com/tx/',
-    linkScan: 'https://robinhoodchain.blockscout.com/address/',
-    linkScanTokenHolding: 'https://robinhoodchain.blockscout.com/address/',
+    linkScanHash: 'https://robinscan.io/tx/',
+    linkScan: 'https://robinscan.io/address/',
     linkProvider: 'https://rpc.mainnet.chain.robinhood.com',
     chainId: 4663,
     icon: images.UIV2.defaultChains[4663],
     name: 'Robinhood',
-    status: false,
     chain: 'robinhood',
-    chainCoingecko: 'robinhood',
-    isSupportedChain: true
+    chainCoingecko: 'robinhood'
+  },
+  1329: {
+    nativeCurrency: { symbol: 'SEI' },
+    linkScanHash: 'https://seiscan.io/tx/',
+    linkScan: 'https://seiscan.io/address/',
+    linkProvider: 'https://evm-rpc.sei-apis.com',
+    chainId: 1329,
+    icon: images.UIV2.defaultChains[1329],
+    name: 'Sei Network',
+    chain: 'sei',
+    chainCoingecko: 'sei-v2'
+  },
+  81457: {
+    nativeCurrency: { symbol: 'ETH' },
+    linkScanHash: 'https://blastscan.io/tx/',
+    linkScan: 'https://blastscan.io/address/',
+    linkProvider: 'https://rpc.blast.io',
+    chainId: 81457,
+    icon: images.UIV2.defaultChains[81457],
+    name: 'Blast',
+    chain: 'blast',
+    chainCoingecko: 'blast'
+  },
+  5042: {
+    nativeCurrency: { symbol: 'USDC' },
+    linkScanHash: 'https://explorer.arc.io/tx/',
+    linkScan: 'https://explorer.arc.io/address/',
+    linkProvider: 'https://rpc.mainnet.arc.io',
+    chainId: 5042,
+    icon: images.UIV2.defaultChains[5042],
+    name: 'Arc',
+    chain: 'arc',
+    chainCoingecko: 'arc'
   }
 }
 
@@ -380,11 +353,11 @@ export const SUPPORTED_CHAINS_BY_SERVICE_MORALIS = {
 //      the Alchemy path matches native BY SYMBOL, so a mismatch would bury the
 //      user's native balance in the Hidden list.
 //
-// DELIBERATELY EXCLUDED — 16507. ALCHEMY_ENDPOINT maps it to `gensyn-mainnet`,
-// but 16507 is **Genesys Network** (native GSYS, gchainexplorer.genesys.network)
-// while Gensyn is an unrelated project. That mapping is wrong; copying it here
-// would have priced one chain's wallet with another chain's balances. The
-// tx-history feature still carries the bad entry — fix it there separately.
+// DELIBERATELY EXCLUDED — 16507. It is **Genesys Network** (native GSYS,
+// gchainexplorer.genesys.network), and Alchemy's `gensyn-mainnet` is an unrelated
+// project, so pointing one at the other would have priced this chain's wallet with
+// another chain's balances. ALCHEMY_ENDPOINT (common/constants/alchemy) carried
+// that bad mapping for the tx-history feature and has since dropped it too.
 export const SUPPORTED_CHAINS_BY_SERVICE_ALCHEMY = {
   // Also served by Moralis → Alchemy is the fallback here.
   1: 'eth-mainnet',
@@ -415,6 +388,7 @@ export const SUPPORTED_CHAINS_BY_SERVICE_ALCHEMY = {
   1868: 'soneium-mainnet',
   2741: 'abstract-mainnet',
   4663: 'robinhood-mainnet',
+  5042: 'arc-mainnet',
   33139: 'apechain-mainnet',
   42220: 'celo-mainnet',
   57073: 'ink-mainnet',
@@ -455,7 +429,10 @@ export const MULTICALL3_CHAIN_IDS = new Set([
   89, 88, 480, 747, 545, 55244, 1570, 1578, 33139, 1111, 41455, 656476, 132902, 3338,
   999, 998, 10143, 7869, 560048, 6342, 763373, 57073, 964, 5464, 9745, 1875, 3799,
   5845, 41923, 210425, 689, 1689, 28802, 24101, 43111, 743111, 3636, 3637, 223, 2345,
-  130, 1868, 747474, 10088, 31612, 484, 185, 239, 143, 5888, 612055, 97477, 988
+  130, 1868, 747474, 10088, 31612, 484, 185, 239, 143, 5888, 612055, 97477, 988,
+  // Not in the deployments list yet: Arc ships Multicall3 as a genesis predeploy at
+  // the canonical address, with bytecode identical to the Ethereum mainnet contract.
+  5042
 ])
 
 export const typeLiquidityPool = {
@@ -500,4 +477,11 @@ export const LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_PANCAKESWAP = {
   42161: '0x46A15B0b27311cedF172AB29E4f4766fbE7F4364', // arbitrum
   8453: '0x46A15B0b27311cedF172AB29E4f4766fbE7F4364' // base
   // 59144: '0x46A15B0b27311cedF172AB29E4f4766fbE7F4364' // linea
+}
+
+export const CONTRACT_L1_GAS_PRICE_ORACLE = {
+  // Default all chains
+  ALL: '0x420000000000000000000000000000000000000F',
+  // scroll chain
+  534352: '0x5300000000000000000000000000000000000002'
 }

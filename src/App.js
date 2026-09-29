@@ -2,7 +2,6 @@ import '../global.css'
 import React, { Component } from 'react'
 import { Linking } from 'react-native'
 import AppNavigator from './navigation'
-import WalletConnectRequestHost from 'frontend/Components/WalletConnectRequestHost'
 import { NavigationActions } from './navigation/NavigationService'
 import { Provider } from 'react-redux'
 import storeRedux from 'controller/Redux/store/configureStore'
@@ -76,7 +75,7 @@ export default class KeyringWallet extends Component {
       this.setupNetInfo()
 
       // init @reown/walletkit
-      await getConnectorV2()
+      await getConnectorV2('app-boot')
 
       const initScreen = await this.resolveInitScreen(accountList)
 
@@ -213,15 +212,19 @@ export default class KeyringWallet extends Component {
       // Let UnlockScreen replay a stashed cold-start deep link through navigate().
       setDeepLinkHandler(this.navigate)
 
+      // Order matters: attach the `url` listener BEFORE asking for the initial URL.
+      // The patched RCTLinkingManager (patches/react-native+*.patch) buffers a URL
+      // that arrived before JS listened — on Mac a cold launch delivers it via
+      // openURL instead of launchOptions — and hands it out once via
+      // getInitialURL. Once the listener exists every new URL arrives as an event,
+      // so there is no window where a link is dropped or delivered twice.
+      this.linkingSubscription = Linking.addEventListener('url', this.navigate)
+
       Linking.getInitialURL().then((url) => {
         if (url) {
           this.navigate({ url })
         }
       })
-
-      setTimeout(() => {
-        this.linkingSubscription = Linking.addEventListener('url', this.navigate)
-      }, 2000)
     })
   }
 
@@ -336,7 +339,6 @@ export default class KeyringWallet extends Component {
                     <ThemeContextProvider>
                       <AppNavigator initialRouteName={this.state.initScreen} />
                       {/* Global overlay: shows incoming WalletConnect requests over any screen. */}
-                      <WalletConnectRequestHost />
                     </ThemeContextProvider>
                   </QueryClientProvider>
                 </GestureHandlerRootView>

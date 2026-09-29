@@ -189,7 +189,8 @@ export default class RelayAdapter extends BaseSwapService {
       // }
 
       // Find approve and swap/deposit steps
-      const approveStep = res.steps?.find(step => step.id === 'approve')
+      const approveStep = res.steps?.findLast(step => step.id === 'approve') ?? null
+
       const swapStep = res.steps?.find(step => step.id === 'swap' || step.id === 'deposit')
 
       // Extract transaction data from swap/deposit step

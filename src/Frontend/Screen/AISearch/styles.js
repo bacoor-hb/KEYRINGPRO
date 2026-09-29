@@ -134,6 +134,25 @@ const styles = StyleSheet.create({
   scrollDownIcon: {
     width: getSizeImgSquare('title'),
     height: getSizeImgSquare('title')
+  },
+  // The support button sits on the RIGHT edge, in the same band just above the
+  // input as the jump-to-bottom button (which is centred), so the two never
+  // overlap when both are up.
+  supportWrap: {
+    position: 'absolute',
+    right: pixelByWidth(16),
+    marginBottom: pixelByHeight(12)
+  },
+  supportBtn: {
+    width: BTN_SIZE,
+    height: BTN_SIZE,
+    borderRadius: BTN_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  supportIcon: {
+    width: getSizeImgSquare('title'),
+    height: getSizeImgSquare('title')
   }
 })
 

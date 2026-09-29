@@ -90,9 +90,7 @@ const SwitchChainCard = (props) => {
           ...apiChainItem,
           chain,
           chainId: targetChainId,
-          keyChain: `${chain}${targetChainId}`,
-          isCustomChainData: true,
-          isSupportedChain: false
+          keyChain: `${chain}${targetChainId}`
         }
       }
       ReduxService.callDispatchAction(StorageReduxAction.setBlockChainList(nextBlockchain))

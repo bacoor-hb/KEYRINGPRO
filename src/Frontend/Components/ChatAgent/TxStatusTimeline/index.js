@@ -52,7 +52,7 @@ export default function TxStatusTimeline ({ status, txHash, from, chainId, langu
         style={styles.hashTextWrap}
         onPress={() => handleOpenExplorerHash(txHash, Number(chainId))}
       >
-        <MyText variant='small' className='text-brand'>
+        <MyText className='text-brand'>
           {txHash}
         </MyText>
       </TouchableOpacity>
@@ -72,38 +72,48 @@ export default function TxStatusTimeline ({ status, txHash, from, chainId, langu
 
   return (
     <View style={styles.statusWrap}>
-      {/* Sending node */}
-      <View style={styles.stepRow}>
-        <View style={styles.stepLeft}>
-          <TxStepIcon uri={images.UIV2.icons.icon_send_outline} animate={animateIntro} />
-          <View style={styles.connector} className='bg-box-small' />
+      {/* Sending node — head (marker + the words it labels) above trail
+          (connector + hash), so a wrapped hash can never drag the title away
+          from its own marker. See `stepHeadRow` in ./styles. */}
+      <View>
+        <View style={styles.stepHeadRow}>
+          <View style={styles.stepLeft}>
+            <TxStepIcon uri={images.UIV2.icons.icon_send_outline} animate={animateIntro} />
+          </View>
+          <View style={styles.stepBodyLast}>
+            <View style={styles.titleRow}>
+              <MyText fontWeight={700}>{t('sending')}</MyText>
+              {/* Animated dots while we wait for the broadcast hash. */}
+              {isSigning && (
+                <MyDotsLoading
+                  style={styles.titleDots}
+                  source={images.threeDotsWhiteLoading} />
+              )}
+            </View>
+            <MyText className='text-medium'>{t('approxTime')}</MyText>
+          </View>
         </View>
-        <View style={styles.stepBody}>
-          <View style={styles.titleRow}>
-            <MyText fontWeight={700}>{t('sending')}</MyText>
-            {/* Animated dots while we wait for the broadcast hash. */}
-            {isSigning && (
-              <MyDotsLoading
-                style={styles.titleDots}
-                source={images.threeDotsWhiteLoading} />
+
+        <View style={styles.stepTrailRow}>
+          <View style={[styles.stepLeft, styles.trailLeft]}>
+            <View style={styles.trailConnector} className='bg-box-small' />
+          </View>
+          <View style={styles.trailBody}>
+            {hasHash ? (
+              renderTxHash()
+            ) : (
+              // No hash yet — point the user to the explorer as a fallback.
+              <View style={styles.explorerHint}>
+                <MyText className='text-medium'>{ti('plsCheckExplorer')}</MyText>
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={() => handleOpenExplorerUserAddress(from, Number(chainId))}
+                >
+                  <MyText className='text-brand' style={styles.explorerLink}>{ti('checkingExplorer')}</MyText>
+                </TouchableOpacity>
+              </View>
             )}
           </View>
-          <MyText variant='small' className='text-medium' style={styles.stepDesc}>{t('approxTime')}</MyText>
-
-          {hasHash ? (
-            renderTxHash()
-          ) : (
-            // No hash yet — point the user to the explorer as a fallback.
-            <View style={styles.explorerHint}>
-              <MyText variant='small' className='text-medium'>{ti('plsCheckExplorer')}</MyText>
-              <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={() => handleOpenExplorerUserAddress(from, Number(chainId))}
-              >
-                <MyText variant='small' className='text-brand' style={styles.explorerLink}>{ti('checkingExplorer')}</MyText>
-              </TouchableOpacity>
-            </View>
-          )}
         </View>
       </View>
 
@@ -115,7 +125,7 @@ export default function TxStatusTimeline ({ status, txHash, from, chainId, langu
           <StatusMessage
             variant={isDone ? 'success' : 'error'}
             title={resultTitle}
-            titleConfig={{ className: resultTitleClass, variant: 'subTitle' }}
+            titleConfig={{ className: resultTitleClass }}
             // A caller-supplied reason (e.g. the pre-flight's "you need X more
             // to cover the fee") beats the generic "the transaction failed".
             message={isError ? (errorMessage || t('txFailedDesc')) : undefined}

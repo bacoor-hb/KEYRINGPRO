@@ -10,10 +10,10 @@ Website: [keyring.app](https://keyring.app)
 
 - **Self-custodial, multi-account** — private-key hot wallets, view-only
   accounts, and NFC KeyCard hardware-backed accounts
-- **Multi-chain (EVM)** — 20 built-in networks: Ethereum, Optimism, BNB Chain,
+- **Multi-chain (EVM)** — 23 built-in networks: Ethereum, Optimism, BNB Chain,
   Base, Arbitrum, Avalanche, Polygon, Unichain, Plasma, HyperEVM, Stable,
-  Mantle, Celo, MegaETH, Gnosis, Katana, Monad, Ink, Tempo and Robinhood — plus
-  any other EVM network you add yourself
+  Mantle, Celo, MegaETH, Gnosis, Katana, Monad, Ink, Tempo, Robinhood, Sei,
+  Blast and Arc — plus any other EVM network you add yourself
 - **WalletConnect v2** — per-account dApp connections with a built-in
   connection-safety assessment
 - **DeFi** — liquidity pool management (view positions, add liquidity),

@@ -215,7 +215,7 @@ const RegisterAddress = ({ _this }) => {
   let errorMessage = ''
   if (trimmed.length > 0) {
     if (!trimmed.startsWith('0x')) {
-      errorMessage = 'Address must start with “0x”'
+      errorMessage = I18n.t('v2.addToken.addressMustStart')
     } else if (trimmed.length === MAX_ADDRESS_LENGTH && !isValidAddress) {
       errorMessage = I18n.t('v2.liquidity.invalidWalletAddress')
     }

@@ -64,9 +64,9 @@ const getData = async ({ queryKey }) => {
     // contract and its own underlying — neither of which can be guessed from the
     // receipt token the wallet holds.
     //
-    // `type` is the protocol family ('aave-v3' | 'compound-v3' | 'spark' |
-    // 'spark-ethereum' | 'morpho-v2'), and it is what selects the withdraw call:
-    // the five families take five different signatures. `contract` is the pool /
+    // `type` is the protocol family — the `marketType` column in
+    // `common/constants/lending`, which is also what selects the withdraw call:
+    // each family takes a different signature. `contract` is the pool /
     // vault the call goes to, `token` the receipt token that gets burned.
     type: overview.type,
     contract: overview.contract,

@@ -36,7 +36,8 @@ export default {
     addToken: {
       title: '토큰 추가',
       selectNetwork: '네트워크 선택',
-      contractPlaceholder: '토큰 컨트랙트 주소',
+      searchPlaceholder: '토큰 이름, 심볼 또는 주소',
+      noMatching: '일치하는 토큰을 찾을 수 없습니다',
       addressMustStart: '주소는 "0x"로 시작해야 합니다',
       invalidContract: '유효하지 않은 컨트랙트 주소',
       noTokenFound: '이 컨트랙트 주소와 관련된 토큰이 없습니다'
@@ -183,7 +184,7 @@ export default {
       resetDesc: '더 이상 필요하지 않은 NFC 태그는 초기화하여 재사용할 수 있습니다',
       readFirst: '먼저, 원본 NFC 태그를 읽어야 합니다',
       nowCopy: '이제 빈 NTAG125에 복사할 수 있습니다',
-      viewPrivateKeyDeviceWarning: 'NFC 태그에 기록된 개인키를 볼 수 있습니다. \\n진행하기 전에 NFC 태그를 내보낼 때 저장한 KEY 파일이 이 기기에 저장되어 있는지 확인해 주세요.'
+      viewPrivateKeyDeviceWarning: 'NFC 태그에 기록된 개인키를 볼 수 있습니다. \n\n진행하기 전에 NFC 태그를 내보낼 때 저장한 KEY 파일이 이 기기에 저장되어 있는지 확인해 주세요.'
     },
     walletConnect: {
       payHistory: 'WalletConnect 결제 내역',
@@ -199,7 +200,9 @@ export default {
       noName: '이름 없음',
       noHash: '해시 없음',
       interactWith: '상호작용 대상',
-      history: '내역'
+      history: '내역',
+      changeAccount: '계정 변경',
+      selectAccount: '계정 선택'
     },
     wcConnect: {
       selectAccount: '연결할 계정 선택',
@@ -241,7 +244,7 @@ export default {
       changedLabel: '계정 라벨이 변경되었습니다!',
       advancedProtection: '프로 사용자를 위한 고급 보호 기능',
       deleteAccount: '계정 삭제',
-      savePrivateKeyWarning: '개인키를 저장하셨습니까?\\n계정을 삭제하면 복구할 수 없습니다.',
+      savePrivateKeyWarning: '개인키를 저장하셨습니까?\n\n계정을 삭제하면 복구할 수 없습니다.',
       charactersMaximum: '최대 {{count}}자',
       blockscan: 'Blockscan',
       revoke: '철회'
@@ -286,11 +289,10 @@ export default {
     },
     backup: {
       noBackupFile: '생성된 지갑 백업이 없습니다',
-      saveToExternal: '신뢰할 수 있는 외부 저장소에 지갑 백업을 저장하세요.',
-      fileNamedKeyring: '지갑 백업 파일 이름은 **"keyring"**입니다. 파일 이름을 변경하지 말고 저장하세요.',
-      chooseFolder: '지갑 백업 파일은 기기의 "Downloads" 또는 "Documents" 폴더에 저장할 수 있습니다.',
-      onlyYouKnowPassword: '설정한 비밀번호는 본인만 알 수 있습니다.',
-      dontForgetPassword: '비밀번호를 잊어버리지 않도록 주의하세요!',
+      saveToExternal: '지갑 백업은 신뢰할 수 있는 외부 저장 장치에 보관하는 것을 권장합니다.\n\n백업 파일에는 암호화된 개인 키 정보가 포함되어 있으며, 설정한 비밀번호로 보호됩니다.',
+      fileNamedKeyring: '새 계정을 생성할 때마다 새로운 지갑 백업을 생성해야 합니다.',
+      onlyYouKnowPassword: '백업 파일의 이름은 “Keyring”입니다. 파일 이름을 변경하지 말고 저장해 주세요.',
+      dontForgetPassword: '설정한 비밀번호는 본인만 알고 있습니다. 비밀번호를 잊지 않도록 주의해 주세요. 비밀번호를 분실하면 백업 파일을 통해 지갑을 복구할 수 없습니다.',
       backupHistory: '백업 내역'
     },
     exportNfc: {
@@ -430,6 +432,7 @@ export default {
   },
   AISearch: {
     welcome: '환영합니다! 저는 Keyring 에이전트입니다. 오늘 DeFi와 관련하여 어떤 도움을 드릴까요?',
+    suggestionsIntro: '저는 Keyring 에이전트입니다. 오늘 DeFi와 관련하여 어떤 도움을 드릴까요?',
     tellMeAboutToken: '{{value}} 토큰에 대해 알려주세요.',
     thisToken: '이 토큰',
     learnMoreAbout: '{{value}}에 대해 자세히 알아보기',
@@ -838,12 +841,11 @@ export default {
     maxExceedsRange: '최대 가격이 허용된 범위를 초과합니다 (최대 %{max})',
     amountOf: '수량 %{symbol}',
     spendable: '사용 가능',
-    insufficientBalance: '수량이 사용 가능한 잔액을 초과합니다',
+    insufficientBalance: '잔액 부족',
     addLiquidity: '유동성 추가',
     amount: '수량',
     ratio: '분할 비율',
     expectedAmount: '%{symbol} 예상됨',
-    confirmAndSign: '확인 및 서명',
     retry: '재시도',
     sending: '보내는 중',
     approxTime: '예상 시간: 몇 초',
@@ -854,7 +856,6 @@ export default {
     quoteExpired: '견적 만료됨',
     quoteExpiredDesc: '풀 가격이変動하여 이 견적이 더 이상 유효하지 않습니다. 업데이트된 거래 정보를 받으려면 다시 요청해 주세요.',
     confirmAddLiquidityMessage: '%{chainName}에서 %{amount} %{symbol}로 %{pair} (%{fee} 수수료 등급)에 유동성을 추가하려고 합니다. 가격 범위는 %{minPrice}부터 %{maxPrice}까지입니다 (풀 주소: %{pool}).',
-    walletActionSend: '전송',
     walletActionApprove: '승인',
     supplyTitle: '%{symbol} 예치',
     supplyStepApprove: '승인',
@@ -879,8 +880,6 @@ export default {
     walletActionReceiver: '수신자 주소',
     walletActionSpender: '승인 대상 주소',
     walletActionAllowance: '허용량',
-    walletActionCollection: '컬렉션',
-    walletActionTokenId: '토큰 ID',
     walletActionEditionsDefault: '1',
     walletActionUnlimited: '무제한',
     walletActionEnterContract: '컨트랙트 입력',
@@ -889,11 +888,18 @@ export default {
     walletActionFieldRequired: '필수 입력 항목입니다',
     walletActionInvalidAddress: '유효하지 않은 주소입니다',
     walletActionInvalidAmount: '수량은 0보다 커야 합니다',
-    confirmSendNativeMessage: '%{chainName}에서 %{to}에게 %{amount} %{symbol}을(를) 보냅니다',
-    confirmSendTokenMessage: '%{chainName}에서 %{to}에게 %{amount} %{symbol}을(를) 보냅니다 (토큰 컨트랙트: %{contract})',
-    confirmSendNftMessage: '%{chainName}에서 %{to}에게 NFT %{nft} #%{tokenId} (x%{amount})을(를) 보냅니다 (컨트랙트: %{contract})',
-    confirmApproveTokenMessage: '%{chainName}에서 승인 대상 %{spender}에게 %{amount} %{symbol}을(를) 승인합니다 (토큰 컨트랙트: %{contract})',
-    confirmApproveTokenUnlimitedMessage: '%{chainName}에서 승인 대상 %{spender}에게 무제한 %{symbol}을(를) 승인합니다 (토큰 컨트랙트: %{contract})',
+    swapTitle: '스왑',
+    buyTitle: '구매',
+    swapTitleWith: '%{symbol} 스왑',
+    buyTitleWith: '%{symbol} 구매',
+    swapSideFrom: '보내기',
+    swapSideTo: '받기',
+    swapSideSell: '판매',
+    swapSideBuy: '구매',
+    swapRefreshQuote: '새로고침',
+    swapReceivedAbout: '약 %{amount} %{symbol}을(를) 받습니다',
+    swapApproveFailed: '승인 트랜잭션이 실패하여 스왑이 진행되지 않았습니다.',
+    swapApproveNotVisible: '승인이 전송되었지만 아직 체인에서 확인되지 않았습니다. 스왑이 진행되지 않았습니다 — 잠시 후 다시 시도해 주세요.',
     walletActionNotEnoughFee: '네트워크 수수료를 충당하려면 %{amount} %{symbol}이(가) 더 필요합니다',
     walletActionNotEnoughFeeNoSymbol: '네트워크 수수료를 충당하려면 자체 코인이 %{amount} 더 필요합니다',
     walletActionEstimateFailed: '이 거래를 완료할 수 없습니다. 상세 정보를 확인하고 다시 시도해 주세요.',

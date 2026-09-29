@@ -11,7 +11,7 @@ import MyIcon from 'frontend/Components/UI/MyIcon'
 import { useSelector } from 'react-redux'
 import { Colors, fontSize, getSafeAreaValues, getSizeImgSquare, PADDING_TOP_CONTAINER_DRAWER, pixelByHeight, pixelByWidth, sizeImageSquare } from 'common/styles'
 import useGetRawTxExchange from 'frontend/Hooks/useGetRawTxExchange'
-import { zeroAddress } from 'viem'
+import { serializeTransaction, zeroAddress } from 'viem'
 import { convertBalanceToWei, convertWeiToBalance, handleOpenUrl, lowerCase } from 'common/function'
 import BigNumber from 'bignumber.js'
 import useGetBalanceToken from 'frontend/Hooks/useGetBalanceToken'
@@ -42,6 +42,7 @@ import InputCustom from 'frontend/Components/UI/InputCustom'
 import I18nWithLinks from 'frontend/Components/UI/I18nWithLinks'
 import useGetDecimalToken from 'frontend/Hooks/useGetDecimalToken'
 import useProtocolFee from 'frontend/Hooks/useProtocolFee'
+import AllChainServices from 'controller/AllChainServices'
 
 export const STEP_EXCHANGE = {
   approving: 1,
@@ -85,7 +86,13 @@ const InputAmount = ({ ...props }) => {
   }, [])
 
   return (
+    // minScale={0}: no readability floor — a long amount keeps shrinking until it
+    // fits. AutoFitAmountInput's default floor (≈fontSize('small')) stops shrinking
+    // early and lets a long value paint past its row, over the symbol on its right.
+    // Every amount field in the app (Send / Withdraw / SwapAndSend / spending cap)
+    // uses 0; it stays a spreadable default so a caller can still opt back in.
     <AutoFitAmountInput
+      minScale={0}
       {...props}
       textStyle={{ ...styles.input, opacity: isShow ? 1 : 0 }}
     />
@@ -120,6 +127,7 @@ const Exchange = ({ _this }) => {
   const [requestId, setRequestId] = useState(null)
   const [isFocusAmountInputToUSD, setIsFocusAmountInputToUSD] = useState(false)
   const isFocusAmountInputToUSDRef = useRef(false)
+  const [feeL1, setFeeL1] = useState(0)
   // true when the fiat value in the token IN USD field was typed by the user (not derived
   // from a token amount). Keeps the exact number the user entered on blur, instead of the
   // quote's round-tripped value (fiat→token→fiat loses precision, e.g. 1000 -> 999.9592).
@@ -291,6 +299,10 @@ const Exchange = ({ _this }) => {
     return null
   }, [rawTransaction])
 
+  const isHasApprove = useMemo(() => {
+    return rawTransaction?.approveStep?.id === 'approve'
+  }, [rawTransaction])
+
   const feeGas = useMemo(() => {
     let totalFee = '0.00000001'
     if (gasWeiPriceDefault && !loadingGasPriceDefault) {
@@ -298,13 +310,19 @@ const Exchange = ({ _this }) => {
       totalFee = new BigNumber(gasPrice).multipliedBy(gasLimitRawTx || DEFAULT_GAS_LIMIT).toString()
 
       totalFee = BigNumber(totalFee).plus(feeProtocol || '0').toFixed()
+      totalFee = BigNumber(totalFee).plus(feeL1 || '0').toFixed()
+
+      // if the user has not approved the token, add fee of approve transaction
+      // add 0.5x gasLimit fee for approve transaction
+      // this is because contract will approve all token for any address
+      if (isHasApprove) {
+        const feeApprove = BigNumber(gasPrice).multipliedBy(BigNumber(DEFAULT_GAS_LIMIT).multipliedBy(0.5)).toFixed()
+        totalFee = BigNumber(totalFee).plus(feeApprove).toFixed()
+        totalFee = BigNumber(totalFee).plus(feeL1).toFixed()
+      }
     }
     return totalFee
-  }, [gasWeiPriceDefault, gasLimitRawTx, feeProtocol, loadingGasPriceDefault])
-
-  const isHasApprove = useMemo(() => {
-    return rawTransaction?.approveStep?.id === 'approve'
-  }, [rawTransaction])
+  }, [gasWeiPriceDefault, feeL1, gasLimitRawTx, feeProtocol, loadingGasPriceDefault, isHasApprove])
 
   const priceTokenOut = useMemo(() => {
     return priceTokenOutByAPI || tokenOut?.price || tokenOut?.priceUSD || null
@@ -359,6 +377,43 @@ const Exchange = ({ _this }) => {
     }
     return amount.toFixed()
   }, [feeGas, balanceNative])
+
+  useEffect(() => {
+    // The L1 data fee every OP-Stack rollup charges on top of L2 execution — NOT
+    // an Optimism-only cost. It used to be gated to chainId 10 AND read off
+    // Optimism's own oracle, so Base, Ink, Katana and every other rollup priced
+    // their transactions with the L1 half missing. hasL1DataFee decides by looking
+    // for the predeploy, so a rollup added later is covered without touching this
+    // file. Its weight varies by chain: post-blob it is 0.3–2% of the fee on
+    // OP-Stack, but on Scroll it is nearly the whole fee and grows with the
+    // byte size of the serialized transaction passed in.
+    const getGasFeeLayer1 = async () => {
+      try {
+        const chainId = tokenIn?.chainId
+        const isRollup = await AllChainServices.hasL1DataFee(chainId)
+
+        if (isRollup) {
+          let data
+          if (rawTransaction?.tx) {
+            data = serializeTransaction({
+              ...rawTransaction?.tx,
+              gasLimit: gasLimitRawTx
+
+            })
+          }
+          const feeWei = await AllChainServices.estimateL1DataFee(false, chainId, account?.address, addressTokenIn, data)
+          const feeEther = BigNumber(convertWeiToBalance(feeWei, 18)).multipliedBy(1.1).decimalPlaces(18).toFixed()
+
+          if (BigNumber(feeL1).lt(feeEther)) {
+            setFeeL1(feeEther)
+          }
+        }
+      } catch {
+        // do something
+      }
+    }
+    getGasFeeLayer1()
+  }, [tokenIn, account?.address, addressTokenIn, gasLimitRawTx, rawTransaction])
 
   useEffect(() => {
     if (!rawTransaction?.estimation) {
@@ -1104,14 +1159,21 @@ const Exchange = ({ _this }) => {
                   chainId={tokenIn.chainId}
                   tokenIconUri={tokenIn?.iconUrl}
                 />
-                <InputAmount
-                  value={(() => {
-                    const { intPart, fracPart } = getNumberParts(amountIn, decimalTokenIn)
-                    return fracPart ? `${intPart}.${fracPart}` : intPart
-                  })()}
-                  disabled
-                  textStyle={styles.input}
-                />
+                {/* minWidth: 0 — see the note on the editable amount fields
+                    below: without it AutoFitAmountInput's fixed 5000px input box
+                    becomes this row's minimum width and the amount paints past
+                    the card. These confirm rows render the value at the token's
+                    full decimals, so they are the most likely to be long. */}
+                <View style={styles.amountFlex}>
+                  <InputAmount
+                    value={(() => {
+                      const { intPart, fracPart } = getNumberParts(amountIn, decimalTokenIn)
+                      return fracPart ? `${intPart}.${fracPart}` : intPart
+                    })()}
+                    disabled
+                    textStyle={styles.input}
+                  />
+                </View>
 
               </View>
 
@@ -1139,14 +1201,21 @@ const Exchange = ({ _this }) => {
                     images.UIV2.icons.noTokenOutExchange
                   }
                 />
-                <InputAmount
-                  value={(() => {
-                    const { intPart, fracPart } = getNumberParts(amountOut, decimalTokenOut)
-                    return fracPart ? `${intPart}.${fracPart}` : intPart
-                  })()}
-                  disabled
-                  textStyle={styles.input}
-                />
+                {/* minWidth: 0 — see the note on the editable amount fields
+                    below: without it AutoFitAmountInput's fixed 5000px input box
+                    becomes this row's minimum width and the amount paints past
+                    the card. These confirm rows render the value at the token's
+                    full decimals, so they are the most likely to be long. */}
+                <View style={styles.amountFlex}>
+                  <InputAmount
+                    value={(() => {
+                      const { intPart, fracPart } = getNumberParts(amountOut, decimalTokenOut)
+                      return fracPart ? `${intPart}.${fracPart}` : intPart
+                    })()}
+                    disabled
+                    textStyle={styles.input}
+                  />
+                </View>
 
               </View>
 
@@ -1351,7 +1420,13 @@ const Exchange = ({ _this }) => {
                       tokenIconUri={tokenIn?.iconUrl}
                     />
                   </View>
-                  <View className='flex-1'>
+                  {/* minWidth: 0 — AutoFitAmountInput lays its TextInput out at a
+                      fixed 5000px (the fit is done with a transform, so the native
+                      field never scrolls/elides). A flex item's default minWidth is
+                      `auto` = its content width, which would make that 5000px the
+                      row's minimum and paint the amount past the card. NativeWind's
+                      flex-1 sets flex only, so this must be explicit. */}
+                  <View className='flex-1' style={styles.amountFlex}>
                     <InputAmount
                       value={amountIn?.toString()}
                       onChangeText={value => onChangeAmountIn(value, decimalTokenIn)}
@@ -1429,7 +1504,13 @@ const Exchange = ({ _this }) => {
                     images.UIV2.icons.noTokenOutExchange
                     }
                   />
-                  <View className='flex-1'>
+                  {/* minWidth: 0 — AutoFitAmountInput lays its TextInput out at a
+                      fixed 5000px (the fit is done with a transform, so the native
+                      field never scrolls/elides). A flex item's default minWidth is
+                      `auto` = its content width, which would make that 5000px the
+                      row's minimum and paint the amount past the card. NativeWind's
+                      flex-1 sets flex only, so this must be explicit. */}
+                  <View className='flex-1' style={styles.amountFlex}>
                     <InputAmount
                       value={amountOut?.toString()}
                       onChangeText={value => onChangeAmountOut(value, decimalTokenOut)}

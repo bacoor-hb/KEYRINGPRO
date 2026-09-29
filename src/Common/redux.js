@@ -47,7 +47,7 @@ import { NavigationActions } from 'src/navigation/NavigationService'
 import { clearSecureStorage } from './storage/secureStorage'
 import { clearSavedPassword } from './keychain'
 import { NAME_SCREEN } from './constants/navigation'
-import { getWcRequestsOpener } from './walletConnectPending'
+import { openIncomingWcRequest } from './walletConnectPending'
 import { createRef } from 'react'
 
 const options = {
@@ -428,16 +428,26 @@ export default class ReduxService {
               // Open the request in the NEW requests drawer hosted by the global
               // WalletConnectRequestHost overlay — it shows over WHATEVER screen
               // the user is on, no navigation. (Not the legacy
-              // manageRequestScreenV2.)
+              // manageRequestScreenV2.) Queued if the host hasn't mounted yet
+              // (cold start: walletKit emits before the UI renders).
               const topic = walletConnectItem?.session?.topic
               if (topic) {
-                getWcRequestsOpener()?.(topic)
+                openIncomingWcRequest(topic)
               }
             } catch (e) {
               //
             }
 
             // this.handleCheckShouldApproveRequest(formatedPayload, accountIndex)
+          } else {
+            // Already in callRequestRedux (persisted) from a previous app run, and
+            // walletKit is emitting it again: the SDK dedupes emits within one run and
+            // only emits the unanswered head of its queue, so this request is still
+            // pending and needs its UI. Don't add it twice — just open it.
+            const topic = walletConnectItem?.session?.topic
+            if (topic) {
+              openIncomingWcRequest(topic)
+            }
           }
         }
         setTimeout(() => {
@@ -627,8 +637,7 @@ export default class ReduxService {
         if (!blockchainListReduxFinal[id]) {
           blockchainListReduxFinal[id] = {
             ...defaultChain,
-            keychain: `${defaultChain.chain}${id}`,
-            isSupportedChain: true
+            keychain: `${defaultChain.chain}${id}`
           }
         } else {
           // Re-pin the bundled local icon for existing default-chain entries so
@@ -658,11 +667,6 @@ export default class ReduxService {
             }
           })
 
-          let isSupportedChain = itemChain?.isSupportedChain
-          if ([chainType.tomo, chainType.fantom, chainType.one, chainType.okt].includes(itemChain?.chain)) {
-            isSupportedChain = false
-          }
-
           // For default chains we ship a bundled local icon (see
           // SUPPORTED_BLOCKCHAIN_DATA[...].icon). Never let the API's remote icon
           // URL override it — the local asset loads instantly and stays stable.
@@ -675,8 +679,7 @@ export default class ReduxService {
             ...blockchainListReduxFinal[itemChain.chainId],
             ...resApiClean,
             ...(defaultChain ? { icon: defaultChain.icon } : {}),
-            keyChain: lowerCase(`${itemChain.chain}${itemChain.chainId}`),
-            isSupportedChain
+            keyChain: lowerCase(`${itemChain.chain}${itemChain.chainId}`)
           }
         } catch (e) {
           // skip on api error
@@ -710,7 +713,7 @@ export default class ReduxService {
       await Promise.all(missing.map(async (id) => {
         const def = SUPPORTED_BLOCKCHAIN_DATA[id]
         if (def) {
-          list[id] = { ...def, keychain: `${def.chain}${id}`, isSupportedChain: true }
+          list[id] = { ...def, keychain: `${def.chain}${id}` }
           return
         }
         try {

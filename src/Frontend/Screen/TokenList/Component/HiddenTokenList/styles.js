@@ -1,5 +1,5 @@
 import { StyleSheet } from 'react-native'
-import { Colors, getHeightHeaderDrawer, getSafeAreaValues, pixelByHeight, pixelByWidth } from 'common/styles'
+import { Colors, getSafeAreaValues, pixelByHeight, pixelByWidth } from 'common/styles'
 
 const styles = StyleSheet.create({
   // flex:1 makes the page fill the fixed-height popup so the FlatList below can
@@ -9,16 +9,16 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: pixelByWidth(16)
   },
-  headerContainer: {
-    paddingVertical: pixelByHeight(12)
-  },
   // List takes the space left under the fixed header and scrolls within it.
   list: {
     flex: 1
   },
+  // Matches the input-to-first-row spacing of the Exchange token picker: its
+  // list sits 8 below the search (container gap) and rows pad 9 on top, while
+  // TokenRow pads 12 — so 5 here puts the first row's content at the same spot.
   listContent: {
     flexGrow: 1,
-    paddingTop: getHeightHeaderDrawer(),
+    paddingTop: pixelByHeight(5),
     paddingBottom: getSafeAreaValues().bottom
   },
   emptyWrap: {

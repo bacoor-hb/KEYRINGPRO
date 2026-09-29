@@ -324,6 +324,7 @@ const TokenListPage = (_this) => {
         </View>
         <MyText variant='small' style={styles.emptyHint}>{I18n.t('v2.tokenList.minValueHint', { value: `$${MIN_VALUE_USD}` })}</MyText>
         <MyButton
+          reRenderFocus
           size='small'
           label={I18n.t('v2.addToken.title')}
           icon={<MyIcon uri={images.UIV2.icons.plusMedium} style={styles.addTokenIcon} />}
@@ -339,6 +340,7 @@ const TokenListPage = (_this) => {
       <View style={styles.footerWrap}>
         <MyText variant='small' style={styles.emptyHint}>{I18n.t('v2.tokenList.minValueHint', { value: `$${MIN_VALUE_USD}` })}</MyText>
         <MyButton
+          reRenderFocus
           size='small'
           label={I18n.t('v2.addToken.title')}
           icon={<MyIcon uri={images.UIV2.icons.addWhite} variant='small' />}

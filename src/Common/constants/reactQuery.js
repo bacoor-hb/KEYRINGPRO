@@ -1,5 +1,6 @@
 export const REACT_QUERY_KEY = {
   getSendReceivedHistory: 'getSendReceivedHistory',
+  getRecipientSentHistory: 'getRecipientSentHistory',
   getTokenListHasPrice: 'getTokenListHasPrice',
   getWCPayHistory: 'getWCPayHistory',
   getRawTxExchange: 'getRawTxExchange',

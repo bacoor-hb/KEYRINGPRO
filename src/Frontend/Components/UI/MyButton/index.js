@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useCallback, useState } from 'react'
 import {
   StyleSheet,
   TouchableOpacity,
@@ -12,6 +12,7 @@ import GlassView from '../GlassView'
 import { getSizeStyle } from '../GlassView/sizeStyle'
 import Spinner from 'frontend/Components/Common/Spinner'
 import MyText from '../MyText'
+import { useFocusEffect } from '@react-navigation/native'
 /**
  * Clickable button. A <GlassView variant> is the surface — it owns the COLOR
  * (glass tint or fallback background); MyButton owns the SIZE and the content.
@@ -75,7 +76,8 @@ const MyButton = ({
   isDisable,
   urlImage,
   styleImage,
-  className
+  className,
+  reRenderFocus = false
 }) => {
   // A button hidden with `opacity: 0` keeps the native LiquidGlassView mounted
   // while invisible; iOS then materializes the glass on a hidden view (broken
@@ -86,8 +88,31 @@ const MyButton = ({
   const isTransparent = readOpacity(style) === 0
   const noGlass = disableLiquidGlass || isTransparent
 
+  // Remount GlassView after a tick to avoid Fabric "recycle a mounted view" crash when screen regains focus
+  const [mountedCount, setMountedCount] = useState(0)
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!reRenderFocus) {
+        return
+      }
+
+      // Reset key so GlassView remounts on every focus
+      setMountedCount(0)
+      // One frame later, bump key to force a fresh native mount
+      const timer = setTimeout(() => {
+        setMountedCount(Date.now())
+      }, 100)
+
+      return () => {
+        reRenderFocus && clearTimeout(timer)
+      }
+    }, [reRenderFocus])
+  )
+
   return (
     <TouchableOpacity
+      key={`${mountedCount}-btn-glass-view`}
       className={className}
       style={styles.touch}
       onPressIn={() => Keyboard.dismiss()}

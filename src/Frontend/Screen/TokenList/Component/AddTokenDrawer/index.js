@@ -6,6 +6,9 @@ import {
   TouchableWithoutFeedback,
   View
 } from 'react-native'
+// The result list lives inside a bottom-sheet drawer, so its scroller must be
+// gesture-handler's — RN's own ScrollView doesn't scroll there on Android.
+import { ScrollView } from 'react-native-gesture-handler'
 import LottieView from 'lottie-react-native'
 import { isAddress } from 'ethers/lib/utils'
 // TouchableOpacity is only used for the search button beside the input; the
@@ -24,7 +27,10 @@ import TitleDrawer from 'frontend/Components/UI/TitleDrawer'
 import images from 'assets/Image'
 import { Colors, getSizeImgSquare, pixelByHeight, pixelByWidth } from 'common/styles'
 import { LIST_DEFAULT_CHAIN_ID } from 'common/constants/chain'
-import { getRpcUrlByChain, getTokenName, lowerCase } from 'common/function'
+import { convertAddressArrToString, getRpcUrlByChain, getTokenName, lowerCase } from 'common/function'
+import { isNativeToken } from 'common/tokens'
+import { resolveApiYieldProtocol, resolveApiYieldAsset } from 'common/constants/lending'
+import { isShareBasedProtocol } from 'keyring-agent-core'
 import I18n from 'assets/Lang'
 import AllChainServices from 'controller/AllChainServices'
 import BaseAPI from 'controller/API/BaseAPI'
@@ -36,9 +42,20 @@ import { getAddress, formatUnits } from 'viem'
 import { FIELD_MIN_HEIGHT } from 'frontend/Screen/TokenDetailScreen/Component/SendToken/styles'
 import { filterTokenToShow } from 'frontend/Screen/TokenList/page'
 
-// EVM contract address is at most 42 chars (0x + 40 hex) — cap input length,
-// mirroring RegisterAddress.
+// EVM contract address is at most 42 chars (0x + 40 hex). Used to decide when a
+// mistyped address is worth flagging, not to cap the input any more — the field
+// now also takes a token name, which can be longer.
 const MAX_ADDRESS_LENGTH = 42
+
+// Input cap for the free-text search. Generous enough for the longest listed
+// token names while still refusing a pasted essay.
+const MAX_QUERY_LENGTH = 64
+
+// A single character is enough to search on. It does match thousands of tokens
+// (`key=a` answers with 8k+ on Ethereum) and only the API's first page of them
+// comes back, so the sort below can rank only what that page contained — a
+// one-letter query is a browse, not a lookup.
+const MIN_KEYWORD_LENGTH = 1
 
 const DEFAULT_CHAIN_ID_SET = new Set(LIST_DEFAULT_CHAIN_ID.map(Number))
 
@@ -47,11 +64,27 @@ const DEFAULT_CHAIN_ID_SET = new Set(LIST_DEFAULT_CHAIN_ID.map(Number))
 // the token-list refresh service.
 const KEYRING_TOKENS_ALL_API = 'keyrings/tokens/all'
 
+// Keyword search over the same Keyring token DB: `key` matches name, symbol AND
+// address (substring, case-insensitive) and works for custom chains too. This is
+// a DIFFERENT endpoint from KEYRING_TOKENS_ALL_API above — that one only filters
+// by exact `addresses` — and it answers with `result` as an object keyed by
+// address rather than an `items` array. Same endpoint the swap token picker uses
+// (see useGetTokenSearchByChain).
+const KEYRING_TOKEN_SEARCH_API = 'token-list/all'
+
+// One page of keyword hits. The API's own default is 50; asking for more just
+// buries the wanted token deeper in a list nobody scrolls.
+const SEARCH_RESULT_LIMIT = 50
+
 // Result states
 const RESULT_STATE = {
   IDLE: 'idle',
   LOADING: 'loading',
+  // ERROR is the address path's "this contract holds no token" answer; NO_MATCH
+  // is the keyword path's "nothing listed by that name". Two states because the
+  // two messages say different things to the user.
   ERROR: 'error',
+  NO_MATCH: 'noMatch',
   EXISTS: 'exists',
   SUCCESS: 'success'
 }
@@ -69,7 +102,7 @@ const AddTokenDrawer = ({ _this }) => {
     const others = active.filter((id) => !DEFAULT_CHAIN_ID_SET.has(id))
     return [...defaults, ...others].map((id) => {
       const info = blockchainListRedux?.[id] || {}
-      return { chainId: id, name: info?.name || `Chain ${id}`, icon: info?.icon, chain: info?.chain, chainCoingecko: info?.chainCoingecko, isSupportedChain: info?.isSupportedChain, linkProvider: info?.linkProvider }
+      return { chainId: id, name: info?.name || `Chain ${id}`, icon: info?.icon, chain: info?.chain, chainCoingecko: info?.chainCoingecko, linkProvider: info?.linkProvider }
     })
   }, [activeEvmChainIdsRedux, blockchainListRedux])
 
@@ -80,10 +113,13 @@ const AddTokenDrawer = ({ _this }) => {
     const filterChainId = _this?.state?.selectedChainId
     return chainList.find((c) => Number(c.chainId) === Number(filterChainId)) || chainList[0] || null
   })
-  const [contractAddress, setContractAddress] = useState('')
+  const [searchText, setSearchText] = useState('')
   const [resultState, setResultState] = useState(RESULT_STATE.IDLE)
-  const [tokenData, setTokenData] = useState(null)
-  const [isAdding, setIsAdding] = useState(false)
+  // Always a list: the address lookup produces a single-entry one, so the result
+  // rows below render the same way for both paths.
+  const [results, setResults] = useState([])
+  // metaKey of the row currently being added — only that row shows the spinner.
+  const [addingKey, setAddingKey] = useState(null)
   const dropdownRef = useRef(null)
 
   const formatAddress = (raw) => {
@@ -96,19 +132,22 @@ const AddTokenDrawer = ({ _this }) => {
     return addr
   }
 
-  // Inline address validation, mirroring RegisterAddress: start with "0x", and a
-  // full-length string that still isn't a valid EVM address is flagged. Only the
-  // shown-error / valid flags gate the search button.
-  const trimmedAddress = contractAddress.trim()
-  const isValidAddress = isAddress(trimmedAddress)
-  let addressError = ''
-  if (trimmedAddress.length > 0) {
-    if (!trimmedAddress.startsWith('0x') && !trimmedAddress.toLowerCase().startsWith('xdc')) {
-      addressError = I18n.t('v2.addToken.addressMustStart')
-    } else if (trimmedAddress.length === MAX_ADDRESS_LENGTH && !isValidAddress) {
-      addressError = I18n.t('v2.addToken.invalidContract')
-    }
-  }
+  // The field takes either a contract address or a free-text name/symbol, so the
+  // query decides which lookup runs: a valid EVM address goes to the by-address
+  // path (unchanged), anything else to the keyword search.
+  //
+  // Only one inline error survives from the address-only days: a full-length
+  // 0x-string that still isn't a valid address is a mistyped address, not a token
+  // name, so it's worth flagging. The old "must start with 0x" error is gone —
+  // under the new placeholder a name that doesn't start with 0x is correct input.
+  const trimmedQuery = searchText.trim()
+  const isValidAddress = isAddress(trimmedQuery)
+  const looksLikeAddress = trimmedQuery.startsWith('0x') || trimmedQuery.toLowerCase().startsWith('xdc')
+  const addressError = (looksLikeAddress && trimmedQuery.length >= MAX_ADDRESS_LENGTH && !isValidAddress)
+    ? I18n.t('v2.addToken.invalidContract')
+    : ''
+  // Enough to search on: a real address, or a keyword past the minimum length.
+  const canSearch = !addressError && (isValidAddress || trimmedQuery.length >= MIN_KEYWORD_LENGTH)
 
   // True when this chain+contract is already a visible token in the connected
   // account's list — used to show the "already exists" error on search instead
@@ -130,20 +169,23 @@ const AddTokenDrawer = ({ _this }) => {
   }
 
   const handleSearch = async () => {
-    if (!selectedChain || !isValidAddress) return
-    const addr = formatAddress(contractAddress)
-    const chainId = Number(selectedChain.chainId)
+    if (!selectedChain || !canSearch) return
     Keyboard.dismiss()
+    // Not an address → keyword search over name/symbol.
+    if (!isValidAddress) return handleKeywordSearch()
+
+    const addr = formatAddress(searchText)
+    const chainId = Number(selectedChain.chainId)
 
     // Already in the wallet -> surface the inline error immediately, skip the lookup.
     if (isTokenAlreadyAdded(chainId, addr)) {
-      setTokenData(null)
+      setResults([])
       setResultState(RESULT_STATE.EXISTS)
       return
     }
 
     setResultState(RESULT_STATE.LOADING)
-    setTokenData(null)
+    setResults([])
     try {
       // 1. Prefer the Keyring token API — it already carries price + metadata
       //    and means the token is a known ERC20, so we can skip the on-chain
@@ -156,10 +198,10 @@ const AddTokenDrawer = ({ _this }) => {
         // listed shows the same ticker as one added while it isn't — the path
         // below reads the contract directly. Keeps the listing symbol when the
         // contract can't answer.
-        setTokenData({
+        setResults([{
           ...meta,
           symbol: (await resolveOnchainSymbolFor(chainId, addr, keyring?.symbolOnchain)) || meta.symbol
-        })
+        }])
         setResultState(RESULT_STATE.SUCCESS)
         return
       }
@@ -181,7 +223,39 @@ const AddTokenDrawer = ({ _this }) => {
         setResultState(RESULT_STATE.ERROR)
         return
       }
-      setTokenData(meta)
+      setResults([meta])
+      setResultState(RESULT_STATE.SUCCESS)
+    } catch {
+      setResultState(RESULT_STATE.ERROR)
+    }
+  }
+
+  // Free-text path: ask the Keyring search endpoint for this chain's tokens whose
+  // name/symbol/address contains the query. Unlike the address path there is no
+  // on-chain fallback — a token the API doesn't list can't be found by name, only
+  // by its contract address.
+  const handleKeywordSearch = async () => {
+    const chainId = Number(selectedChain.chainId)
+    setResultState(RESULT_STATE.LOADING)
+    setResults([])
+    try {
+      const list = await _fetchTokensByKeyword(chainId, trimmedQuery)
+      if (list.length === 0) {
+        setResultState(RESULT_STATE.NO_MATCH)
+        return
+      }
+      // Drop what the wallet already shows — adding it again is a no-op, so
+      // offering it is just noise. Same predicate the address path uses, so a
+      // token hidden by the user (or filtered out for having no value) stays
+      // listed: re-adding it is exactly how it comes back.
+      const addable = list.filter((token) => !isTokenAlreadyAdded(chainId, token.contractAddress))
+      if (addable.length === 0) {
+        // The query DID match, every hit is already in the wallet. "No matching
+        // token" would read as a lie, so say what the address path says.
+        setResultState(RESULT_STATE.EXISTS)
+        return
+      }
+      setResults(addable)
       setResultState(RESULT_STATE.SUCCESS)
     } catch {
       setResultState(RESULT_STATE.ERROR)
@@ -199,8 +273,8 @@ const AddTokenDrawer = ({ _this }) => {
     _this?.setSelectedChainId && _this.setSelectedChainId(Number(chainId))
   }
 
-  const handleAdd = async () => {
-    if (!tokenData || !selectedChain || isAdding) return
+  const handleAdd = async (tokenData) => {
+    if (!tokenData || !selectedChain || addingKey) return
     const address = lowerCase(_this?.props?.route?.params?.address || '')
     if (!address) return
 
@@ -231,8 +305,15 @@ const AddTokenDrawer = ({ _this }) => {
       return
     }
 
-    setIsAdding(true)
+    setAddingKey(metaKey)
     try {
+      // The keyword path lists 50 tokens at a time, so it can't read `symbol()`
+      // for each of them up front the way the address path does — resolve it here
+      // instead, for the one token actually being added. `symbolOnchain` from the
+      // API short-circuits the RPC, and the resolver caches per chainId:address,
+      // so the address path (which already resolved on search) pays nothing.
+      const symbolOnchain = await resolveOnchainSymbolFor(chainId, contractAddr, tokenData.symbolOnchain)
+
       // Best-effort balance for the connected account so the row is meaningful
       // immediately; a later refresh recomputes it from Moralis/multicall.
       const { balance, balanceFormatted } = await _fetchBalance(
@@ -241,12 +322,7 @@ const AddTokenDrawer = ({ _this }) => {
         address,
         tokenData.decimals
       )
-      // For a share-based vault the API price quotes the UNDERLYING asset while
-      // the balance is in SHARES, so `balance x price` understates the position.
-      // resolveKeyringTokenPriceUSD reads the vault on-chain and returns the
-      // per-SHARE price, which is the unit `balanceFormatted` is actually in. It
-      // returns null when the read fails (and passes plain tokens straight
-      // through), so the API price stays the fallback.
+      // Priced in the unit `balanceFormatted` is in (per share for a vault).
       const { priceUSD, isYieldConverted } = await _resolvePriceUSD(chainId, contractAddr, tokenData)
       const valueUSD = balanceFormatted * priceUSD
 
@@ -254,7 +330,7 @@ const AddTokenDrawer = ({ _this }) => {
         chainId,
         contractAddress: contractAddr,
         metaKey,
-        symbol: tokenData.symbol || '',
+        symbol: symbolOnchain || tokenData.symbol || '',
         name: tokenData.name || tokenData.symbol || '',
         iconUrl: tokenData.iconUrl || '',
         decimals: tokenData.decimals,
@@ -295,16 +371,19 @@ const AddTokenDrawer = ({ _this }) => {
       ReduxService.setAccountTokenList({ ...freshList, [address]: { ...freshEntry, tokens, userHiddenKeys } })
       syncChainFilter(chainId)
     } finally {
-      setIsAdding(false)
+      setAddingKey(null)
       _this?.closeDrawer && _this.closeDrawer()
     }
   }
 
   const handleChangeText = (text) => {
-    // Trim + cap to the max EVM address length, matching RegisterAddress.
-    setContractAddress(text.trim().slice(0, MAX_ADDRESS_LENGTH))
+    // Only the LEADING whitespace is stripped: a token name legitimately contains
+    // spaces ("Wrapped Ether"), and trimming the whole string on every keystroke
+    // would eat the space the moment it's typed. The trailing space is dropped by
+    // `trimmedQuery` when the search actually runs.
+    setSearchText(text.replace(/^\s+/, '').slice(0, MAX_QUERY_LENGTH))
     setResultState(RESULT_STATE.IDLE)
-    setTokenData(null)
+    setResults([])
   }
 
   const renderChainIcon = (chain, variantIcon = 'small') => {
@@ -338,7 +417,7 @@ const AddTokenDrawer = ({ _this }) => {
           onSelect={(item) => {
             setSelectedChain(item)
             setResultState(RESULT_STATE.IDLE)
-            setTokenData(null)
+            setResults([])
           }}
           renderItem={(item, index) => {
             const isLast = index === chainList.length - 1
@@ -367,7 +446,8 @@ const AddTokenDrawer = ({ _this }) => {
           )}
         </MySelectDropdown>
 
-        {/* Token contract address input — same MyInput area pattern as RegisterAddress. */}
+        {/* Token name / symbol / contract address input — same MyInput area
+          pattern as RegisterAddress. */}
         <View style={styles.inputRow}>
           <View style={styles.inputWrap}>
             <MyInput
@@ -375,10 +455,10 @@ const AddTokenDrawer = ({ _this }) => {
               isError={!!addressError}
               errMessage={addressError}
               typeInput='area'
-              value={contractAddress}
+              value={searchText}
               onChangeText={handleChangeText}
-              maxLength={MAX_ADDRESS_LENGTH}
-              placeholder={I18n.t('v2.addToken.contractPlaceholder')}
+              maxLength={MAX_QUERY_LENGTH}
+              placeholder={I18n.t('v2.addToken.searchPlaceholder')}
               autoCorrect={false}
               // Multiline area, but center the cursor/placeholder vertically (default
               // for a multiline input is top-aligned).
@@ -389,10 +469,10 @@ const AddTokenDrawer = ({ _this }) => {
           </View>
           <View style={styles.searchButtonWrap}>
             <TouchableOpacity
-              style={[styles.searchButton, (resultState === RESULT_STATE.LOADING || !isValidAddress) && { opacity: 0.5 }]}
+              style={[styles.searchButton, (resultState === RESULT_STATE.LOADING || !canSearch) && { opacity: 0.5 }]}
               onPress={handleSearch}
               activeOpacity={0.8}
-              disabled={resultState === RESULT_STATE.LOADING || !isValidAddress}
+              disabled={resultState === RESULT_STATE.LOADING || !canSearch}
             >
               {resultState === RESULT_STATE.LOADING
                 ? <LottieView style={styles.searchLoadingDots} source={images.threeDotsWhiteLoading} autoPlay loop />
@@ -410,6 +490,14 @@ const AddTokenDrawer = ({ _this }) => {
           />
         )}
 
+        {resultState === RESULT_STATE.NO_MATCH && (
+          <StatusMessage
+            variant='error'
+            message={I18n.t('v2.addToken.noMatching')}
+            style={styles.statusError}
+          />
+        )}
+
         {resultState === RESULT_STATE.EXISTS && (
           <StatusMessage
             variant='error'
@@ -418,26 +506,53 @@ const AddTokenDrawer = ({ _this }) => {
           />
         )}
 
-        {resultState === RESULT_STATE.SUCCESS && tokenData && (
-          <View style={styles.resultRow}>
-            <TokenIconWithChain
-              tokenIconUri={tokenData.iconUrl}
-              chainId={Number(selectedChain?.chainId)}
-            />
-            {/* Content carries the bottom divider so it runs from the text to the
-              page edge, leaving the icon out (matches design). */}
-            <View style={styles.resultContent}>
-              <MyText style={styles.tokenName}>{tokenData.symbol || tokenData.name || '-'}</MyText>
-              <MyButton
-                size='small'
-                label={I18n.t('v2.common.add')}
-                disableLiquidGlass
-                onPress={handleAdd}
-                isLoading={isAdding}
-                isDisable={isAdding}
-              />
-            </View>
-          </View>
+        {/* One row per hit — an address lookup simply produces a list of one, so
+          the single-result layout is unchanged. Fills the rest of the drawer and
+          scrolls inside it, so a 50-hit keyword search can't run off the screen;
+          must come from gesture-handler or the list won't scroll inside a drawer
+          on Android. */}
+        {resultState === RESULT_STATE.SUCCESS && results.length > 0 && (
+          <ScrollView
+            style={styles.resultList}
+            keyboardShouldPersistTaps='handled'
+            showsVerticalScrollIndicator={false}
+          >
+            {results.map((token) => {
+              const metaKey = buildMetaKey(Number(selectedChain?.chainId), lowerCase(token.contractAddress))
+              return (
+                <View key={metaKey} style={styles.resultRow}>
+                  <TokenIconWithChain
+                    tokenIconUri={token.iconUrl}
+                    chainId={Number(selectedChain?.chainId)}
+                  />
+                  {/* Content carries the bottom divider so it runs from the text to the
+                    page edge, leaving the icon out (matches design). */}
+                  <View style={styles.resultContent}>
+                    <View style={styles.tokenTextWrap}>
+                      {/* subTitle (18px/700) — same weight TokenRow gives a token's
+                        name, so the ticker leads the row and the address below
+                        reads as secondary. */}
+                      <MyText fontWeight='700' style={styles.tokenName}>{token.symbol || token.name || '-'}</MyText>
+                      {/* Keyword hits routinely share a ticker (a dozen tokens
+                        answer to "usdc"), so the contract address is what tells
+                        them apart. */}
+                      <MyText className='text-medium'>
+                        {convertAddressArrToString([token.contractAddress])}
+                      </MyText>
+                    </View>
+                    <MyButton
+                      size='small'
+                      label={I18n.t('v2.common.add')}
+                      disableLiquidGlass
+                      onPress={() => handleAdd(token)}
+                      isLoading={addingKey === metaKey}
+                      isDisable={!!addingKey}
+                    />
+                  </View>
+                </View>
+              )
+            })}
+          </ScrollView>
         )}
       </View>
     </TouchableWithoutFeedback>
@@ -506,6 +621,63 @@ const _fetchKeyringToken = async (chainId, contractAddress) => {
   }
 }
 
+// Ranks a keyword hit: lower is better. `key` is a plain substring match over
+// name, symbol AND address, so the token the user meant is rarely first —
+// searching "usdc" on Ethereum answers with 62 rows and the real USDC sitting at
+// position 32, behind a wall of vault wrappers (spUSDC, aEthLidoUSDC, steakcusdc…).
+// The API exposes no sort, and neither `market_cap` nor `market_cap_rank` can
+// break the tie: a wrapper inherits both from its underlying asset, so every
+// "usdc" hit reports the same 74.5B cap and rank 6. An exact ticker match does
+// separate them, with real trading volume as the tie-breaker below.
+const _scoreKeywordMatch = (item, keyword) => {
+  const symbol = lowerCase(item?.symbol || '')
+  const name = lowerCase(item?.name || '')
+  if (symbol === keyword) return 0
+  if (name === keyword) return 1
+  if (symbol.startsWith(keyword)) return 2
+  if (name.startsWith(keyword)) return 3
+  return 4
+}
+
+// Keyword lookup against the Keyring search endpoint. Returns normalized metadata
+// in the same shape as the by-address path, best match first. An empty list means
+// the chain lists nothing by that name — NOT that the request failed (a failure
+// throws, and the caller shows the generic error instead).
+const _fetchTokensByKeyword = async (chainId, keyword) => {
+  const res = await BaseAPI.getData(KEYRING_TOKEN_SEARCH_API, {
+    chainId: Number(chainId),
+    key: keyword,
+    limit: SEARCH_RESULT_LIMIT
+  })
+  // This endpoint answers with `result` as an object KEYED BY ADDRESS, not the
+  // `items` array the rest of the token API uses.
+  const result = res?.result
+  if (!result || typeof result !== 'object') return []
+
+  const query = lowerCase(keyword)
+  const unique = new Map()
+  Object.values(result).forEach((item) => {
+    // The chain's NATIVE entry comes back with an empty address (and can match a
+    // keyword — "eth" does on Katana). It is already in every token list and has
+    // no contract to add, so drop it.
+    if (!item?.address || isNativeToken(item.address, Number(chainId))) return
+    const key = lowerCase(item.address)
+    if (!unique.has(key)) unique.set(key, item)
+  })
+
+  return [...unique.values()]
+    .sort((a, b) => (
+      _scoreKeywordMatch(a, query) - _scoreKeywordMatch(b, query) ||
+      _toNumber(b?.total_volume) - _toNumber(a?.total_volume)
+    ))
+    .map((item) => ({
+      ..._keyringToTokenMeta(item, item.address),
+      // Deliberately outside `_buildMeta`: this is an INPUT to the on-chain symbol
+      // resolution done at add time, never a field the token list stores.
+      symbolOnchain: item?.symbolOnchain
+    }))
+}
+
 // Map a raw Keyring entry → normalized metadata.
 const _keyringToTokenMeta = (keyring, contractAddress) => _buildMeta({
   contractAddress,
@@ -525,8 +697,12 @@ const _keyringToTokenMeta = (keyring, contractAddress) => _buildMeta({
   socials: _buildSocials(keyring),
   // This entry came from a BY-ADDRESS Keyring lookup — authoritative on yield
   // identity — so an absent tag is a real answer and is recorded as `null`.
-  yieldProtocol: keyring?.yieldProtocol || null,
-  yieldAsset: keyring?.yieldAsset || null
+  // Through the two-field resolver, not `keyring.yieldProtocol` directly: a
+  // protocol the API serves only in `yieldProtocolV2` (Maple today) would
+  // otherwise be added as a plain token — no per-share pricing, no APY card, no
+  // protocol logo — for the whole life of the entry.
+  yieldProtocol: resolveApiYieldProtocol(keyring) || null,
+  yieldAsset: resolveApiYieldAsset(keyring) || null
 })
 
 // Fallback path: resolve name/symbol/decimals on-chain, then enrich price +
@@ -579,20 +755,16 @@ const _getTokenMeta = async (rpcUrl, address, chain) => {
   }
 }
 
-// Price in the same unit as `balanceFormatted`, plus whether it came from a
-// conversion. Plain tokens keep the API price; a share-based vault is re-read
-// on-chain so the number is per SHARE rather than per underlying unit.
-//
-// Falls back to the API price whenever the conversion isn't possible (not a
-// vault, missing yieldAsset, RPC failure) — the value is then merely stale
-// rather than wrong by the share ratio, and the next full refresh corrects it.
-// `isYieldConverted` reports what actually happened rather than being inferred
-// from the two prices differing, which would misreport a vault trading at par.
+// Price in the same unit as `balanceFormatted`, plus whether it is a converted
+// per-SHARE price. Yield tokens are priced by resolveKeyringTokenPriceUSD — the
+// same rules as the token list (rebasing → underlying's unit price, share vault
+// → per-share price read on-chain). Falls back to the API price when that
+// fails; the next full refresh corrects it.
 const _resolvePriceUSD = async (chainId, contractAddress, tokenData) => {
   const apiPrice = { priceUSD: tokenData.priceUSD, isYieldConverted: false }
   if (!tokenData?.yieldProtocol) return apiPrice
   try {
-    const perShare = await resolveKeyringTokenPriceUSD(chainId, {
+    const price = await resolveKeyringTokenPriceUSD(chainId, {
       address: contractAddress,
       symbol: tokenData.symbol,
       decimals: tokenData.decimals,
@@ -600,7 +772,9 @@ const _resolvePriceUSD = async (chainId, contractAddress, tokenData) => {
       yieldProtocol: tokenData.yieldProtocol,
       yieldAsset: tokenData.yieldAsset
     })
-    return perShare > 0 ? { priceUSD: perShare, isYieldConverted: true } : apiPrice
+    return price > 0
+      ? { priceUSD: price, isYieldConverted: isShareBasedProtocol(tokenData.yieldProtocol) }
+      : apiPrice
   } catch {
     return apiPrice
   }
@@ -627,7 +801,11 @@ const _fetchBalance = async (chainTypeOrChainId, contractAddress, accountAddress
 }
 
 const styles = StyleSheet.create({
+  // flex:1 makes the page fill the fixed-height drawer so the result list below
+  // can own whatever is left under the input and scroll inside it — without it
+  // the list is only as tall as its own cap and leaves dead space at the bottom.
   container: {
+    flex: 1,
     paddingHorizontal: pixelByWidth(16),
     paddingBottom: pixelByHeight(24)
   },
@@ -693,6 +871,13 @@ const styles = StyleSheet.create({
     width: getSizeImgSquare('small'),
     height: getSizeImgSquare('small')
   },
+  // Takes all the height left under the input rather than a fixed cap, so the
+  // results run to the bottom of the drawer instead of stopping short of it. A
+  // single hit (the address path) still renders as one row — the list just no
+  // longer reserves a box of its own.
+  resultList: {
+    flex: 1
+  },
   resultRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -714,8 +899,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: pixelByHeight(14)
   },
-  tokenName: {
+  // Symbol over shortened address — takes the row's free width so the Add button
+  // keeps its natural size.
+  tokenTextWrap: {
     flex: 1,
+    gap: pixelByHeight(2)
+  },
+  tokenName: {
     color: Colors.WHITE
   }
 })

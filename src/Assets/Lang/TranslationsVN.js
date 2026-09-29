@@ -36,7 +36,8 @@ export default {
     addToken: {
       title: 'Thêm token',
       selectNetwork: 'Chọn mạng lưới',
-      contractPlaceholder: 'Địa chỉ hợp đồng token',
+      searchPlaceholder: 'Tên, ký hiệu hoặc địa chỉ token',
+      noMatching: 'Không tìm thấy token phù hợp',
       addressMustStart: 'Địa chỉ phải bắt đầu bằng “0x”',
       invalidContract: 'Địa chỉ hợp đồng không hợp lệ',
       noTokenFound: 'Không có token nào liên kết với địa chỉ hợp đồng này'
@@ -199,7 +200,9 @@ export default {
       noName: 'Không có tên',
       noHash: 'Không có mã băm',
       interactWith: 'Tương tác với',
-      history: 'Lịch sử'
+      history: 'Lịch sử',
+      changeAccount: 'Đổi tài khoản',
+      selectAccount: 'Chọn tài khoản'
     },
     wcConnect: {
       selectAccount: 'Chọn tài khoản để kết nối',
@@ -286,11 +289,10 @@ export default {
     },
     backup: {
       noBackupFile: 'Chưa tạo bản sao lưu ví',
-      saveToExternal: 'Vui lòng lưu bản sao lưu ví vào thiết bị lưu trữ',
-      fileNamedKeyring: 'Tệp sao lưu ví của bạn có tên là "keyring". Vui lòng lưu tệp mà không đổi tên.',
-      chooseFolder: 'Bạn có thể lưu tệp sao lưu ví vào thư mục "Downloads" hoặc "Documents" trên thiết bị của mình.',
-      onlyYouKnowPassword: 'Bạn là người duy nhất biết mật khẩu mình đã đặt.',
-      dontForgetPassword: 'Hãy cẩn thận đừng quên mật khẩu của bạn!',
+      saveToExternal: 'Chúng tôi khuyến nghị lưu bản sao lưu ví trên thiết bị lưu trữ bên ngoài đáng tin cậy.\n\nTệp sao lưu chứa thông tin khóa riêng tư đã được mã hóa và được bảo vệ bằng mật khẩu bạn đã thiết lập.',
+      fileNamedKeyring: 'Bạn cần tạo bản sao lưu ví mới mỗi khi tạo một tài khoản mới.',
+      onlyYouKnowPassword: 'Tên tệp sao lưu là “Keyring”. Vui lòng lưu tệp mà không thay đổi tên tệp.',
+      dontForgetPassword: 'Chỉ bạn biết mật khẩu đã thiết lập. Vui lòng đảm bảo ghi nhớ và bảo mật mật khẩu. Nếu bạn mất mật khẩu, bạn sẽ không thể khôi phục ví từ tệp sao lưu.',
       backupHistory: 'Lịch sử sao lưu'
     },
     exportNfc: {
@@ -430,6 +432,7 @@ export default {
   },
   AISearch: {
     welcome: 'Chào mừng! Tôi là Đặc vụ Keyring. Tôi có thể hỗ trợ gì cho bạn về DeFi hôm nay?',
+    suggestionsIntro: 'Tôi là Đặc vụ Keyring. Tôi có thể hỗ trợ gì cho bạn về DeFi hôm nay?',
     tellMeAboutToken: 'Hãy cho tôi biết về token {{value}}.',
     thisToken: 'token này',
     learnMoreAbout: 'Tìm hiểu thêm về {{value}}',
@@ -838,12 +841,11 @@ export default {
     maxExceedsRange: 'Giá tối đa vượt quá phạm vi cho phép (tối đa %{max})',
     amountOf: 'Số lượng %{symbol}',
     spendable: 'Có thể chi tiêu',
-    insufficientBalance: 'Số lượng vượt quá số dư có thể chi tiêu',
+    insufficientBalance: 'Số dư không đủ',
     addLiquidity: 'Thêm thanh khoản',
     amount: 'Số lượng',
     ratio: 'Tỷ lệ chia tách',
     expectedAmount: 'Dự kiến %{symbol}',
-    confirmAndSign: 'Xác nhận & Ký',
     retry: 'Thử lại',
     sending: 'Đang gửi',
     approxTime: 'Thời gian ước tính: vài giây',
@@ -854,7 +856,6 @@ export default {
     quoteExpired: 'Báo giá đã hết hạn',
     quoteExpiredDesc: 'Báo giá này không còn hiệu lực do giá pool đã thay đổi. Vui lòng yêu cầu lại để nhận giao dịch cập nhật mới nhất.',
     confirmAddLiquidityMessage: 'Tôi muốn thêm thanh khoản vào %{pair} (mức phí %{fee}) trên %{chainName} với %{amount} %{symbol}, phạm vi giá từ %{minPrice} đến %{maxPrice} (Địa chỉ bể thanh khoản: %{pool})',
-    walletActionSend: 'Gửi',
     walletActionApprove: 'Phê duyệt',
     supplyTitle: 'Supply %{symbol}',
     supplyStepApprove: 'Phê duyệt',
@@ -879,8 +880,6 @@ export default {
     walletActionReceiver: 'Địa chỉ người nhận',
     walletActionSpender: 'Địa chỉ chi tiêu',
     walletActionAllowance: 'Hạn mức phê duyệt',
-    walletActionCollection: 'Bộ sưu tập',
-    walletActionTokenId: 'ID token',
     walletActionEditionsDefault: '1',
     walletActionUnlimited: 'Không giới hạn',
     walletActionEnterContract: 'Nhập hợp đồng',
@@ -901,10 +900,17 @@ export default {
     walletActionPayFeeAndExecute: 'Thanh toán phí và thực thi',
     walletActionFeeNotice: '※ Phí: %{fee}',
     x402Settlement: '%{amount} USDC trên Base',
-    confirmSendNativeMessage: 'Tôi muốn gửi %{amount} %{symbol} đến %{to} trên %{chainName}',
-    confirmSendTokenMessage: 'Tôi muốn gửi %{amount} %{symbol} đến %{to} trên %{chainName} (Hợp đồng token: %{contract})',
-    confirmSendNftMessage: 'Tôi muốn gửi NFT %{nft} #%{tokenId} (x%{amount}) đến %{to} trên %{chainName} (Hợp đồng: %{contract})',
-    confirmApproveTokenMessage: 'Tôi muốn phê duyệt %{amount} %{symbol} cho bên chi tiêu %{spender} trên %{chainName} (Hợp đồng token: %{contract})',
-    confirmApproveTokenUnlimitedMessage: 'Tôi muốn phê duyệt không giới hạn %{symbol} cho bên chi tiêu %{spender} trên %{chainName} (Hợp đồng token: %{contract})'
+    swapTitle: 'Hoán đổi',
+    buyTitle: 'Mua',
+    swapTitleWith: 'Hoán đổi %{symbol}',
+    buyTitleWith: 'Mua %{symbol}',
+    swapSideFrom: 'Từ',
+    swapSideTo: 'Đến',
+    swapSideSell: 'Bán',
+    swapSideBuy: 'Mua',
+    swapRefreshQuote: 'Làm mới',
+    swapReceivedAbout: 'Bạn sẽ nhận được khoảng %{amount} %{symbol}',
+    swapApproveFailed: 'Giao dịch phê duyệt thất bại nên không có token nào được swap.',
+    swapApproveNotVisible: 'Yêu cầu phê duyệt đã được gửi nhưng chưa hiển thị trên blockchain. Chưa có token nào được swap — vui lòng thử lại sau một lát.'
   }
 }

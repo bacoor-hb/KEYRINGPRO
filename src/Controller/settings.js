@@ -42,7 +42,10 @@ const settings = () => {
       143: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.monad-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
       57073: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.ink-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
       4217: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.tempo-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
-      4663: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.robinhood-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`
+      4663: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.robinhood-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
+      81457: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.blast-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
+      1329: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.sei-pacific.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`,
+      5042: `https://${Config.SERVICE_QUICKNODE_ENDPOINT_NAME}.arc-mainnet.quiknode.pro/${Keys.secureFor('SERVICE_QUICKNODE_API_KEY')}`
     }
   }
 }

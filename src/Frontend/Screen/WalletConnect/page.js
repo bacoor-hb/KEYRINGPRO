@@ -100,7 +100,7 @@ const WalletConnectPage = ({ _this, func }) => {
       <View style={styles.containerButton} className='flex flex-row justify-between'>
         <View className='flex flex-1'>
           <MyButton size='small' onPress={handleViewHistoryWCP} className='w-full'>
-            <MyTextTicker>
+            <MyTextTicker className='text-medium'>
               {I18n.t('v2.walletConnect.payHistory')}
             </MyTextTicker>
           </MyButton>

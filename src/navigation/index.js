@@ -1,4 +1,5 @@
 import React from 'react'
+import { Platform } from 'react-native'
 import { NavigationContainer } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 // import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
@@ -32,6 +33,7 @@ import UnlockScreen from 'frontend/Screen/UnlockScreen'
 import TokenListScreen from 'frontend/Screen/TokenList'
 import TokenDetailScreen from 'frontend/Screen/TokenDetailScreen'
 import AISearchScreen from 'frontend/Screen/AISearch'
+import WalletConnectRequestHost from 'frontend/Components/WalletConnectRequestHost'
 
 // Old screen, will remove after new screen is ready
 // import RestoreWalletScreen from 'frontend/Screen/RestoreWalletScreen'
@@ -42,8 +44,13 @@ const Stack = createNativeStackNavigator()
 
 const defaultScreenOptions = {
   headerShown: false,
-  animation: 'slide_from_right', // Bug here: https://github.com/react-navigation/react-navigation/issues/12377
-  animationDuration: 100
+  // Android only. react-native-screens reads the transition duration from static XML
+  // resources, so `animationDuration` (iOS-only) is ignored there: `slide_from_right`
+  // is pinned to config_mediumAnimTime (400ms). `ios_from_right` is a different preset
+  // backed by config_shortAnimTime (200ms) with an iOS-like parallax on the outgoing
+  // screen. iOS keeps `slide_from_right` so its transition is untouched.
+  animation: Platform.select({ android: 'ios_from_right', ios: 'slide_from_right' }),
+  animationDuration: 100 // Bug here: https://github.com/react-navigation/react-navigation/issues/12377
 
 }
 
@@ -89,6 +96,7 @@ const AppNavigator = ({ initialRouteName = NAME_SCREEN.welcome }) => {
         <Stack.Screen name={NAME_SCREEN.tokenDetail} component={TokenDetailScreen} />
         <Stack.Screen name={NAME_SCREEN.aiSearch} component={AISearchScreen} options={{ animation: 'fade', gestureEnabled: false }} />
       </Stack.Navigator>
+      <WalletConnectRequestHost />
     </NavigationContainer>
   )
 }

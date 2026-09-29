@@ -161,8 +161,6 @@ const OtherNetwork = ({ _this }) => {
           chain,
           chainId: id,
           keyChain: `${chain}${id}`,
-          isCustomChainData: true,
-          isSupportedChain: false,
           addedAt: addedAtSeq++
         }
         blockchainChanged = true

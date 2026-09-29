@@ -202,9 +202,20 @@ const useGetNameFunctionDecoded = (requestTxData) => {
   // Check if this is approve transaction for ERC20 token (not ERC721 NFT)
   const isConfirmApprove = isApproveMethod && isERC720
 
-  // Prefer the scan-API decoder's inputs; fall back to the local selector decode
-  // above when the scan API couldn't resolve this chain/contract.
-  const approveInputs = decodedTxData?.inputs || localApproveDecoded?.inputs
+  // Prefer the LOCAL selector decode; fall back to the scan-API decoder only when
+  // the calldata isn't a standard approve(address,uint256) (e.g. a CONFIRM_APPROVE
+  // whose data we can't decode ourselves).
+  //
+  // The order matters for more than preference: this value is part of the
+  // approveTokenInfo query key. The local decode is available synchronously on the
+  // first render, while the scan-API decode lands later — so preferring the scan
+  // API meant the key CHANGED mid-flight, re-running an already-resolved query.
+  // That blanked approveTokenInfo for a beat and made the spending-cap block flash
+  // the moment the method name appeared. The local decode keeps the key stable for
+  // the whole life of the card. It also yields a plain decimal string for the
+  // amount (vs the decoder's BN object), which formatUnits / MaxUint256.lte both
+  // handle directly.
+  const approveInputs = localApproveDecoded?.inputs || decodedTxData?.inputs
 
   // Cache approveTokenInfo by react-query
   const { data: approveTokenInfo, isLoading: isLoadingApproveInfo, isIdle: isIdleApproveInfo } = useQuery(

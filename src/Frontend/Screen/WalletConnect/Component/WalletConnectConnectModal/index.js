@@ -250,9 +250,7 @@ const WalletConnectConnectModal = ({
             ...chainItem,
             chain,
             chainId: id,
-            keyChain: `${chain}${id}`,
-            isCustomChainData: true,
-            isSupportedChain: false
+            keyChain: `${chain}${id}`
           }
           blockchainChanged = true
         }

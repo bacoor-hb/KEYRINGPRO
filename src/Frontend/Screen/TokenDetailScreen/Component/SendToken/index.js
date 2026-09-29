@@ -40,7 +40,8 @@ import {
   formatNumberBro,
   inpreciseRound,
   isObject,
-  isValidContract,
+  getAddressCode,
+  isEip7702DelegatedCode,
   isValidEVMAddressFormat as isValidAddress,
   lowerCase
 } from 'common/function'
@@ -428,9 +429,14 @@ const SendToken = ({ _this }) => {
   )
 
   // Is the recipient a contract? (extra on-chain getCode call, cached per address+chain).
+  // An EOA that delegated via EIP-7702 also carries code, but it is still an EOA, so it
+  // falls through to the normal EOA path below (history / malicious checks).
   const { data: isContractAddr, isLoading: isLoadingContract } = useQuery(
     ['isRecipientContract', txtAddress, chainId],
-    () => isValidContract(chainId, txtAddress),
+    async () => {
+      const code = await getAddressCode(chainId, txtAddress)
+      return code !== '0x' && !isEip7702DelegatedCode(code)
+    },
     { enabled: !isOwnAccount && isValidAddress(txtAddress) && !!chainId }
   )
 
@@ -557,9 +563,10 @@ const SendToken = ({ _this }) => {
   // Optimism's own oracle, so Base, Ink, Katana and every other rollup priced
   // their transactions with the L1 half missing. hasL1DataFee decides by looking
   // for the predeploy, so a rollup added later is covered without touching this
-  // file. Measured, the L1 half is small everywhere post-blob (0.3–2% of the
-  // fee), so this is a correctness fix, not the answer to a failing Max — that
-  // is MAX_FEE_SAFETY's job, and `isRollup` is reported back for it.
+  // file. Its weight varies by chain: post-blob it is 0.3–2% of the fee on
+  // OP-Stack, but on Scroll it is nearly the whole fee and grows with the
+  // transaction's byte size, which estimateL1DataFee sizes to match the signed
+  // transaction. `isRollup` is reported back for MAX_FEE_SAFETY.
   const getGasFeeLayer1 = async () => {
     try {
       const isRollup = await AllChainServices.hasL1DataFee(chainId)

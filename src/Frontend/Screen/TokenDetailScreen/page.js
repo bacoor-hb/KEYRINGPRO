@@ -31,6 +31,10 @@ import useGetSettingExchange from 'frontend/Hooks/useGetSettingExchange'
 import LottieRefreshFlatList from 'frontend/Components/UI/LottieRefreshFlatList'
 import { refreshAccountTokens } from 'src/Services/TokenListV2'
 import { isShareBasedProtocol } from 'keyring-agent-core'
+// The withdraw flow owns which market families it can encode an exit for, so the
+// row that OPENS that flow asks it rather than keeping a second list here.
+import { isRequestOnlyMarket } from './Component/WithdrawToken/abis'
+import { resolveYieldProtocol, canWithdrawFromProtocol } from './yieldProtocol'
 import HeroBalance from './Component/HeroBalance'
 
 // Up/down green & red shared by the chart, the price, and the 24h % so all
@@ -207,7 +211,20 @@ const TokenDetailScreenPage = (_this) => {
     { cacheTime: 0, staleTime: 0 }
   )
 
-  const yieldProtocol = token?.yieldProtocol
+  // The ONE protocol this position is described by, resolved from the two API
+  // fields (`yieldProtocolV2` first, then `yieldProtocol`) and limited to the
+  // five this app knows: Aave, Compound, Spark, Morpho, Maple. Anything else is
+  // null and the token renders plainly, price chart and all.
+  //
+  // Every consumer below reads this single value rather than a field, so the
+  // screen can never show one protocol and act on another.
+  const yieldProtocol = resolveYieldProtocol(token)
+
+  // Whether the withdraw row may be offered — a separate question, because being
+  // recognised is not the same as being exitable. False for Maple, whose exit is
+  // a queued request this app cannot sign. See `isRequestOnlyExit` for the
+  // second, market-level guard behind it.
+  const canWithdraw = canWithdrawFromProtocol(yieldProtocol)
 
   // Lazy-load real price history by coinGeckoId. Days from app settings (fallback 7).
   // A series shorter than 2 points can't be charted, so treat it as no data.
@@ -229,6 +246,12 @@ const TokenDetailScreenPage = (_this) => {
   // Deliberately NOT a bare `yieldProtocol` test, which would also catch
   // rebasing receipts (aave-v3 etc.) — their price IS the underlying's, so their
   // chart is correct and must keep rendering.
+  //
+  // Reads the RESOLVED protocol, so a vault served in either API field is caught
+  // — checking `token.yieldProtocol` alone would miss one the backend has moved
+  // to the newer field and put a misleading per-share curve on screen. Core's
+  // list names only the share-based families (spark, morpho), so a rebasing or
+  // view-only protocol still answers false here and keeps its price chart.
 
   const isYieldToken = useMemo(() => {
     const yieldAsset = token?.yieldAsset
@@ -239,13 +262,16 @@ const TokenDetailScreenPage = (_this) => {
 
   const chainId = token?.chainId
 
-  // Whether to look up a supply-APY series at all. DELIBERATELY broader than
-  // `isYieldToken` above: any token the API tagged with a `yieldProtocol` sits in
-  // a lending market, so it has an APY worth charting — including the rebasing
-  // receipts (aave-v3, compound-v3) that `isYieldToken` excludes because their
-  // PRICE chart is still correct. The two flags answer different questions:
-  // isYieldToken = "is the price series in the wrong unit?", this = "is there an
-  // APY to show?".
+  // Whether to look up a supply-APY series at all. True for any recognised
+  // position, withdrawable or not — Maple sits in a lending market with a rate
+  // worth charting just as Aave does, which is why the lookup is keyed on
+  // `yieldProtocol` rather than on withdrawability.
+  //
+  // Broader than `isYieldToken`: it takes the rebasing receipts (aave-v3,
+  // compound-v3) that one excludes because their PRICE chart is still correct.
+  // The two answer different questions: isYieldToken = "is the price series in
+  // the wrong unit?", this = "is there an APY to show?". A market core cannot
+  // resolve simply returns null, which the card handles.
   const hasYieldProtocol = !!yieldProtocol
 
   // The whole lending market behind this receipt token, from the core's
@@ -266,6 +292,31 @@ const TokenDetailScreenPage = (_this) => {
   // then the price-chart branch renders (its own loading / no-data states), so a
   // slow lending lookup never leaves the card blank.
   const apyChartData = lendingInfo?.series?.length > 1 ? lendingInfo.series : null
+
+  // Whether the APY card has anything of its own to say. Being TAGGED as a yield
+  // position is not enough: the tag comes from the token API, while every number
+  // on that card comes from the market lookup, and the two fail independently —
+  // the market may be missing from the catalogue, the chain's RPC may be down, or
+  // the upstream APY source may be unreachable. When that happens `lendingInfo`
+  // is null and the APY card renders empty: no rate, no size, no curve, and (for
+  // a share-based vault) not even a price to read.
+  //
+  // So the card is offered only when the lookup produced a rate or a series —
+  // anything less and the screen falls back to the ordinary price card, which
+  // always has the hero price, the rank and the change row to show. A market
+  // that resolves without an APY (identity only, enough to withdraw) is still
+  // no better than the price card as a CARD, and the withdraw row is gated
+  // separately on `lendingInfo?.contract`, so nothing is lost by falling back.
+  const hasApyData =
+    !!apyChartData ||
+    Number.isFinite(Number(lendingInfo?.currentApyPercent)) ||
+    Number.isFinite(Number(lendingInfo?.avgApyPercent))
+
+  // While the lookup is still in flight there is no verdict yet, so the APY card
+  // keeps the slot and shows its own spinner — flipping to the price card and
+  // back a moment later would be worse than waiting. Once it settles, the card
+  // stays only if it actually got data.
+  const showApyCard = hasYieldProtocol && (hasApyData || isLendingInfoLoading)
 
   // Refresh ONLY the token this screen shows. `tokenAddress` takes
   // refreshAccountTokens' targeted shortcut: a direct RPC read for this one
@@ -724,9 +775,38 @@ const TokenDetailScreenPage = (_this) => {
   // APY instead of a price, the pill on its right is the day-over-day APY change,
   // and the row beneath shows the market's total size. Layout mirrors
   // renderChartCard exactly so the two never shift the content below them.
+  // Markets this app cannot exit at all get NO withdraw row — not a dimmed one.
+  //
+  // The `disabled` prop above is for a market whose lookup has not landed yet:
+  // it resolves a moment later and the row goes live. Maple never does. Exiting
+  // a Syrup pool is `requestRedeem` joining a queue Maple settles hours to days
+  // later, which this drawer is not built to sign or represent, so the row would
+  // be permanently dead — and a dead control reads as a broken screen rather
+  // than an unsupported action. The position itself still shows in full.
+  //
+  // Kept alongside `canWithdraw` rather than replaced by it: the two catch the
+  // same case at different times and from different sources. `canWithdraw` reads
+  // the API's own field and is right immediately, on the first render; this one
+  // reads the market core resolved and so covers a position whose API tag is
+  // missing or stale — an older build's cached token, or a market that lands in
+  // the catalogue before the token feed is updated. Either alone would leave a
+  // gap, so the row requires both.
+  const isRequestOnlyExit = isRequestOnlyMarket(lendingInfo?.type)
+
   const renderApyChartCard = () => {
-    const change = Number(lendingInfo?.apyChangePercent)
-    const hasChange = Number.isFinite(change)
+    // `Number(null)` is 0 and `Number.isFinite(0)` is true, so coercing first
+    // would turn "no reading to compare against" into a green "+0.00%" pill — a
+    // claim that the rate held steady, from a market that never reported it.
+    // Core returns null on purpose whenever it cannot anchor the comparison, so
+    // the null is checked before the coercion, not after.
+    //
+    // The window is core's to choose and is NOT always an hour: a source with an
+    // hourly series is compared over 1h, while one publishing daily (Maple)
+    // compares its two newest days instead. The pill deliberately carries no
+    // timeframe label for that reason — it states the move, not the span.
+    const rawChange = lendingInfo?.apyChangePercent
+    const change = Number(rawChange)
+    const hasChange = rawChange !== null && rawChange !== undefined && Number.isFinite(change)
     // Denominated in the market's OWN asset (WETH, USDC, …), which core resolves
     // on chain — so the amount is always rendered with the symbol that came back
     // with it, never a hardcoded ticker. Symbol unreadable ⇒ show the bare number
@@ -991,7 +1071,7 @@ const TokenDetailScreenPage = (_this) => {
             />
           )
       }
-      {yieldProtocol
+      {canWithdraw && !isRequestOnlyExit
         ? (
           <OperationRow
             // `lendingInfo` is what carries the market's contract / protocol
@@ -1033,9 +1113,10 @@ const TokenDetailScreenPage = (_this) => {
             <>
               {renderHeroSection()}
               {/* A yield token whose lending market we resolved shows its APY
-                  history; everything else (and a yield token we couldn't match)
-                  keeps the price chart. */}
-              {yieldProtocol ? renderApyChartCard() : renderChartCard()}
+                  history; everything else — including a token the API tagged as
+                  a yield position but whose market/APY lookup came back empty —
+                  keeps the ordinary price card. */}
+              {showApyCard ? renderApyChartCard() : renderChartCard()}
               {renderInformationSection()}
               {renderOperations()}
             </>

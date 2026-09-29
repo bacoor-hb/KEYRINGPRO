@@ -1,9 +1,15 @@
 import { StyleSheet } from 'react-native'
-import { Colors, getHeightHeaderDrawer, getSizeImgSquare, pixelByHeight, pixelByWidth, sizeImageSquare } from 'common/styles'
+import { Colors, getHeightHeaderDrawer, getSafeAreaValues, getSizeImgSquare, pixelByHeight, pixelByWidth, sizeImageSquare } from 'common/styles'
 
 // Half the slider thumb — pads the track so the thumb at either extreme stays
 // inside the wrap instead of overlapping the label / card edge.
 const SLIDER_PAD = sizeImageSquare(11)
+
+// Height the pinned "Change account" footer takes: its top padding + the button
+// (MyButton size 'small' = pixelByHeight(44)) + the home-indicator inset.
+const FOOTER_PADDING_TOP = pixelByHeight(12)
+const FOOTER_BUTTON_HEIGHT = pixelByHeight(44)
+const FOOTER_HEIGHT = FOOTER_PADDING_TOP + FOOTER_BUTTON_HEIGHT + getSafeAreaValues().bottom
 
 const styles = StyleSheet.create({
   // No bg/radius here — the drawer wrapper renders MyLinearGradient + rounded-32.
@@ -40,14 +46,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: pixelByWidth(11)
   },
 
+  // The space for the pinned (absolute) header belongs to the CONTENT container,
+  // not to the ScrollView's own style. On Android, style padding offsets the
+  // content but is NOT counted in the native scroll range, so the last
+  // ~paddingTop px of a long list can never be scrolled into view (it stays
+  // hidden behind the pinned "Change account" footer). iOS accounts for it,
+  // which is why the bug is Android-only. Same pattern as the connect modal.
   bodyScroll: {
-    flex: 1,
-    paddingTop: getHeightHeaderDrawer() + pixelByHeight(8)
+    flex: 1
   },
   body: {
     gap: pixelByHeight(14),
-    // paddingTop: pixelByHeight(8),
+    paddingTop: getHeightHeaderDrawer() + pixelByHeight(8),
     paddingBottom: pixelByHeight(24)
+  },
+  // Applied on top of `body` only while the pinned footer is rendered: it floats
+  // OVER the body, so the room it needs has to come from the content padding
+  // (same reason as paddingTop above — Android leaves ScrollView style padding
+  // out of the native scroll range, making the last rows unreachable).
+  bodyFooterSpace: {
+    paddingBottom: FOOTER_HEIGHT + pixelByHeight(24)
   },
 
   // URL rows
@@ -146,6 +164,22 @@ const styles = StyleSheet.create({
     height: 1,
     marginHorizontal: pixelByWidth(16),
     backgroundColor: Colors.BG_BOX_SMALL
+  },
+
+  // "Change account" action pinned at the bottom of the sheet. Absolute (like the
+  // absolute TitleDrawer at the top) rather than a sibling below the ScrollView:
+  // as a sibling it would cut the scroll body short and nothing could ever pass
+  // behind it — the list has to scroll BEHIND the button's glass. The space it
+  // covers is reserved in the scroll content via `bodyFooterSpace`.
+  changeAccountFooter: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 2,
+    paddingHorizontal: pixelByWidth(16),
+    paddingTop: FOOTER_PADDING_TOP,
+    paddingBottom: getSafeAreaValues().bottom
   },
 
   // Empty state — bottom divider below the text, like the design.

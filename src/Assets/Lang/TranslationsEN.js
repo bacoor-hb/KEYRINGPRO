@@ -36,7 +36,8 @@ export default {
     addToken: {
       title: 'Add token',
       selectNetwork: 'Select network',
-      contractPlaceholder: 'Token contract address',
+      searchPlaceholder: 'Token name, symbol or address',
+      noMatching: 'No matching token',
       addressMustStart: 'Address must start with “0x”',
       invalidContract: 'Invalid contract address',
       noTokenFound: 'There are no tokens associated with this contract address'
@@ -199,7 +200,9 @@ export default {
       noName: 'No Name',
       noHash: 'No Hash',
       interactWith: 'Interact with',
-      history: 'History'
+      history: 'History',
+      changeAccount: 'Change account',
+      selectAccount: 'Select account'
     },
     wcConnect: {
       selectAccount: 'Select account to connect',
@@ -286,11 +289,10 @@ export default {
     },
     backup: {
       noBackupFile: 'No wallet backup has been created',
-      saveToExternal: 'Please save your wallet backup to external storage that you trust.',
-      fileNamedKeyring: 'Your wallet backup file is named "keyring". Please save it without changing its name.',
-      chooseFolder: 'You can choose to save the wallet backup file in the "Downloads" or "Documents" folder on your device.',
-      onlyYouKnowPassword: 'You are the only one who knows the password you set.',
-      dontForgetPassword: 'Be careful not to forget your password!',
+      saveToExternal: 'We recommend storing your wallet backup in a trusted external storage location.\n\nThe backup file contains encrypted private key information and is protected by the password you set.',
+      fileNamedKeyring: 'You need to create a new wallet backup each time you create a new account.',
+      onlyYouKnowPassword: 'The backup file is named “Keyring.” Please save it without changing the file name.',
+      dontForgetPassword: 'Only you know the password you set. Please make sure to keep it safe. If you lose your password, you will not be able to restore your wallet from the backup file.',
       backupHistory: 'Backup history'
     },
     exportNfc: {
@@ -430,6 +432,7 @@ export default {
   },
   AISearch: {
     welcome: 'Welcome! I’m Keyring Agent. How can I assist you with DeFi today?',
+    suggestionsIntro: 'I’m Keyring Agent. How can I assist you with DeFi today?',
     tellMeAboutToken: 'Tell me about token {{value}}.',
     thisToken: 'this token',
     learnMoreAbout: 'Learn more about {{value}}',
@@ -838,12 +841,11 @@ export default {
     maxExceedsRange: 'Max price exceeds allowed range (max %{max})',
     amountOf: 'Amount %{symbol}',
     spendable: 'Spendable',
-    insufficientBalance: 'Amount exceeds spendable balance',
+    insufficientBalance: 'Insufficient balance',
     addLiquidity: 'Add Liquidity',
     amount: 'Amount',
     ratio: 'Split ratio',
     expectedAmount: '%{symbol} expected',
-    confirmAndSign: 'Confirm & Sign',
     retry: 'Retry',
     sending: 'Sending',
     approxTime: 'Approximate time: a few seconds',
@@ -854,7 +856,6 @@ export default {
     quoteExpired: 'Quote expired',
     quoteExpiredDesc: 'This quote is no longer valid because pool prices have moved. Please ask again to get an updated transaction.',
     confirmAddLiquidityMessage: 'I want to add liquidity to %{pair} (%{fee} fee tier) on %{chainName} with %{amount} %{symbol}, price range from %{minPrice} to %{maxPrice} (Pool address: %{pool})',
-    walletActionSend: 'Send',
     walletActionApprove: 'Approve',
     supplyTitle: 'Supply %{symbol}',
     supplyStepApprove: 'Approve',
@@ -879,8 +880,6 @@ export default {
     walletActionReceiver: 'Receiver address',
     walletActionSpender: 'Spender address',
     walletActionAllowance: 'Allowance',
-    walletActionCollection: 'Collection',
-    walletActionTokenId: 'Token ID',
     walletActionEditionsDefault: '1',
     walletActionUnlimited: 'Unlimited',
     walletActionEnterContract: 'Enter contract',
@@ -901,10 +900,17 @@ export default {
     walletActionPayFeeAndExecute: 'Pay fee and execute',
     walletActionFeeNotice: '※ Fee: %{fee}',
     x402Settlement: '%{amount} USDC on Base',
-    confirmSendNativeMessage: 'I want to send %{amount} %{symbol} to %{to} on %{chainName}',
-    confirmSendTokenMessage: 'I want to send %{amount} %{symbol} to %{to} on %{chainName} (Token contract: %{contract})',
-    confirmSendNftMessage: 'I want to send NFT %{nft} #%{tokenId} (x%{amount}) to %{to} on %{chainName} (Contract: %{contract})',
-    confirmApproveTokenMessage: 'I want to approve %{amount} %{symbol} for spender %{spender} on %{chainName} (Token contract: %{contract})',
-    confirmApproveTokenUnlimitedMessage: 'I want to approve unlimited %{symbol} for spender %{spender} on %{chainName} (Token contract: %{contract})'
+    swapTitle: 'Swap',
+    buyTitle: 'Buy',
+    swapTitleWith: 'Swap %{symbol}',
+    buyTitleWith: 'Buy %{symbol}',
+    swapSideFrom: 'From',
+    swapSideTo: 'To',
+    swapSideSell: 'Sell',
+    swapSideBuy: 'Buy',
+    swapRefreshQuote: 'Refresh',
+    swapReceivedAbout: 'You receive about %{amount} %{symbol}',
+    swapApproveFailed: 'The approval transaction failed, so nothing was swapped.',
+    swapApproveNotVisible: 'The approval was sent but is not visible on-chain yet. Nothing was swapped — please try again in a moment.'
   }
 }

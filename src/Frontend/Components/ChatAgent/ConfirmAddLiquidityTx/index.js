@@ -6,7 +6,7 @@ import I18n, { resolveLocale } from 'assets/Lang'
 import MyText from 'frontend/Components/UI/MyText'
 import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
 import MyButton from 'frontend/Components/UI/MyButton'
-import useSendTx, { TX_STATUS } from 'frontend/Hooks/useSendTx'
+import useSendTx, { TX_STATUS, QUOTE_EXPIRY_MS, PREFLIGHT_QUOTE_EXPIRED } from 'frontend/Hooks/useSendTx'
 import TxStatusTimeline from '../TxStatusTimeline'
 import X402SignModal from '../X402SignModal'
 import { runX402Gate, X402_PATH } from '../WalletActionForm/x402Gate'
@@ -39,14 +39,12 @@ const toChainId = (chainId) => {
   return Number.isFinite(n) ? n : chainId
 }
 
-// How long the agent's quote stays good for. The unsignedTx is built against a
-// pool state (price, tick, liquidity) that moves continuously, so a failure this
-// long after the message was created is far more likely to be a stale quote than
-// something the user can fix by tapping Retry — retrying the same calldata would
-// just fail the same way. Past this age a failure is reported as "expired, ask
-// again" and the retry path is closed, sending the user back to the agent for a
-// freshly-built transaction.
-const EXPIRY_MS = 45 * 1000
+// How long the agent's quote stays good for lives with the pre-flight that
+// enforces it (QUOTE_EXPIRY_MS), so the block and this screen's wording can never
+// drift apart. The unsignedTx is built against a pool state (price, tick,
+// liquidity) that moves continuously, so past that age the calldata is reported
+// as "expired, ask again" and the retry path is closed, sending the user back to
+// the agent for a freshly-built transaction.
 
 export default function ConfirmAddLiquidityTx ({ props, onResult, onStatusChange, onCopyHash, onPersist, language, screenRef, messageTimestamp }) {
   const t = (key, opts) => tt(key, language, opts)
@@ -155,10 +153,30 @@ export default function ConfirmAddLiquidityTx ({ props, onResult, onStatusChange
       walletAddress: unsignedTx.from,
       requestSignature: (request) => new Promise((resolve) => {
         x402ResolveRef.current = resolve
-        setX402Req(request)
+        // What this position actually SPENDS from the wallet.
+        //
+        // It looks like two tokens, and the summary shows both — but the wallet
+        // only ever sends the NATIVE coin here: `unsignedTx.value` is the whole
+        // input, and the gateway swaps it into token0/token1 internally (see
+        // PreviewAddLiquidityTool). token0/token1 never leave this balance, so
+        // reserving against them would set aside money the user is not spending.
+        //
+        // Native can never collide with an ERC-20 x402 fee, so this reserves
+        // nothing today. It is passed anyway so the sheet is deciding from the
+        // real spend rather than from silence — the two are indistinguishable in
+        // its current answer, and only one of them stays correct if the fee is
+        // ever settled in a chain's native coin.
+        setX402Req({
+          ...request,
+          spend: {
+            chainId,
+            assetAddress: 'native',
+            amount: summary?.nativeIn
+          }
+        })
       })
     })
-  }, [props?.action, unsignedTx.chainId, unsignedTx.from, unsignedTx.to, summary?.nativeIn, pool?.token0?.address, pool?.token1?.address, markX402Paid])
+  }, [props?.action, unsignedTx.chainId, chainId, unsignedTx.from, unsignedTx.to, summary?.nativeIn, pool?.token0?.address, pool?.token1?.address, markX402Paid])
 
   // The quote went stale and an attempt has already failed against it — the
   // widget is spent and the user has to ask the agent again. Restored from the
@@ -170,7 +188,7 @@ export default function ConfirmAddLiquidityTx ({ props, onResult, onStatusChange
   // field was plumbed through — nothing can be judged stale, so the widget keeps
   // its normal retry behavior rather than expiring everything by default.
   const isExpiredNow = useCallback(
-    () => !!messageTimestamp && Date.now() - messageTimestamp > EXPIRY_MS,
+    () => !!messageTimestamp && Date.now() - messageTimestamp > QUOTE_EXPIRY_MS,
     [messageTimestamp]
   )
 
@@ -203,7 +221,12 @@ export default function ConfirmAddLiquidityTx ({ props, onResult, onStatusChange
       // quote sitting untouched must never expire itself on screen, and a
       // success is never stale no matter how long it took to confirm. Only a
       // failure that landed past the window counts.
-      if (!res?.success && isExpiredNow()) setExpired(true)
+      //
+      // The pre-flight is the primary gate — it rejects a stale quote BEFORE the
+      // wallet or the paid gate is touched, and says so with this sentinel. This
+      // also still catches the rest: a quote that was fresh at tap time but whose
+      // attempt ran past the window before failing.
+      if (!res?.success && (res?.error === PREFLIGHT_QUOTE_EXPIRED || isExpiredNow())) setExpired(true)
       onResult?.({ ...res, unsignedTx, pool, range })
     },
     // Refresh the sender's balances once the position is added, so the amounts
@@ -225,6 +248,8 @@ export default function ConfirmAddLiquidityTx ({ props, onResult, onStatusChange
     // the real cost above what was measured, and the mint reverts out of gas.
     // That revert is expensive here: the x402 fee has already been paid by then.
     gasBuffer: true,
+    // Lets the pre-flight reject a stale quote before anything is signed or paid.
+    messageTimestamp,
     // Backend authorization + its x402 payment, last thing before signing.
     //
     // The PRICE LIST is what switches this on: the gate runs only when the

@@ -11,6 +11,7 @@ import I18n, { resolveLocale } from 'assets/Lang'
 import MyText from 'frontend/Components/UI/MyText'
 import GlassView from 'frontend/Components/UI/GlassView'
 import styles from './styles'
+import { useChatKeyboard } from '../KeyboardAware'
 import MyButton from 'frontend/Components/UI/MyButton'
 import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
 
@@ -127,6 +128,16 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
 
   const [minRateInput, setMinRateInput] = useState(() => priceToRateStr(minPriceInput, 'min'))
   const [maxRateInput, setMaxRateInput] = useState(() => priceToRateStr(maxPriceInput, 'max'))
+  // Keeps whichever field is being typed in visible above the keyboard. No-op
+  // when this card renders outside the chat thread.
+  const { scrollInputIntoView } = useChatKeyboard()
+  // One anchor per editable area. The two price rows anchor on the ROW (max/min
+  // each pair a price with its rate chip, and both belong on screen together);
+  // the amount anchors on its whole group so its label and (~$x) come along.
+  const maxRowRef = useRef(null)
+  const minRowRef = useRef(null)
+  const amountGroupRef = useRef(null)
+
   const rateEditing = useRef(null)
 
   useEffect(() => {
@@ -329,7 +340,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
             }}
           >
             {/* Price range rows: Max on top, Min below */}
-            <View style={styles.rangeRow}>
+            <View ref={maxRowRef} style={styles.rangeRow}>
               <MyText style={styles.rangeRowLabel}>{t('max')}</MyText>
               <GlassView effect='clear' style={styles.rangeRowInput}>
                 <TextInput
@@ -338,6 +349,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
                   value={maxPriceInput}
                   onChangeText={onChangeMaxPrice}
                   keyboardType='decimal-pad'
+                  onFocus={() => scrollInputIntoView(maxRowRef)}
                   placeholder={t('enterAmount')}
                   placeholderTextColor={Colors.TEXT_LOW}
                 />
@@ -350,6 +362,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
                   value={maxRateInput}
                   onChangeText={onChangeMaxRate}
                   keyboardType='numbers-and-punctuation'
+                  onFocus={() => scrollInputIntoView(maxRowRef)}
                   placeholder={t('rate')}
                   placeholderTextColor={Colors.TEXT_LOW}
                 />
@@ -357,7 +370,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
               <MyText variant='small' className='text-medium'>%</MyText>
             </View>
 
-            <View style={styles.rangeRow}>
+            <View ref={minRowRef} style={styles.rangeRow}>
               <MyText variant='small' className='' style={styles.rangeRowLabel}>{t('min')}</MyText>
               <GlassView effect='clear' style={styles.rangeRowInput}>
                 <TextInput
@@ -366,6 +379,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
                   value={minPriceInput}
                   onChangeText={onChangeMinPrice}
                   keyboardType='decimal-pad'
+                  onFocus={() => scrollInputIntoView(minRowRef)}
                   placeholder={t('enterAmount')}
                   placeholderTextColor={Colors.TEXT_LOW}
                 />
@@ -378,6 +392,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
                   value={minRateInput}
                   onChangeText={onChangeMinRate}
                   keyboardType='numbers-and-punctuation'
+                  onFocus={() => scrollInputIntoView(minRowRef)}
                   placeholder={t('rate')}
                   placeholderTextColor={Colors.TEXT_LOW}
                 />
@@ -398,6 +413,7 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
             }}>
             {/* Amount input */}
             <View
+              ref={amountGroupRef}
               style={{
                 gap: pixelByHeight(8)
               }}
@@ -429,6 +445,9 @@ export default function AddLiquidityForm ({ props, onSend, language }) {
                 value={amount}
                 onChangeText={(v) => setAmount(sanitizePrice(v))}
                 keyboardType='decimal-pad'
+                // The chat thread never pans its window for the keyboard, so an
+                // in-bubble field scrolls itself into view on focus.
+                onFocus={() => scrollInputIntoView(amountGroupRef)}
                 placeholder='0.0'
                 placeholderTextColor={Colors.TEXT_LOW}
               />

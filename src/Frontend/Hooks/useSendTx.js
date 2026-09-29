@@ -14,6 +14,17 @@ import { zeroAddress } from 'viem'
 // states: idle → gating → signing → confirming → done | error.
 //
 // GATING covers everything that runs BEFORE the tx is signed — the caller's
+// How long an agent-built quote stays good for. Shared by the pre-flight gate
+// below and by the widgets that show "expired" on screen, so the message and the
+// block can never disagree.
+export const QUOTE_EXPIRY_MS = 45 * 1000
+
+// Sentinel returned by preflightTx for the stale-quote case. It travels as a
+// plain string like every other pre-flight error, so existing callers need no
+// change, but a caller that HAS a quote can compare against it and close the
+// retry path instead of just printing a red line.
+export const PREFLIGHT_QUOTE_EXPIRED = 'quote-expired'
+
 // preCheck, the gas/fee pre-flight and the `gate` (the x402-paid backend
 // authorization). It is a separate state, and not just an early part of
 // SIGNING, because the gate can require the user to act (approving an x402
@@ -180,9 +191,19 @@ export const resolvePrivateKey = async (address, nfcProxy) => {
  * Deliberately permissive about its OWN failures: when the chain can't be read
  * at all we let the tx through rather than block a user who could actually send
  * it — the broadcast path has its own error handling.
+ *
+ * `messageTimestamp` opts a caller into one extra check, run FIRST: an agent
+ * quote that has gone stale (see QUOTE_EXPIRY_MS). Callers without a quote —
+ * a plain send or approve — leave it out and that check does not exist for them.
  */
-export const preflightTx = async ({ chainId, from, txs, language, gasBuffer = false, onGasLimit }) => {
+export const preflightTx = async ({ chainId, from, txs, language, gasBuffer = false, onGasLimit, messageTimestamp }) => {
   const t = (key, opts) => I18n.t(`chatAgent.${key}`, { ...(opts || {}), locale: resolveLocale(language) })
+
+  // Before anything else, and before the gate that charges: calldata built
+  // against a stale pool state cannot succeed, so estimating it is wasted work
+  // and paying an x402 fee for it is worse. Checked on the ATTEMPT rather than
+  // on a timer — an untouched quote must not expire itself on screen.
+  if (messageTimestamp && Date.now() - messageTimestamp > QUOTE_EXPIRY_MS) return PREFLIGHT_QUOTE_EXPIRED
 
   const tx = txs?.[0]
   if (!tx) return t('walletActionEstimateFailed')
@@ -381,7 +402,7 @@ const waitForTxSuccess = async (hash, chainId, timeout = 180000) => {
  *                                 to be scanned at signing time. Omitting it
  *                                 leaves hot accounts working exactly as before.
  */
-export default function useSendTx ({ from, chainId, buildTxs, onResult, fallbackError, initialStatus, initialTxHash, initialError, preflight = false, gasBuffer = false, preCheck, gate, language, refreshBalanceOnSuccess = false, refreshTokenAddress, nfcProxy } = {}) {
+export default function useSendTx ({ from, chainId, buildTxs, onResult, fallbackError, initialStatus, initialTxHash, initialError, preflight = false, gasBuffer = false, preCheck, gate, language, refreshBalanceOnSuccess = false, refreshTokenAddress, nfcProxy, messageTimestamp } = {}) {
   // Seed from any persisted state so a remount (e.g. leaving and returning to
   // the chat) restores the same status/timeline instead of resetting to IDLE.
   const [status, setStatus] = useState(initialStatus || TX_STATUS.IDLE)
@@ -456,6 +477,7 @@ export default function useSendTx ({ from, chainId, buildTxs, onResult, fallback
           txs,
           language,
           gasBuffer,
+          messageTimestamp,
           onGasLimit: (limit) => { signedGasLimit = limit }
         })
         if (err) throw new Error(err)
@@ -481,6 +503,10 @@ export default function useSendTx ({ from, chainId, buildTxs, onResult, fallback
               txs,
               language,
               gasBuffer,
+              // Re-checked here too: the sheet can sit open long enough for a
+              // quote that was fresh at tap time to go stale before the fee is
+              // signed, and that fee must not be spent on a dead quote.
+              messageTimestamp,
               // The re-check runs at the moment of payment, against state that
               // has moved — take its fresher measurement over the one from
               // before the sheet opened.
@@ -560,7 +586,7 @@ export default function useSendTx ({ from, chainId, buildTxs, onResult, fallback
       // rather than signing from something kept around since the last attempt.
       lentKey = null
     }
-  }, [status, from, chainId, buildTxs, onResult, fallbackError, preflight, gasBuffer, preCheck, gate, language, refreshBalanceOnSuccess, refreshTokenAddress, nfcProxy])
+  }, [status, from, chainId, buildTxs, onResult, fallbackError, preflight, gasBuffer, preCheck, gate, language, refreshBalanceOnSuccess, refreshTokenAddress, nfcProxy, messageTimestamp])
 
   // Rehydrated mid-confirmation (the user left while the tx was broadcast but
   // not yet confirmed): the broadcast already happened, so don't re-send — just

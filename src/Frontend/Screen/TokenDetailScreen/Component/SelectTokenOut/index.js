@@ -10,7 +10,7 @@ import { Colors, getHeightHeaderDrawer, PADDING_TOP_CONTAINER_DRAWER, pixelByHei
 import createStyles from './styles'
 import MyIcon from 'frontend/Components/UI/MyIcon'
 import ListActionRow from 'frontend/Components/UI/ListActionRow'
-import { convertWeiToBalance, lowerCase } from 'common/function'
+import { convertWeiToBalance, jsonStr2Obj, lowerCase } from 'common/function'
 import { zeroAddress } from 'viem'
 import images from 'assets/Image'
 import I18n from 'assets/Lang'
@@ -25,6 +25,8 @@ import ContainerAnchor from 'frontend/Components/UI/ContainerAnchor'
 import { getAddressNative, isNativeToken } from 'common/tokens'
 import { resolveOnchainSymbolFor } from 'src/Services/TokenListV2/symbolOnchain'
 import { TOKEN_RECOMMEND_SWAP } from 'common/constants/swap'
+import ReduxService from 'common/redux'
+import { CONTRACT_CONVERT_ZERO_ADDRESS_GET_PRICE_API } from 'common/constants/app'
 
 const MAX_SHOW_TOKEN = 20
 const CHAIN_FULL_TOKEN_RECOMMEND_FEE_GAS = ['4217']
@@ -65,7 +67,11 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
   const listTokens = useMemo(() => {
     const mapTemp = {}
     listBalanceUser?.forEach((balanceToken) => {
-      const address = lowerCase(balanceToken.contractAddress || balanceToken.address || zeroAddress)
+      let address = lowerCase(balanceToken.contractAddress || balanceToken.address || zeroAddress)
+
+      if (isNativeToken(address)) {
+        address = zeroAddress
+      }
 
       if (!mapTemp[address] && !balanceToken?.isHidden) {
         const balance = BigNumber(convertWeiToBalance(balanceToken.balance || '0', balanceToken?.decimals || 18)).toString()
@@ -95,7 +101,12 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
 
     if (textSearchDebounce) {
       listTokensAPI?.forEach((token, index) => {
-        const address = lowerCase(token.address || token.contractAddress || zeroAddress)
+        let address = lowerCase(token.address || token.contractAddress || zeroAddress)
+
+        if (isNativeToken(address)) {
+          address = zeroAddress
+        }
+
         const tokenTemp = { ...token }
         tokenTemp.address = address
 
@@ -108,17 +119,56 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
     return arrTemp
   }, [listTokensAPI, listBalanceUser, textSearchDebounce])
 
+  // Build recommended token list: base from featuredTokens/swap fallback,
+  // append API show tokens, then remove API ignore tokens.
   const tokensRecommend = useMemo(() => {
+    const tokenShowByApi = jsonStr2Obj(ReduxService.getSettingOther('keyring_EXCHANGE_LIST_TOKEN_RECOMMENDATION'))
+    const tokenIgnoreByApi = jsonStr2Obj(ReduxService.getSettingOther('keyring_EXCHANGE_LIST_TOKEN_IGNORE'))
+
     if (!setting?.chainSupport) {
       return []
     }
     const chain = setting?.chainSupport.find(item => item.chainId?.toString() === chainIdOut?.toString())
+
+    // Base recommended list from chain config, fallback to swap constant.
     let listToken = chain?.featuredTokens || []
 
     if (listToken?.length === 0 && TOKEN_RECOMMEND_SWAP[chain.chainId]) {
       listToken = TOKEN_RECOMMEND_SWAP[chain.chainId]
     }
 
+    const chainIdStr = chainIdOut?.toString()
+    const apiTokens = tokenShowByApi?.[chainIdStr] ?? []
+    const ignoreTokens = tokenIgnoreByApi?.[chainIdStr] ?? []
+
+    // Append API show tokens that are not already in the base list based on tokenPosition.
+    if (apiTokens && apiTokens?.length > 0) {
+      const existingAddresses = new Set(listToken.map(token => lowerCase(token.address || token.contractAddress || zeroAddress)))
+      const newTokens = { top: [], bottom: [] }
+      apiTokens.forEach(token => {
+        const address = lowerCase(token.address || token.contractAddress || zeroAddress)
+        if (!existingAddresses.has(address)) {
+          if (token.position === 'top') {
+            newTokens.top.push(token)
+          } else {
+            newTokens.bottom.push(token)
+          }
+          existingAddresses.add(address)
+        }
+      })
+
+      listToken = [...newTokens.top, ...listToken, ...newTokens.bottom]
+    }
+
+    // Remove tokens marked as ignored by API.
+    if (ignoreTokens?.length > 0) {
+      listToken = listToken.filter(token => {
+        const address = lowerCase(token.address || token.contractAddress || zeroAddress)
+        return !ignoreTokens.some(ignoreToken => lowerCase(ignoreToken) === address)
+      })
+    }
+
+    // Filter by search term (name, symbol, or address).
     const data = []
     listToken.forEach((token) => {
       const isHaveName = hasCommonChar(token.name, textSearchDebounce)
@@ -128,7 +178,6 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
         data.push(token)
       }
     })
-
     const addressNativeTokenFee = getAddressNative(chainIdOut)
 
     data.forEach((token, index) => {
@@ -163,6 +212,11 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
     }
     return false
   }, [tokenShow, textSearchDebounce])
+
+  const onSearch = (value) => {
+    Keyboard.dismiss()
+    setTextSearchDebounce(value)
+  }
 
   const handleSelectTokenByGetSymbol = async () => {
     const tokenMerge = { ...tokenOut, ...tokenSearch?.[0] }
@@ -218,7 +272,7 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
       const isHaveSymbol = hasCommonChar(token.symbol, textSearchDebounce)
       const isHaveAddress = hasCommonChar(token.address || zeroAddress, textSearchDebounce)
       let iconTokenDefault
-      const nativeCoin = isNativeToken(addressToken, chainIdOut)
+      let nativeCoin = isNativeToken(addressToken, chainIdOut)
 
       if (tokenOutDefault && tokenOutDefault?.icon_image) {
         if (isNativeToken(tokenOutDefault) && isNativeToken(addressToken)) {
@@ -226,6 +280,12 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
         }
         if (lowerCase(tokenOutDefault.address) === lowerCase(addressToken)) {
           iconTokenDefault = tokenOutDefault.icon_image
+        }
+      }
+
+      if (CONTRACT_CONVERT_ZERO_ADDRESS_GET_PRICE_API[chainIdOut]) {
+        if (lowerCase(CONTRACT_CONVERT_ZERO_ADDRESS_GET_PRICE_API[chainIdOut]) === lowerCase(addressToken)) {
+          nativeCoin = true
         }
       }
 
@@ -336,10 +396,10 @@ const SelectTokenOut = ({ isExchange = false, handleSelectToken, handleBack, _th
                 }
               }}
               returnKeyType='search'
-              onSubmitEditing={() => setTextSearchDebounce(textSearch)}
+              onSubmitEditing={() => onSearch(textSearch)}
               placeholder={I18n.t('ExchangeScreen.selectToken')}
               rightIcon={(
-                <TouchableOpacity onPress={() => setTextSearchDebounce(textSearch)} activeOpacity={1}>
+                <TouchableOpacity onPress={() => onSearch(textSearch)} activeOpacity={1}>
                   <MyIcon uri={images.UIV2.icons.search} variant='small' />
                 </TouchableOpacity>
               )}

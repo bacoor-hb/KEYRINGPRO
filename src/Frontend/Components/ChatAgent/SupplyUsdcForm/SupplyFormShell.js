@@ -8,12 +8,14 @@ import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
 import GlassView from 'frontend/Components/UI/GlassView'
 import { useX402FeeFor } from 'frontend/Hooks/useX402Fees'
 import { formatFeeLabel } from '../x402FeeLabel'
+import { applyFeeReserve } from '../x402FeeReserve'
 import X402SignModal from '../X402SignModal'
 import { X402_PATH, runX402Gate } from '../WalletActionForm/x402Gate'
 import SupplyStatusTimeline from './SupplyStatusTimeline'
 import useSupplyFlow, { SUPPLY_STEP, isBusyStep } from './useSupplyFlow'
 import styles from './styles'
-import { handleOpenUrl } from 'common/function'
+import { useChatKeyboard } from '../KeyboardAware'
+import { handleOpenExplorerUserAddress } from 'common/chain'
 
 const tt = (key, locale, opts) => I18n.t(`chatAgent.${key}`, { ...(opts || {}), locale: resolveLocale(locale) })
 
@@ -109,11 +111,15 @@ export default function SupplyFormShell ({
 
   const decimals = asset?.decimals ?? 6
   const symbol = asset?.symbol || 'USDC'
-  // The market's own page on its protocol's app, built backend-side (see
-  // `marketLink` in keyring-agent-core). Null whenever the protocol's site is
-  // unknown — the contract then renders as plain text rather than a dead tap,
-  // because a link that goes nowhere is worse than no link.
-  const protocolUrl = market?.protocolUrl
+  // The deposit contract, tappable through to the chain's own explorer. Without
+  // an address the line renders as plain text rather than a dead tap, because a
+  // link that goes nowhere is worse than no link.
+  const contractAddress = market?.contract
+  // blockchainListRedux is keyed by NUMERIC chainId, but this card receives it
+  // as string|number (same reason useSupplyFlow normalizes with toChainId) — a
+  // string key misses the entry, and the explorer helper silently degrades to
+  // copying the address instead of opening the scan page.
+  const scanChainId = Number(chainId)
 
   // Restore what was submitted on a previous mount (the chat persists it), so
   // returning to the conversation shows the amount that was actually supplied
@@ -141,6 +147,11 @@ export default function SupplyFormShell ({
   // `resolve` in the ref and the sheet hands back the signature (or null when
   // the user cancels), so the whole payment is one awaited step inside the flow.
   const [x402Req, setX402Req] = useState(null)
+  // Keeps the amount field visible above the keyboard while typing. No-op when
+  // this card is rendered outside the chat thread.
+  const { scrollInputIntoView } = useChatKeyboard()
+  const amountGroupRef = useRef(null)
+
   const x402ResolveRef = useRef(null)
 
   // Has this card already settled its x402 fee?
@@ -272,7 +283,26 @@ export default function SupplyFormShell ({
 
   const parsed = BigNumber(amount)
   const validAmount = parsed.isFinite() && parsed.gt(0)
-  const spendableBn = BigNumber(spendable)
+
+  // The wallet's own figure, before the x402 fee. Kept separate because the unit
+  // price below is recovered by dividing it into `spendableUsd`, and those two
+  // must stay the exact pair the core multiplied.
+  const grossSpendableBn = BigNumber(spendable)
+
+  // A supply moves the market's asset, so that is what the fee can collide with.
+  // Reserves nothing unless the charge is settled in this very token on this very
+  // chain — see x402FeeReserve.
+  const {
+    spendable: netSpendable,
+    reserved: feeReserved
+  } = applyFeeReserve(spendable, x402Fee, { chainId, address: asset?.address })
+
+  // Everything that SIZES or JUDGES the amount uses the net figure: the
+  // percentage chips, the ceiling, and the submit gate. Supplying 100% of a USDC
+  // balance while the fee is also charged in USDC leaves nothing to settle it,
+  // so 100% has to mean "all but the fee" or the card offers an amount that
+  // cannot execute.
+  const spendableBn = BigNumber(netSpendable)
   const exceedsBalance = validAmount && spendableBn.isFinite() && parsed.gt(spendableBn)
 
   // What the typed amount is worth, shown beside the "Amount" label — the same
@@ -288,10 +318,20 @@ export default function SupplyFormShell ({
   const unitPriceUsd = (() => {
     const usd = BigNumber(spendableUsd)
     if (!usd.isFinite() || usd.lte(0)) return null
-    if (!spendableBn.isFinite() || !spendableBn.gt(0)) return null
-    return usd.div(spendableBn)
+    // The GROSS balance on purpose — `spendableUsd` was computed from it, so
+    // only that pair recovers the true unit price.
+    if (!grossSpendableBn.isFinite() || !grossSpendableBn.gt(0)) return null
+    return usd.div(grossSpendableBn)
   })()
   const amountUsd = validAmount && unitPriceUsd ? parsed.times(unitPriceUsd) : null
+
+  // Dollar value of what is actually spendable, re-derived from the unit price
+  // rather than reusing `spendableUsd` — which prices the gross balance and
+  // would overstate a figure the fee has been taken out of. Falls back to the
+  // core's own value when nothing was reserved.
+  const netSpendableUsd = feeReserved && unitPriceUsd
+    ? spendableBn.times(unitPriceUsd)
+    : spendableUsd
 
   // Not memoized: `t` closes over `language` and is rebuilt each render, so a
   // memo here would either be stale on a language switch or never hit.
@@ -430,21 +470,27 @@ export default function SupplyFormShell ({
               {t('supplySendToContract')}
             </MyText>
           </View>
-          {/* Tapping the contract opens that market's page on the protocol's own
-              app. Without a URL it stays a non-interactive line — same text, no
-              tap target, so nothing looks pressable that isn't. */}
+          {/* Tapping the contract opens it on the chain's block explorer. On a
+              chain with no explorer configured the helper copies the address
+              instead. Without an address it stays a non-interactive line — same
+              text, no tap target, so nothing looks pressable that isn't. */}
           <TouchableOpacity
             activeOpacity={0.7}
-            disabled={!protocolUrl}
-            onPress={() => handleOpenUrl(protocolUrl)}
+            disabled={!contractAddress}
+            onPress={() => handleOpenExplorerUserAddress(contractAddress, scanChainId)}
           >
-            <MyText className={protocolUrl ? 'text-brand' : 'text-medium'}>{market?.contract}</MyText>
+            <MyText className={contractAddress ? 'text-brand' : 'text-medium'}>{contractAddress}</MyText>
           </TouchableOpacity>
 
         </View>
 
         {/* Amount */}
-        <View style={styles.fieldGroup}>
+        <View
+          // Scroll anchor: the group, so the label and the (~$x) line come up
+          // with the field rather than the field alone.
+          ref={amountGroupRef}
+          style={styles.fieldGroup}
+        >
           <View style={styles.labelRow}>
             <View>
               <MyText variant='default' fontWeight='700'>{t('supplyAmount')}</MyText>
@@ -490,6 +536,10 @@ export default function SupplyFormShell ({
                 keyboardType='decimal-pad'
                 autoCapitalize='none'
                 autoCorrect={false}
+                // The chat thread's window never pans for the keyboard (the
+                // composer is lifted by its own transform), so an in-bubble
+                // field has to ask to be scrolled into view itself.
+                onFocus={() => scrollInputIntoView(amountGroupRef)}
               />
               {!amount && (
                 <MyText
@@ -549,9 +599,12 @@ export default function SupplyFormShell ({
                 <MyText className='text-medium'>{t('spendable')}:</MyText>
                 <View style={styles.spendableValue}>
                   <MyTextTicker className='text-medium'>
-                    {fmt(spendable)} {symbol}
-                    {fmtUsd(spendableUsd) && (
-                      <MyText variant='small' className='text-low'> (~{fmtUsd(spendableUsd)})</MyText>
+                    {/* The NET figure — the same one the chips divide and the
+                        validator allows, so the card never shows one ceiling and
+                        enforces another. */}
+                    {fmt(netSpendable)} {symbol}
+                    {fmtUsd(netSpendableUsd) && (
+                      <MyText variant='small' className='text-low'> (~{fmtUsd(netSpendableUsd)})</MyText>
                     )}
                   </MyTextTicker>
                 </View>

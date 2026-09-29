@@ -3,6 +3,7 @@ import {
   areSuggestionsVisible,
   refreshSuggestions,
   dismissSuggestions,
+  restoreSuggestions,
   markSuggestionsLeft
 } from 'common/aiSearchHistory'
 
@@ -25,7 +26,7 @@ import {
  *   until it resolves, which this hook waits for rather than acting on.
  * @param {string}   [params.session]   AI_SEARCH_SESSION bucket.
  * @param {object}   [params.navigation] React Navigation object for this screen.
- * @returns {{ visible: boolean, dismiss: () => void }}
+ * @returns {{ visible: boolean, dismiss: () => void, restore: () => void }}
  */
 export default function useInitSuggestions ({ address, session, navigation }) {
   const [visible, setVisible] = useState(false)
@@ -77,10 +78,20 @@ export default function useInitSuggestions ({ address, session, navigation }) {
     setVisible(false)
   }, [])
 
+  // The user asked for the pills back (the floating support button, which is
+  // only offered while they are hidden). This is the ONLY way out of HIDDEN
+  // other than the idle clock, and it is immediate — the clock exists to avoid
+  // re-offering pills nobody asked for, which does not apply when they did.
+  const restore = useCallback(() => {
+    restoreSuggestions(addressRef.current, sessionRef.current)
+    setVisible(true)
+  }, [])
+
   // Guard the render on the address too: `visible` is false for the first render
   // of every mount, and areSuggestionsVisible is the authority once it is known.
   return {
     visible: visible && !!address && areSuggestionsVisible(address, session),
-    dismiss
+    dismiss,
+    restore
   }
 }

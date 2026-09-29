@@ -1,3 +1,4 @@
+import BigNumber from 'bignumber.js'
 import { useQuery } from 'react-query'
 import Config from 'react-native-config'
 import { REACT_QUERY_KEY } from 'common/constants/reactQuery'
@@ -22,6 +23,44 @@ const trimAmount = (raw) => {
   const n = Number(raw)
   if (!Number.isFinite(n) || n <= 0) return null
   return String(n)
+}
+
+// The settlement token a route is charged in, from `x-payment-info.x-asset`.
+//
+// This is the ONLY machine-readable statement of which token actually leaves the
+// wallet. The document's prose (`x-guidance`, each route's description) says
+// "USDC on Base", but prose is not something to size an amount against — and it
+// is already out of step with the spec, which currently names Base SEPOLIA
+// (eip155:84532). Parsing the field means the app follows the server rather than
+// a sentence someone forgot to update.
+//
+// `network` is CAIP-2 ("eip155:8453"); only the eip155 namespace is understood,
+// since every chain this app transacts on is EVM. Anything else — a missing
+// block, a malformed chain id, a non-EVM namespace — returns null, which the
+// callers read as "we don't know what this is charged in" and therefore never
+// deduct. Guessing here would silently shrink a user's Max on the wrong token.
+const parseAsset = (asset) => {
+  const [namespace, rawChain] = String(asset?.network || '').split(':')
+  if (namespace !== 'eip155') return null
+
+  const chainId = Number(rawChain)
+  if (!Number.isFinite(chainId) || chainId <= 0) return null
+
+  const address = asset?.address
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(address || ''))) return null
+
+  // `decimals` scales the raw amount, so an absent or nonsensical one makes the
+  // whole entry unusable rather than something to default.
+  const decimals = Number(asset?.decimals)
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) return null
+
+  // The fee in the token's SMALLEST unit — the figure to subtract from a raw
+  // balance without any decimal maths. Whole units only; a fractional one is not
+  // a real amount.
+  const amountRaw = BigNumber(String(asset?.amount ?? ''))
+  if (!amountRaw.isFinite() || amountRaw.lte(0) || !amountRaw.isInteger()) return null
+
+  return { chainId, address, decimals, amountRaw: amountRaw.toFixed() }
 }
 
 /**
@@ -53,7 +92,12 @@ const parseFees = (doc) => {
         amount,
         currency: price.currency || 'USD',
         path,
-        method: String(method).toUpperCase()
+        method: String(method).toUpperCase(),
+        // What the charge is settled IN, when the spec says so — the token, its
+        // chain, and the price already in smallest units. Null when the route
+        // does not publish it (or publishes something unreadable), and every
+        // caller treats that as "unknown", never as "not the same token".
+        asset: parseAsset(op?.['x-payment-info']?.['x-asset'])
       }
     }
   }

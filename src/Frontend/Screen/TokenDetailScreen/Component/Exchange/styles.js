@@ -68,6 +68,15 @@ const createStyles = () => {
       color: Colors.WHITE,
       fontFamily: getFontFamily(700)
     },
+    // Containment for every amount field. AutoFitAmountInput deliberately has no
+    // overflow:'hidden' (a clip layer half-paints the native TextInput under
+    // Fabric), so keeping the amount inside the card is the parent's job: with
+    // the default minWidth:'auto' the input's fixed 5000px layout width becomes
+    // the row's minimum and the value paints over the symbol and off screen.
+    amountFlex: {
+      flex: 1,
+      minWidth: 0
+    },
     containerConfirm: {
       gap: pixelByHeight(14),
       paddingBottom: getSafeAreaValues().bottom,

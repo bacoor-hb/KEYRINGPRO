@@ -30,8 +30,7 @@ const DEFAULT_CONFIG = {
   storageKey: 'keyring-agent-history',
   persistHistory: false,
   uniswap: {
-    minProvideUsd: 0.01,
-    isProduction: true
+    minProvideUsd: 0.01
   },
 
   // Generic x402 (pay-per-call) is enabled by registering a signer at runtime
@@ -42,30 +41,30 @@ const DEFAULT_CONFIG = {
 
   subagents: {
     wallet: true,
-    'pool-subgraph': false,
     'wallet-action': true,
-    pool: true,
+    // Exactly ONE pool agent runs at a time — they are mutually exclusive.
+    // 'pool-uniswap'   → Uniswap Explore API (uniswap-* tools)
+    // 'pool-subgraph'  → The Graph subgraphs (subgraph-* tools)
+    // 'pool-defillama' → DefiLlama Yields    (defillama-* tools)
+    'pool-uniswap': true,
+    'pool-subgraph': false,
+    'pool-defillama': false,
     token: true,
     nft: true,
     ai: true,
     nfc: true,
     lending: LENDING_ENABLED
-  },
-  // Swap and buy are not done in chat — the app has its own screens for them.
-  // Both tools keep their name and routing, so the intent still lands on them,
-  // but they only relay this message (the core translates it to the user's
-  // language) instead of opening a form. Every other wallet action opens its
-  // real in-chat form.
-  noFormTools: {
-    'open-swap-token-form': 'You can swap tokens directly in the app.',
-    'open-buy-token-form': 'You can buy tokens directly in the app.'
   }
+  // No `noFormTools`: every wallet action, swap and buy included, opens its real
+  // in-chat form. Swap/buy used to be relayed to the app's own screens with a
+  // canned message; they now open a single in-chat card the user sizes, quotes
+  // and executes right here (SwapTokenForm).
 }
 
 export const HISTORY_STORAGE_KEY = DEFAULT_CONFIG.storageKey
 
 export const getAgent = (overrides) => {
-  // secretKey and rpcUrls are resolved here (not at module scope) because both
+  // The keys and rpcUrls are resolved here (not at module scope) because they
   // read from native modules — react-native-keys and settings() — that are not
   // guaranteed to be initialized at import time.
   return new AgentCore({
@@ -76,6 +75,11 @@ export const getAgent = (overrides) => {
     },
     secretKey: Keys.secureFor('AGENT_CORE_SECRET_KEY'),
     rpcUrls: buildRpcUrls(),
+    // Same Relay key the app's own swap screens use (SWAP_SERVICE_CONFIG), so
+    // quotes taken from chat share the app's rate limit and attribution.
+    swapProviders: {
+      relay: { apiKey: Keys.secureFor('RELAY_API_KEY') }
+    },
     ...(overrides || {})
   })
 }

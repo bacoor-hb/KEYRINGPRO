@@ -612,6 +612,19 @@ export const hexToString = (hex) => {
   return str
 }
 
+// EIP-7702 delegation indicator: an account that has authorized a delegate carries
+// exactly 23 bytes of code — the 0xef0100 prefix followed by the delegate address.
+// Such an account is still an EOA (it holds a private key, signs and receives like
+// any other), so a recipient check can keep treating it as an EOA.
+const EIP7702_DELEGATION_PREFIX = '0xef0100'
+const EIP7702_DELEGATION_CODE_LENGTH = 48 // '0x' + 23 bytes
+
+export const isEip7702DelegatedCode = (code) => {
+  if (!code) return false
+  const normalized = String(code).toLowerCase()
+  return normalized.length === EIP7702_DELEGATION_CODE_LENGTH && normalized.startsWith(EIP7702_DELEGATION_PREFIX)
+}
+
 export const isValidContract = async (chainTypeOrChainId, address) => {
   try {
     const rpcUrl = getRpcUrlByChain(chainTypeOrChainId)
@@ -621,6 +634,19 @@ export const isValidContract = async (chainTypeOrChainId, address) => {
     return !!code && code !== '0x'
   } catch (error) {
     return false
+  }
+}
+
+// Raw bytecode at `address` ('0x' when there is none). Callers that need to tell a
+// 7702-delegated EOA apart from a real contract read the code themselves instead of
+// relying on the boolean above.
+export const getAddressCode = async (chainTypeOrChainId, address) => {
+  try {
+    const rpcUrl = getRpcUrlByChain(chainTypeOrChainId)
+    const client = createPublicClient({ transport: http(rpcUrl) })
+    return (await client.getCode({ address })) || '0x'
+  } catch (error) {
+    return '0x'
   }
 }
 

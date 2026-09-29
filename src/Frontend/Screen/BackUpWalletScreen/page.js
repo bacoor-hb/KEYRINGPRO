@@ -24,15 +24,8 @@ const BackUpWalletPage = (_this) => {
   const styles = createStyles()
 
   const infoParagraphs = [
-    ...(ISIOS
-      ? [
-        I18n.t('v2.backup.saveToExternal'),
-        I18n.t('v2.backup.fileNamedKeyring')
-      ]
-      : [
-        I18n.t('v2.backup.saveToExternal') + '\n' + I18n.t('v2.backup.chooseFolder'),
-        I18n.t('v2.backup.fileNamedKeyring')
-      ]),
+    I18n.t('v2.backup.saveToExternal'),
+    I18n.t('v2.backup.fileNamedKeyring'),
     I18n.t('v2.backup.onlyYouKnowPassword'),
     I18n.t('v2.backup.dontForgetPassword')
   ]

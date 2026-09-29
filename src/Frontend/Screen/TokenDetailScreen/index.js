@@ -441,9 +441,7 @@ class TokenDetailScreen extends BaseContainer {
         chainOut = {
           ...chainOut,
           chainId: Number(chainIdOut?.toString()),
-          keyChain: `${chain}${chainIdOut}`,
-          isCustomChainData: true,
-          isSupportedChain: false
+          keyChain: `${chain}${chainIdOut}`
         }
         currentChainInfo[Number(chainIdOut?.toString())] = chainOut
         ReduxService.callDispatchAction(StorageReduxAction.setBlockChainList(currentChainInfo))

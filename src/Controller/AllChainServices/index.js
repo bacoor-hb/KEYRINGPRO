@@ -7,17 +7,34 @@ import {
 } from 'common/function'
 import { ethers } from 'ethers'
 import BigNumber from 'bignumber.js'
-import { LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_UNISWAP, LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_PANCAKESWAP, typeLiquidityPool } from 'common/constants/chain'
+import { LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_UNISWAP, LIST_ADDRESS_CONTRACT_POSITION_LIQUIDITY_POOL_PANCAKESWAP, typeLiquidityPool, CONTRACT_L1_GAS_PRICE_ORACLE } from 'common/constants/chain'
 import { numberToHex, encodeFunctionData, decodeFunctionData, erc20Abi } from 'viem'
 
 import ViemWeb3 from 'src/Web3/ViemWeb3'
 
 // OP-Stack GasPriceOracle predeploy — same address on every rollup built on the
 // stack. See AllChainServices.hasL1DataFee.
-const L1_GAS_PRICE_ORACLE = '0x420000000000000000000000000000000000000F'
+// const L1_GAS_PRICE_ORACLE = '0x420000000000000000000000000000000000000F'
 // chainId -> whether that predeploy exists. Module-level so the probe survives
 // screen remounts; see hasL1DataFee for why only definitive answers land here.
 const L1_DATA_FEE_CHAINS = new Map()
+
+// Upper-bound stand-ins for the fields of a transaction that is not built yet,
+// used only to size the payload handed to getL1Fee. Rounded up so the estimate
+// errs on the high side by a few bytes, never below the real transaction.
+const L1_FEE_SIZING_PLACEHOLDER = {
+  nonce: 0xffffffff,
+  gasPrice: '0xe8d4a51000', // 1000 gwei
+  gasLimit: '0xffffff',
+  nativeValue: '0xd3c21bcecceda1000000' // 1e24 wei
+}
+// A well-formed dummy signature: r and s are full 32 bytes (no leading zeros to
+// be trimmed by RLP) and s is in the low half of the curve order, which ethers
+// requires.
+const L1_FEE_SIZING_SIGNATURE = {
+  r: '0x' + 'ff'.repeat(32),
+  s: '0x' + '7f'.repeat(32)
+}
 
 /**
  * Where to setting all function which can used by all chain
@@ -792,7 +809,9 @@ export default class AllChainServices {
     const key = Number(chainId)
     if (L1_DATA_FEE_CHAINS.has(key)) return L1_DATA_FEE_CHAINS.get(key)
     try {
-      const code = await ViemWeb3.getPublicClient(chainId).getCode({ address: L1_GAS_PRICE_ORACLE })
+      const l1GasPriceOracleContract = CONTRACT_L1_GAS_PRICE_ORACLE[chainId] || CONTRACT_L1_GAS_PRICE_ORACLE.ALL
+      const code = await ViemWeb3.getPublicClient(chainId).getCode({ address: l1GasPriceOracleContract })
+
       const has = !!code && code !== '0x'
       L1_DATA_FEE_CHAINS.set(key, has)
       return has
@@ -801,8 +820,45 @@ export default class AllChainServices {
     }
   }
 
-  static async estimateL1DataFee (isMainToken, targetChainType, userAddress, tokenAddress) {
-    const gasPriceOracleContract = L1_GAS_PRICE_ORACLE
+  /**
+   * Serialize a transaction at the size it will have once filled in and signed,
+   * for pricing its L1 data fee before it exists.
+   *
+   * Some rollups (Scroll) charge the L1 fee in proportion to the raw byte length
+   * of the signed transaction, so a bare `{ to, data }` payload — no nonce, gas,
+   * value, chainId or signature — prices it at roughly a quarter of the real fee.
+   * OP-Stack oracles apply a minimum transaction size and are unaffected either way.
+   *
+   * Falls back to the bare payload if the sized one cannot be built, so this can
+   * never make the estimate fail where it used to succeed.
+   *
+   * @param {{ to: string, data?: string }} rawTx
+   * @param {number|string} chainId
+   * @param {boolean} isMainToken - native transfer (carries a value) vs token call
+   * @returns {string} serialized transaction hex
+   */
+  static serializeForL1FeeSizing (rawTx, chainId, isMainToken) {
+    try {
+      const id = Number(chainId)
+      if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Invalid chainId')
+      return ethers.utils.serializeTransaction(
+        {
+          ...rawTx,
+          nonce: L1_FEE_SIZING_PLACEHOLDER.nonce,
+          gasPrice: L1_FEE_SIZING_PLACEHOLDER.gasPrice,
+          gasLimit: L1_FEE_SIZING_PLACEHOLDER.gasLimit,
+          value: isMainToken ? L1_FEE_SIZING_PLACEHOLDER.nativeValue : undefined,
+          chainId: id
+        },
+        { ...L1_FEE_SIZING_SIGNATURE, v: id * 2 + 35 }
+      )
+    } catch (error) {
+      return ethers.utils.serializeTransaction(rawTx)
+    }
+  }
+
+  static async estimateL1DataFee (isMainToken, targetChainType, userAddress, tokenAddress, serializeTransactionCustom = null) {
+    const gasPriceOracleContract = CONTRACT_L1_GAS_PRICE_ORACLE[targetChainType] || CONTRACT_L1_GAS_PRICE_ORACLE.ALL
 
     try {
       let rawTransactionForEstimateGas
@@ -817,7 +873,7 @@ export default class AllChainServices {
           data: dataTx
         }
       }
-      const txDataSize = ethers.utils.serializeTransaction(rawTransactionForEstimateGas)
+      const txDataSize = serializeTransactionCustom ?? AllChainServices.serializeForL1FeeSizing(rawTransactionForEstimateGas, targetChainType, isMainToken)
 
       const value = await ViemWeb3.readContract(targetChainType, {
         address: gasPriceOracleContract,

@@ -97,6 +97,11 @@ const SelectChainOut = ({ isExchange, handleChangeChain, handleBack, _this }) =>
     }
   }, [loadingTokenSearch, tokenSearch, chain, tokenOut, loadingListTokensByAddress, listBalanceUser])
 
+  const onSearch = (value) => {
+    Keyboard.dismiss()
+    setTextSearchDebounce(value)
+  }
+
   const renderChains = () => {
     const data = []
 
@@ -156,10 +161,10 @@ const SelectChainOut = ({ isExchange, handleChangeChain, handleBack, _this }) =>
                 }
               }}
               returnKeyType='search'
-              onSubmitEditing={() => setTextSearchDebounce(textSearch)}
+              onSubmitEditing={() => onSearch(textSearch)}
               placeholder={I18n.t('v2.selectChain.searchPlaceholder')}
               rightIcon={(
-                <TouchableOpacity onPress={() => setTextSearchDebounce(textSearch)} activeOpacity={1}>
+                <TouchableOpacity onPress={() => onSearch(textSearch)} activeOpacity={1}>
                   <MyIcon uri={images.UIV2.icons.search} variant='small' />
                 </TouchableOpacity>
               )}

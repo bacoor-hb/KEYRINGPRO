@@ -32,6 +32,7 @@ import InitSuggestions from 'frontend/Components/ChatAgent/InitSuggestions'
 import { getRootSuggestions, getCallAgentNode, hasChildren, getBranchReply } from 'frontend/Components/ChatAgent/InitSuggestions/suggestionTree'
 import GlassView from 'frontend/Components/UI/GlassView'
 import FlatListBlurHeader from 'frontend/Components/UI/FlatListBlurHeader'
+import { ChatKeyboardProvider, useChatKeyboardScroller } from 'frontend/Components/ChatAgent/KeyboardAware'
 
 // Scrim starts at the top of the input: transparent there, fading to dark by
 // the input's bottom, then staying dark down behind the keyboard. Anchored to
@@ -98,6 +99,10 @@ const AISearchContent = (_this) => {
   const x402ResolveRef = useRef(null)
   const listRef = useRef(null)
   const inputRef = useRef(null)
+  // Settled keyboard height readable SYNCHRONOUSLY (the state copy below lands a
+  // render later). The in-thread field scroller measures against the live
+  // keyboard frame at focus time, so it needs this rather than the state.
+  const keyboardHeightRef = useRef(0)
   const inFlightRef = useRef(false)
   // The in-flight chat() promise + a monotonically-increasing turn id. When the
   // user sends a new message mid-turn we abort the running turn and wait for it
@@ -149,6 +154,17 @@ const AISearchContent = (_this) => {
   // KeyboardEvents effect below for the settled value React gets to see.
   const { height: keyboardHeightSV, progress: keyboardProgressSV } = useReanimatedKeyboardAnimation()
   const [keyboardHeight, setKeyboardHeight] = useState(0)
+  // Brings an input that lives INSIDE a message bubble (Swap amount, Send
+  // address, Supply, Add-liquidity, any WalletActionForm field) above the
+  // keyboard when it is focused. The composer at the bottom is pinned by its own
+  // translateY and needs none of this; every other field in the thread does,
+  // because the screen runs Android in SOFT_INPUT_ADJUST_NOTHING and the window
+  // therefore never moves on its own. See the module for the inverted-axis math.
+  const chatKeyboard = useChatKeyboardScroller({
+    listRef,
+    footerHeight,
+    getKeyboardHeight: () => keyboardHeightRef.current
+  })
   // Shows a "scroll to bottom" button while the user is scrolled up away from
   // the latest message.
   const [showScrollDown, setShowScrollDown] = useState(false)
@@ -229,14 +245,26 @@ const AISearchContent = (_this) => {
   // per open/close — never once per animation frame, which would re-render the
   // screen ~60x and re-lay out the list each time (the stutter).
   useEffect(() => {
-    const show = KeyboardEvents.addListener('keyboardWillShow', (e) => setKeyboardHeight(e.height))
-    const hide = KeyboardEvents.addListener('keyboardWillHide', () => setKeyboardHeight(0))
+    const show = KeyboardEvents.addListener('keyboardWillShow', (e) => {
+      setKeyboardHeight(e.height)
+      // Same value, synchronously into a ref: a field focused inside a message
+      // bubble parks its focus until the real keyboard frame is known, and this
+      // is what releases it (see ChatKeyboardProvider). State can't serve that —
+      // it lands a render later, after the scroll needed to happen.
+      keyboardHeightRef.current = e.height
+      chatKeyboard.notifyKeyboardHeight(e.height)
+    })
+    const hide = KeyboardEvents.addListener('keyboardWillHide', () => {
+      setKeyboardHeight(0)
+      keyboardHeightRef.current = 0
+      chatKeyboard.notifyKeyboardHeight(0)
+    })
     return () => { show.remove(); hide.remove() }
-  }, [])
+  }, [chatKeyboard])
 
   // The init suggestion pills: when they show, when a user interaction takes
   // them down, and when time away brings them back. See the hook for the rules.
-  const { visible: showSuggestions, dismiss: dismissInitSuggestions } = useInitSuggestions({
+  const { visible: showSuggestions, dismiss: dismissInitSuggestions, restore: restoreInitSuggestions } = useInitSuggestions({
     address: walletAddress,
     session: sessionKey,
     navigation: props?.navigation
@@ -255,6 +283,8 @@ const AISearchContent = (_this) => {
   // dismiss through a ref rather than closing over it.
   const dismissInitSuggestionsRef = useRef(dismissInitSuggestions)
   dismissInitSuggestionsRef.current = dismissInitSuggestions
+  const restoreInitSuggestionsRef = useRef(restoreInitSuggestions)
+  restoreInitSuggestionsRef.current = restoreInitSuggestions
 
   // Seed the visible conversation from redux for the active address. Re-runs on
   // address change so each address shows its own messages. It depends on the
@@ -320,8 +350,13 @@ const AISearchContent = (_this) => {
   // Inverted: contentOffset.y IS the distance from the newest message, so the
   // jump-to-bottom button needs no content-size arithmetic at all.
   const handleScroll = useCallback((e) => {
-    setShowScrollDown(e.nativeEvent.contentOffset.y > pixelByHeight(120))
-  }, [])
+    const y = e.nativeEvent.contentOffset.y
+    setShowScrollDown(y > pixelByHeight(120))
+    // Keep the field scroller's idea of where the list is in sync. An inverted
+    // FlatList has no synchronous offset getter, and the scroller needs the
+    // current offset to compute the one it should move to.
+    chatKeyboard.setScrollOffset(y)
+  }, [chatKeyboard])
 
   scrollToBottomRef.current = scrollToBottom
 
@@ -534,6 +569,17 @@ const AISearchContent = (_this) => {
     onDrill: useCallback(() => dismissInitSuggestionsRef.current(), [])
   })
 
+  // The floating support button: bring the pills back. No typing beat — the
+  // pills are not an answer, so the indicator would be claiming a turn that
+  // never happened. The scroll stays: the pills appear at the BOTTOM of the
+  // inverted list, so a user who is scrolled up has to be taken there or the
+  // tap looks like it did nothing.
+  const handlePressSupport = useCallback(() => {
+    Keyboard.dismiss()
+    restoreInitSuggestionsRef.current()
+    scrollToBottomRef.current()
+  }, [])
+
   // Cancel the in-flight turn. The agent aborts the live LLM request, rolls its
   // history back to the pre-turn state, and the chat() promise rejects with an
   // AbortError that sendMessage swallows.
@@ -591,12 +637,14 @@ const AISearchContent = (_this) => {
   // also poll on a timer the user cannot see, and scrolling from one used to
   // yank the list out from under them mid-read.
 
-  // Persist a tx widget's live status/hash back into its message so the timeline
-  // survives leaving and returning to the chat (the widget otherwise remounts to
-  // IDLE and loses the state). Matches the message by identity, then stamps
-  // `txState` onto the target uiAction's props. Immutable update so MessageBubble
-  // (memoized on uiActions identity) re-renders and the save effect persists it.
-  const handleWidgetPersist = useCallback((targetMessage, actionIdx, txState) => {
+  // Rewrite ONE uiAction of ONE message, immutably, and leave everything else
+  // referentially untouched — MessageBubble is memoized on uiActions identity, so
+  // a broader copy would re-render every widget in the chat.
+  //
+  // `patchAction` returns the replacement action, or the action it was handed to
+  // mean "nothing changed" — which is then a no-op that never touches state, so
+  // an unchanged widget update can't churn the save effect.
+  const updateWidgetAction = useCallback((targetMessage, actionIdx, patchAction) => {
     setMessages((prev) => {
       // `targetMessage` is the shallow copy produced by the `data` memo (it adds
       // showDateSeparator), so it isn't reference-equal to any element here —
@@ -610,6 +658,39 @@ const AISearchContent = (_this) => {
       const msg = prev[mi]
       const action = msg.uiActions?.[actionIdx]
       if (!action) return prev
+      const nextAction = patchAction(action)
+      if (nextAction === action) return prev
+      const nextActions = msg.uiActions.map((a, i) => (i === actionIdx ? nextAction : a))
+      const next = prev.slice()
+      next[mi] = { ...msg, uiActions: nextActions }
+      return next
+    })
+  }, [])
+
+  // Write a widget's own PROPS back into its message — as distinct from the
+  // `txState` below, which records a transaction.
+  //
+  // The swap form's spendable balance is what needs this. It describes the
+  // WALLET, not the transaction, and it arrives on `props.fromToken` where the
+  // agent put it when it built the form — so a balance the user refreshed has
+  // nowhere to live in `txState`. Persisting it here means the refreshed figure
+  // is what the card comes back with, instead of the one the agent read when the
+  // message was first written.
+  const handleWidgetPropsUpdate = useCallback((targetMessage, actionIdx, patch) => {
+    if (!patch) return
+    updateWidgetAction(targetMessage, actionIdx, (action) => ({
+      ...action,
+      props: { ...action.props, ...patch }
+    }))
+  }, [updateWidgetAction])
+
+  // Persist a tx widget's live status/hash back into its message so the timeline
+  // survives leaving and returning to the chat (the widget otherwise remounts to
+  // IDLE and loses the state). Matches the message by identity, then stamps
+  // `txState` onto the target uiAction's props. Immutable update so MessageBubble
+  // (memoized on uiActions identity) re-renders and the save effect persists it.
+  const handleWidgetPersist = useCallback((targetMessage, actionIdx, txState) => {
+    updateWidgetAction(targetMessage, actionIdx, (action) => {
       // No-op if nothing changed, so we don't churn state/persistence.
       //
       // Compared field-agnostically: widgets persist DIFFERENT shapes — the
@@ -623,16 +704,10 @@ const AISearchContent = (_this) => {
       // hash both stand still: `x402Paid` is set during GATING with no hash yet,
       // and dropping that write would let a retry charge the user's fee twice.
       const cur = action.props?.txState
-      if (cur && shallowEqual(cur, txState)) return prev
-
-      const nextActions = msg.uiActions.map((a, i) =>
-        i === actionIdx ? { ...a, props: { ...a.props, txState } } : a
-      )
-      const next = prev.slice()
-      next[mi] = { ...msg, uiActions: nextActions }
-      return next
+      if (cur && shallowEqual(cur, txState)) return action
+      return { ...action, props: { ...action.props, txState } }
     })
-  }, [])
+  }, [updateWidgetAction])
 
   // Copy a tx hash and surface the app's standard "copied" toast — same call
   // shape as the send-token flow (message first, `type: 'toast'`) so the two
@@ -680,6 +755,7 @@ const AISearchContent = (_this) => {
           onSend={sendMessage}
           onCopyHash={handleCopyHash}
           onPersist={handleWidgetPersist}
+          onPropsUpdate={handleWidgetPropsUpdate}
           onSelectSuggestion={selectSuggestion}
           selectable={MESSAGE_SELECTABLE}
           // The screen container, so a widget nested in this bubble can open a
@@ -689,7 +765,7 @@ const AISearchContent = (_this) => {
         />
       </View>
     ),
-    [sendMessage, handleCopyHash, handleWidgetPersist, selectSuggestion, _this.func]
+    [sendMessage, handleCopyHash, handleWidgetPersist, handleWidgetPropsUpdate, selectSuggestion, _this.func]
   )
 
   // Lift the floating footer (and the jump-to-bottom button riding above it) by
@@ -720,168 +796,208 @@ const AISearchContent = (_this) => {
   const scrimFadeFrac = scrimTotal > 0 ? footerHeight / scrimTotal : 0.5
 
   return (
-    <MyViewPage style={styles.container}>
-      <FlatListBlurHeader
-        ref={listRef}
-        style={styles.list}
-        data={data}
-        keyExtractor={(item, index) => item.id || (item.replyToId ? `reply-${item.replyToId}` : `${item.role}-${item.timestamp}-${index}`)}
-        renderItem={renderItem}
-        contentContainerStyle={styles.listContent}
-        // THE INVERSION. The list is flipped vertically, so index 0 renders at
-        // the BOTTOM of the screen and the resting scroll offset (0) already IS
-        // the newest message. Nothing has to scroll when the screen opens, when a
-        // turn is appended, or when the keyboard resizes the viewport — which is
-        // what removed the auto-scroll stutter on slower devices.
-        inverted
-        // Header and footer swap places under the flip: ListHeaderComponent is
-        // drawn at the START of the data, which inverted means the BOTTOM of the
-        // screen. So the things that belong below the newest message — the typing
-        // indicator and the suggestion pills — go here, and the welcome text that
-        // belongs above the OLDEST message goes in the footer.
-        //
-        // Like the rows, these need no counter-flip: VirtualizedList composes its
-        // inversion style onto the header/footer wrappers too, so each block is
-        // flipped once and back. Children inside a block therefore keep their
-        // normal top-to-bottom order — only the blocks themselves swap ends.
-        ListHeaderComponent={(
-          <View style={{ paddingBottom: footerHeight + keyboardHeight + pixelByHeight(20) }}>
-            {isThinking ? <TypingIndicator /> : null}
-            {/* The ROOT pills only, and the root the SESSION asked for (a
-                feature entry point opens on its own set — see
-                getRootSuggestions). Every deeper level renders inside the reply
-                that produced it (see MessageBubble's suggestionPath), which is
-                what keeps earlier levels on screen and tappable. */}
-            {showSuggestions && <InitSuggestions options={rootSuggestions} onSelect={selectSuggestion} />}
-          </View>
-        )}
-        ListFooterComponent={(
-          <MyText style={styles.textIntroduce}>{I18n.t('AISearch.welcome')}</MyText>
-        )}
-        onScroll={handleScroll}
-        scrollEventThrottle={16}
-        // Defaults to TRUE on Android only. It detaches offscreen rows, so
-        // scrolling back over them remounts and re-measures each bubble — with
-        // variable-height content that re-measure shifts the rows below it, which
-        // reads as the list juddering and losing its place. iOS defaults to false,
-        // which is why the same list scrolls smoothly there. Pin it off on both.
-        removeClippedSubviews={false}
-        // Virtualization budget for a long thread. removeClippedSubviews is off
-        // above (variable-height bubbles judder when detached/re-measured), so
-        // these are what actually keep a big conversation cheap: FlatList mounts
-        // ~windowSize screenfuls around the viewport and leaves the rest as blank
-        // spacer, and each scroll batch renders at most maxToRenderPerBatch rows.
-        //
-        // Tuned for THIS list, not FlatList's defaults (windowSize 21 / batch 10):
-        // - windowSize 7 (~3 screens up + viewport + 3 down) is plenty of scroll
-        //   buffer for a chat; higher just mounts more offscreen bubbles for no
-        //   visible gain since the user reads from the bottom.
-        // - initialNumToRender 15 is what the list opens with. Inverted, those
-        //   are the NEWEST messages and they are exactly what fills the screen,
-        //   so this alone keeps opening a long thread cheap — the older rows are
-        //   never mounted until scrolled to.
-        // - updateCellsBatchingPeriod 50ms spreads the fill so mounting a batch
-        //   doesn't block a scroll frame.
-        windowSize={7}
-        initialNumToRender={15}
-        maxToRenderPerBatch={10}
-        updateCellsBatchingPeriod={50}
-        // 'always', not 'handled': the list fills the screen and the floating
-        // footer/send-button sits on top of its frame. 'handled' installs a
-        // native tap-to-dismiss recognizer over that frame that races (and beats)
-        // the button's JS press — dismissing the keyboard, sliding the footer, and
-        // cancelling the tap. 'always' disables that recognizer, so taps never
-        // auto-dismiss; the keyboard only closes when we call Keyboard.dismiss().
-        // keyboardShouldPersistTaps='always'
-        showsVerticalScrollIndicator={false}
-      />
+    <ChatKeyboardProvider value={chatKeyboard}>
+      <MyViewPage style={styles.container}>
+        <FlatListBlurHeader
+          ref={listRef}
+          style={styles.list}
+          data={data}
+          keyExtractor={(item, index) => item.id || (item.replyToId ? `reply-${item.replyToId}` : `${item.role}-${item.timestamp}-${index}`)}
+          renderItem={renderItem}
+          contentContainerStyle={styles.listContent}
+          // THE INVERSION. The list is flipped vertically, so index 0 renders at
+          // the BOTTOM of the screen and the resting scroll offset (0) already IS
+          // the newest message. Nothing has to scroll when the screen opens, when a
+          // turn is appended, or when the keyboard resizes the viewport — which is
+          // what removed the auto-scroll stutter on slower devices.
+          inverted
+          // Header and footer swap places under the flip: ListHeaderComponent is
+          // drawn at the START of the data, which inverted means the BOTTOM of the
+          // screen. So the things that belong below the newest message — the typing
+          // indicator and the suggestion pills — go here, and the welcome text that
+          // belongs above the OLDEST message goes in the footer.
+          //
+          // Like the rows, these need no counter-flip: VirtualizedList composes its
+          // inversion style onto the header/footer wrappers too, so each block is
+          // flipped once and back. Children inside a block therefore keep their
+          // normal top-to-bottom order — only the blocks themselves swap ends.
+          ListHeaderComponent={(
+            <View style={{ paddingBottom: footerHeight + keyboardHeight + pixelByHeight(20) }}>
+              {isThinking ? <TypingIndicator /> : null}
+              {/* The agent's opening line, sitting directly above the pills at
+                  the bottom of the screen rather than at the top of the thread.
+                  NOT tied to `showSuggestions`: tapping a pill takes the pills
+                  down but leaves this text in place, above the turn that follows,
+                  so the screen reads as a conversation that has started rather
+                  than one that reset.
 
-      {/* Jump-to-bottom — floats just above the input, only while scrolled up.
-          Rides the same keyboard translate as the footer so it stays glued to it. */}
-      {showScrollDown && messages.length > 0 && (
+                  A thread with nothing in it yet gets the full greeting. Once it
+                  carries turns — a relaunch, a returning session — the user has
+                  been welcomed already, so the line drops the greeting and only
+                  introduces the agent. */}
+
+              {/* The ROOT pills only, and the root the SESSION asked for (a
+                  feature entry point opens on its own set — see
+                  getRootSuggestions). Every deeper level renders inside the reply
+                  that produced it (see MessageBubble's suggestionPath), which is
+                  what keeps earlier levels on screen and tappable. */}
+              {showSuggestions && (
+                <>
+                  {messages.length ? (
+                    <MyText style={styles.textIntroduce}>
+                      {I18n.t('AISearch.suggestionsIntro')}
+                    </MyText>
+                  ) : null}
+                  <InitSuggestions options={rootSuggestions} onSelect={selectSuggestion} />
+                </>
+              )}
+            </View>
+          )}
+          ListFooterComponent={(
+            <MyText style={styles.textIntroduce}>{I18n.t('AISearch.welcome')}</MyText>
+          )}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          // Defaults to TRUE on Android only. It detaches offscreen rows, so
+          // scrolling back over them remounts and re-measures each bubble — with
+          // variable-height content that re-measure shifts the rows below it, which
+          // reads as the list juddering and losing its place. iOS defaults to false,
+          // which is why the same list scrolls smoothly there. Pin it off on both.
+          removeClippedSubviews={false}
+          // Virtualization budget for a long thread. removeClippedSubviews is off
+          // above (variable-height bubbles judder when detached/re-measured), so
+          // these are what actually keep a big conversation cheap: FlatList mounts
+          // ~windowSize screenfuls around the viewport and leaves the rest as blank
+          // spacer, and each scroll batch renders at most maxToRenderPerBatch rows.
+          //
+          // Tuned for THIS list, not FlatList's defaults (windowSize 21 / batch 10):
+          // - windowSize 7 (~3 screens up + viewport + 3 down) is plenty of scroll
+          //   buffer for a chat; higher just mounts more offscreen bubbles for no
+          //   visible gain since the user reads from the bottom.
+          // - initialNumToRender 15 is what the list opens with. Inverted, those
+          //   are the NEWEST messages and they are exactly what fills the screen,
+          //   so this alone keeps opening a long thread cheap — the older rows are
+          //   never mounted until scrolled to.
+          // - updateCellsBatchingPeriod 50ms spreads the fill so mounting a batch
+          //   doesn't block a scroll frame.
+          windowSize={7}
+          initialNumToRender={15}
+          maxToRenderPerBatch={10}
+          updateCellsBatchingPeriod={50}
+          // 'always', not 'handled': the list fills the screen and the floating
+          // footer/send-button sits on top of its frame. 'handled' installs a
+          // native tap-to-dismiss recognizer over that frame that races (and beats)
+          // the button's JS press — dismissing the keyboard, sliding the footer, and
+          // cancelling the tap. 'always' disables that recognizer, so taps never
+          // auto-dismiss; the keyboard only closes when we call Keyboard.dismiss().
+          // keyboardShouldPersistTaps='always'
+          showsVerticalScrollIndicator={false}
+        />
+
+        {/* Support pills shortcut — the exact inverse of the pills: offered only
+            while they are hidden, and it hides itself the moment they come back.
+            Rides the same keyboard translate as the footer so it stays glued
+            above the input. */}
+        {!showSuggestions && (
+          <Reanimated.View
+            style={[styles.supportWrap, { bottom: footerHeight }, footerAnimStyle]}
+            pointerEvents='box-none'
+          >
+            <TouchableOpacity activeOpacity={0.8} onPress={handlePressSupport}>
+              <GlassView interactive effect='clear' style={styles.supportBtn}>
+                <MyIcon uri={images.UIV2.icons.icon_ai_support} style={styles.supportIcon} />
+              </GlassView>
+            </TouchableOpacity>
+          </Reanimated.View>
+        )}
+
+        {/* Jump-to-bottom — floats just above the input, only while scrolled up.
+            Rides the same keyboard translate as the footer so it stays glued to it. */}
+        {showScrollDown && messages.length > 0 && (
+          <Reanimated.View
+            style={[styles.scrollDownWrap, { bottom: footerHeight }, footerAnimStyle]}
+            pointerEvents='box-none'
+          >
+            <TouchableOpacity activeOpacity={0.8} onPress={handleScrollToBottom}>
+              {isThinking ? (
+                <GlassView interactive effect='clear' style={styles.scrollDownBtnThinking}>
+                  <TypingIndicator bare />
+                </GlassView>
+              ) : (
+                <GlassView interactive effect='clear' style={styles.scrollDownBtn}>
+                  <MyIcon uri={images.UIV2.icons.goArrowDownLow} style={styles.scrollDownIcon} />
+                </GlassView>
+              )}
+            </TouchableOpacity>
+          </Reanimated.View>
+        )}
+
         <Reanimated.View
-          style={[styles.scrollDownWrap, { bottom: footerHeight }, footerAnimStyle]}
-          pointerEvents='box-none'
+          style={[styles.footer, footerAnimStyle]}
+          onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
         >
-          <TouchableOpacity activeOpacity={0.8} onPress={handleScrollToBottom}>
-            {isThinking ? (
-              <GlassView interactive effect='clear' style={styles.scrollDownBtnThinking}>
-                <TypingIndicator bare />
-              </GlassView>
-            ) : (
-              <GlassView interactive effect='clear' style={styles.scrollDownBtn}>
-                <MyIcon uri={images.UIV2.icons.goArrowDownLow} style={styles.scrollDownIcon} />
-              </GlassView>
-            )}
+          <LinearGradient
+            colors={SCRIM_COLORS}
+            locations={[0, scrimFadeFrac, 1]}
+            // Extends below the footer to cover the keyboard area. The footer is
+            // translated up by the keyboard height, so the scrim has to reach the
+            // same distance back down to still touch the screen bottom.
+            style={[styles.scrim, { top: 0, bottom: -keyboardHeight }]}
+            pointerEvents='none'
+          />
+          <TouchableOpacity
+            onPress={() => {
+              inputRef.current?.focus()
+            }}
+            activeOpacity={1}
+            style={{
+
+              flex: 1
+            }}>
+            <GlassView interactive effect='clear' style={styles.searchWrap}>
+              <View style={styles.searchInner}>
+                <MyIcon uri={images.UIV2.icons.aiChat} style={styles.AIicon} />
+                <TextInput
+                  ref={inputRef}
+                  value={input}
+                  onChangeText={setInput}
+                  placeholder={I18n.t('v2.aiSearch.searchPlaceholder')}
+                  placeholderTextColor={Colors.TEXT_MEDIUM}
+                  style={styles.input}
+                  returnKeyType='send'
+                  // While a turn runs, typing is allowed but the keyboard send key
+                  // is a no-op — sending is blocked until the turn finishes/stops.
+                  onSubmitEditing={() => !isThinking && sendMessage(input)}
+                />
+              </View>
+            </GlassView>
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => (isThinking ? handleStop() : sendMessage(input))}
+
+          >
+            <GlassView
+              interactive
+              effect='clear'
+              style={[styles.roundBtn, !isThinking && !input.trim() && styles.roundBtnDisabled]}
+            >
+              {isThinking
+                ? <MyIcon uri={images.UIV2.icons.home.icon_stop} style={styles.searchIcon} />
+                : <MyIcon uri={images.UIV2.icons.home.send} style={styles.searchIcon} />}
+            </GlassView>
           </TouchableOpacity>
         </Reanimated.View>
-      )}
 
-      <Reanimated.View
-        style={[styles.footer, footerAnimStyle]}
-        onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
-      >
-        <LinearGradient
-          colors={SCRIM_COLORS}
-          locations={[0, scrimFadeFrac, 1]}
-          // Extends below the footer to cover the keyboard area. The footer is
-          // translated up by the keyboard height, so the scrim has to reach the
-          // same distance back down to still touch the screen bottom.
-          style={[styles.scrim, { top: 0, bottom: -keyboardHeight }]}
-          pointerEvents='none'
+        {/* x402 payment approval — surfaced while the core awaits a signature. */}
+        <X402SignModal
+          request={x402Req}
+          walletAddress={walletAddress}
+          onResolve={handleX402Resolve}
+          screenRef={_this.func}
         />
-        <TouchableOpacity
-          onPress={() => {
-            inputRef.current?.focus()
-          }}
-          activeOpacity={1}
-          style={{
-
-            flex: 1
-          }}>
-          <GlassView interactive effect='clear' style={styles.searchWrap}>
-            <View style={styles.searchInner}>
-              <MyIcon uri={images.UIV2.icons.aiChat} style={styles.AIicon} />
-              <TextInput
-                ref={inputRef}
-                value={input}
-                onChangeText={setInput}
-                placeholder={I18n.t('v2.aiSearch.searchPlaceholder')}
-                placeholderTextColor={Colors.TEXT_MEDIUM}
-                style={styles.input}
-                returnKeyType='send'
-                // While a turn runs, typing is allowed but the keyboard send key
-                // is a no-op — sending is blocked until the turn finishes/stops.
-                onSubmitEditing={() => !isThinking && sendMessage(input)}
-              />
-            </View>
-          </GlassView>
-        </TouchableOpacity>
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => (isThinking ? handleStop() : sendMessage(input))}
-
-        >
-          <GlassView
-            interactive
-            effect='clear'
-            style={[styles.roundBtn, !isThinking && !input.trim() && styles.roundBtnDisabled]}
-          >
-            {isThinking
-              ? <MyIcon uri={images.UIV2.icons.home.icon_stop} style={styles.searchIcon} />
-              : <MyIcon uri={images.UIV2.icons.home.send} style={styles.searchIcon} />}
-          </GlassView>
-        </TouchableOpacity>
-      </Reanimated.View>
-
-      {/* x402 payment approval — surfaced while the core awaits a signature. */}
-      <X402SignModal
-        request={x402Req}
-        walletAddress={walletAddress}
-        onResolve={handleX402Resolve}
-        screenRef={_this.func}
-      />
-    </MyViewPage>
+      </MyViewPage>
+    </ChatKeyboardProvider>
   )
 }
 

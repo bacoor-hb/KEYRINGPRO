@@ -98,10 +98,8 @@ const AddChainPopup = props => {
           decimals: Number(dataNewChain.decimal),
           coinGeckoId: ''
         },
-        isCustomChainData: true,
         chain: `${dataNewChain.chainid}`.toLowerCase().trim(),
         keyChain: `${dataNewChain.chainid + dataNewChain.chainid}`.toLowerCase().trim(),
-        isSupportedChain: false,
         status: false,
         chainId: dataNewChain.chainid,
         name: dataNewChain.name,
@@ -124,10 +122,8 @@ const AddChainPopup = props => {
           coinGeckoId: '',
           ...chainInfo.nativeCurrency
         },
-        isCustomChainData: false,
         chain: `${chainInfo.chain}`.toLowerCase().trim(),
         keyChain: `${chainInfo.chain + chainInfo.chainId}`.toLowerCase().trim(),
-        isSupportedChain: false,
         status: false,
         chainId: chainInfo.chainId || dataNewChain.chainid,
         name: chainInfo.name || dataNewChain.name || 'Keyring',
@@ -172,10 +168,8 @@ const AddChainPopup = props => {
             decimals: Number(dataNewChain.decimal),
             coinGeckoId: ''
           },
-          isCustomChainData: true, // now, we dont have any this network's information, it must be custom chain.
           chain: `${dataNewChain.chainid}`.toLowerCase(),
           keyChain: `${dataNewChain.chainid + dataNewChain.chainid}`.toLowerCase().trim(),
-          isSupportedChain: false,
           status: false,
           chainId: dataNewChain.chainid,
           name: dataNewChain.name,
@@ -199,10 +193,8 @@ const AddChainPopup = props => {
             coinGeckoId: '',
             ...chainInfo.nativeCurrency // we can get real coinGeckoId here
           },
-          isCustomChainData: false, // because we have already network's information, this is not custom chain data.
           chain: `${chainInfo.chain}`.toLowerCase().trim(), // we have network's information, so we have exactly name of chain, dont use chainId here anymore
           keyChain: `${chainInfo.chain + chainInfo.chainId}`.toLowerCase().trim(), // chain + chainId please
-          isSupportedChain: false,
           status: false,
           chainId: chainInfo.chainId || dataNewChain.chainid,
           name: chainInfo.name || dataNewChain.name || 'Keyring',

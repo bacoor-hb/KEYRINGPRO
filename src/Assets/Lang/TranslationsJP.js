@@ -36,7 +36,8 @@ export default {
     addToken: {
       title: 'トークンを追加',
       selectNetwork: 'ネットワークを選択',
-      contractPlaceholder: 'トークンコントラクトアドレス',
+      searchPlaceholder: 'トークン名、シンボル、またはアドレス',
+      noMatching: '一致するトークンが見つかりません',
       addressMustStart: 'アドレスは「0x」から始まる必要があります',
       invalidContract: '不正なコントラクトアドレスです',
       noTokenFound: 'このコントラクトアドレスに関連付けられたトークンはありません'
@@ -112,7 +113,7 @@ export default {
       agreeDescription: '「確認」をタップすると、{termsOfUse}および{privacyPolicy}に同意したことになります',
       timeOneMin: '1分',
       timeFewSeconds: '数秒',
-      receivedAmountOut: '{{amount}} {{symbol}} 受信済み'
+      receivedAmountOut: '{{amount}} {{symbol}}を受信済み'
     },
     selectChain: {
       title: 'ネットワークを選択',
@@ -199,7 +200,9 @@ export default {
       noName: '名前なし',
       noHash: 'ハッシュなし',
       interactWith: 'インタラクト先',
-      history: '履歴'
+      history: '履歴',
+      changeAccount: 'アカウントを変更',
+      selectAccount: 'アカウントを選択'
     },
     wcConnect: {
       selectAccount: '接続するアカウントを選択',
@@ -286,11 +289,10 @@ export default {
     },
     backup: {
       noBackupFile: 'ウォレットのバックアップが作成されていません',
-      saveToExternal: 'ウォレットのバックアップは、最も信頼できる外部ストレージに保存してください',
-      fileNamedKeyring: 'ウォレットのバックアップファイル名は「keyring」です。ファイル名は変更せずに保存してください',
-      chooseFolder: 'ウォレットのバックアップファイルはは、端末の「ダウンロード」または「ドキュメント」フォルダに保存できます',
-      onlyYouKnowPassword: '設定したパスワードを知っているのはあなただけです',
-      dontForgetPassword: 'パスワードを忘れないようにご注意ください！',
+      saveToExternal: 'ウォレットのバックアップは、信頼性の高い外部ストレージに保存することをお勧めします\n\nバックアップファイルには暗号化された秘密鍵情報が含まれており、お客様が設定したパスワードで保護されています',
+      fileNamedKeyring: '新しいアカウントを作成するたびに、ウォレットのバックアップを新たに作成する必要があります',
+      onlyYouKnowPassword: 'バックアップファイルの名称は「Keyring」です。ファイル名を変更せずに保存してください',
+      dontForgetPassword: '設定したパスワードは、お客様ご自身のみが知るものです。パスワードを忘れないようご注意ください。パスワードを紛失した場合、バックアップファイルからウォレットを復元することはできません',
       backupHistory: 'バックアップ履歴'
     },
     exportNfc: {
@@ -430,6 +432,7 @@ export default {
   },
   AISearch: {
     welcome: 'ようこそ！私はKeyringエージェントです。本日はDeFiについてどのようなお手伝いをしましょうか？',
+    suggestionsIntro: '私はKeyringエージェントです。本日はDeFiについてどのようなお手伝いをしましょうか？',
     tellMeAboutToken: 'トークン {{value}} について教えてください',
     thisToken: 'このトークン',
     learnMoreAbout: '{{value}} について詳しく',
@@ -838,12 +841,11 @@ export default {
     maxExceedsRange: '最大価格が許容範囲を超えています (max %{max})',
     amountOf: '数量 %{symbol}',
     spendable: '利用可能残高',
-    insufficientBalance: '数量が利用可能残高を超えています',
+    insufficientBalance: '残高が不足しています',
     addLiquidity: '流動性を追加',
     amount: '数量',
     ratio: '分割比率',
     expectedAmount: '%{symbol} (予想)',
-    confirmAndSign: '確認して署名',
     retry: '再試行',
     sending: '送信中',
     approxTime: '所要時間: 数秒程度',
@@ -854,7 +856,6 @@ export default {
     quoteExpired: '見積もりの期限切れ',
     quoteExpiredDesc: 'プール価格が変動したため、この見積もりは無効になりました。最新の取引情報を取得するには再試行してください',
     confirmAddLiquidityMessage: '%{chainName}上の%{pair} (%{fee}手数料ティア)に%{amount}%{symbol}で流動性を追加します。価格帯は%{minPrice} から%{maxPrice}までです(プールのアドレスは%{pool})',
-    walletActionSend: '送信',
     walletActionApprove: '承認',
     supplyTitle: '%{symbol}をサプライ',
     supplyStepApprove: '承認',
@@ -879,8 +880,6 @@ export default {
     walletActionReceiver: '受信者アドレス',
     walletActionSpender: '承認先アドレス',
     walletActionAllowance: '許可額',
-    walletActionCollection: 'コレクション',
-    walletActionTokenId: 'トークン ID',
     walletActionEditionsDefault: '1',
     walletActionUnlimited: '無制限',
     walletActionEnterContract: 'コントラクトを入力',
@@ -889,11 +888,18 @@ export default {
     walletActionFieldRequired: 'この項目は必須です',
     walletActionInvalidAddress: '無効なアドレスです',
     walletActionInvalidAmount: '金額は 0 より大きい必要があります',
-    confirmSendNativeMessage: '%{chainName} 上で %{amount} %{symbol} を %{to} に送信したいです',
-    confirmSendTokenMessage: '%{chainName} 上で %{amount} %{symbol} を %{to} に送信したいです（トークンコントラクト: %{contract}）',
-    confirmSendNftMessage: '%{chainName} 上で NFT %{nft} #%{tokenId} (x%{amount}) を %{to} に送信したいです（コントラクト: %{contract}）',
-    confirmApproveTokenMessage: '%{chainName} 上で %{spender} に対して %{amount} %{symbol} の使用を承認したいです（トークンコントラクト: %{contract}）',
-    confirmApproveTokenUnlimitedMessage: '%{chainName} 上で %{spender} に対して無制限の %{symbol} の使用を承認したいです（トークンコントラクト: %{contract}）',
+    swapTitle: 'スワップ',
+    buyTitle: '購入',
+    swapTitleWith: '%{symbol}をスワップ',
+    buyTitleWith: '%{symbol}を購入',
+    swapSideFrom: '送信元',
+    swapSideTo: '送信先',
+    swapSideSell: '売却',
+    swapSideBuy: '購入',
+    swapRefreshQuote: '更新',
+    swapReceivedAbout: '%{amount} %{symbol} を受け取る予定です',
+    swapApproveFailed: '承認トランザクションに失敗したため、スワップは実行されませんでした',
+    swapApproveNotVisible: '承認は送信されましたが、まだオンチェーンで確認できません。スワップは実行されていません — しばらくしてからもう一度お試しください',
     walletActionNotEnoughFee: 'ネットワーク手数料を支払うには、あと %{amount} %{symbol} 必要です',
     walletActionNotEnoughFeeNoSymbol: 'ネットワーク手数料を支払うには、ネイティブコインがあと %{amount} 必要です',
     walletActionEstimateFailed: 'この取引を完了できません。詳細を確認してもう一度お試しください',

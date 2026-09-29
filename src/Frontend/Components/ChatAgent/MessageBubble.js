@@ -13,6 +13,7 @@ import SendNativeForm from './SendNativeForm'
 import SendTokenForm from './SendTokenForm'
 import SendNftForm from './SendNftForm'
 import ApproveTokenForm from './ApproveTokenForm'
+import SwapTokenForm from './SwapTokenForm'
 import SupplyUsdcForm from './SupplyUsdcForm'
 import LendingMarketList from './LendingMarketList'
 import WalletNftList from './WalletNftList'
@@ -142,11 +143,11 @@ const usePopIn = (message, isUser) => {
   return style
 }
 
-const UIWidget = ({ action, onSend, onResult, onStatusChange, onCopyHash, onPersist, screenRef, messageTimestamp }) => {
+const UIWidget = ({ action, onSend, onResult, onStatusChange, onCopyHash, onPersist, onPropsUpdate, screenRef, messageTimestamp }) => {
   const language = action.language
   // Tx lifecycle plumbing shared by every widget that signs and broadcasts.
   // screenRef rides along so a widget can open a screen-level drawer.
-  const txProps = { onResult, onStatusChange, onCopyHash, onPersist, screenRef }
+  const txProps = { onResult, onStatusChange, onCopyHash, onPersist, onPropsUpdate, screenRef }
   switch (action.component) {
     case 'AddLiquidityForm':
       return <AddLiquidityForm props={action.props} onSend={onSend} language={language} />
@@ -165,6 +166,16 @@ const UIWidget = ({ action, onSend, onResult, onStatusChange, onCopyHash, onPers
       return <SendNftForm props={action.props} {...txProps} language={language} />
     case 'ApproveTokenForm':
       return <ApproveTokenForm props={action.props} {...txProps} language={language} />
+    // Swap / buy — one card, one payload. A buy and a swap are the same
+    // transaction under two framings, so both tools ship this, differing only in
+    // `intent` (which decides the wording and which x402 route is charged).
+    //
+    // Unlike every other widget here it can be TWO transactions (approve → swap),
+    // which is why it drives its own flow and timeline. And unlike the confirm
+    // card it replaced, it quotes on the FE for the amount currently on screen —
+    // so no `messageTimestamp`: there is no agent-built quote left to go stale.
+    case 'SwapTokenForm':
+      return <SwapTokenForm props={action.props} {...txProps} language={language} />
     // Supplying USDC into a lending market. Like the forms above it signs and
     // broadcasts locally — but as an approve → deposit sequence, decided from
     // the market's current allowance at submit time.
@@ -185,7 +196,7 @@ const UIWidget = ({ action, onSend, onResult, onStatusChange, onCopyHash, onPers
   }
 }
 
-const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, onPersist, onSelectSuggestion, selectable, screenRef }) => {
+const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, onPersist, onPropsUpdate, onSelectSuggestion, selectable, screenRef }) => {
   const isUser = message.role === 'user'
   const hasUI = message.uiActions && message.uiActions.length > 0
   const actionButtons = Array.isArray(message.actionButtons) ? message.actionButtons : []
@@ -244,6 +255,10 @@ const MessageBubble = ({ message, onSend, onResult, onStatusChange, onCopyHash, 
             // Scope persistence to THIS message + action index so the host can
             // write the tx state back onto the right uiAction.
             onPersist={onPersist ? (txState) => onPersist(message, idx, txState) : undefined}
+            // Same scoping for a widget rewriting its OWN props — the swap
+            // form's refreshed spendable balance, which lives on props rather
+            // than in the tx state above.
+            onPropsUpdate={onPropsUpdate ? (patch) => onPropsUpdate(message, idx, patch) : undefined}
           />
         ))}
 

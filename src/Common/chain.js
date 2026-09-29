@@ -1,7 +1,7 @@
 import DeviceInfo from 'react-native-device-info'
 import { REVIEW_URL_STATUS } from './constants/app'
 import { chainType, SUPPORTED_BLOCKCHAIN_DATA } from 'common/constants/chain'
-import { handleOpenUrl, isURL } from './function'
+import { formatJsonRpcErrorForWalletConnectV2, handleOpenUrl, isURL, lowerCase } from './function'
 import ReduxService from './redux'
 import BaseAPI from 'controller/API/BaseAPI'
 import I18n from 'assets/Lang'
@@ -219,6 +219,157 @@ export const switchToNewChainV2 = async (
   }
 }
 
+/**
+ * Replace the account a WalletConnect V2 session is connected with.
+ *
+ * V2 binds a session to exactly ONE account, so this SWAPS the address on every
+ * chain of the session (the old account is dropped, not kept alongside):
+ *   1. `updateSession` rewrites namespaces.eip155.accounts (the source of truth),
+ *   2. `accountsChanged` is emitted per chain so the dApp reacts without a reconnect.
+ * Chains / methods / events are left exactly as approved, so the session keeps
+ * satisfying the proposal's requiredNamespaces.
+ *
+ * Pending requests were addressed to the OLD address and can never be signed once
+ * it is gone, so they are rejected and cleared.
+ *
+ * Note: `accountsChanged` is best-effort — a dApp that only reads accounts at
+ * connect time needs a page reload to pick the new one up.
+ *
+ * @param {number} walletConnectIndex index of the session in walletConnectRedux
+ * @param {object} newAccount account from accountListRedux (needs `address`)
+ * @param {Function} [callbackOnDone]
+ * @param {Function} [callbackOnError]
+ */
+export const switchAccountV2 = async (
+  walletConnectIndex,
+  newAccount,
+  callbackOnDone,
+  callbackOnError
+) => {
+  try {
+    const address = newAccount?.address
+    const walletConnectRedux = ReduxService.getReduxDataByKey('walletConnectRedux', [])
+    const walletConnectItem = walletConnectRedux?.[walletConnectIndex]
+
+    if (!address || !walletConnectItem) {
+      throw new Error('switchAccountV2: missing account or session')
+    }
+
+    const wcWeb3Wallet = await getConnectorV2()
+    const currentNamespace = walletConnectItem.currentNamespace
+    const authNamespace = walletConnectItem?.session?.namespaces?.eip155
+    const currentEip155 = currentNamespace?.supportedNamespaces?.eip155 || authNamespace
+    // Keep the approved chains untouched — only the account changes. chainArray is
+    // the fallback for sessions stored before currentNamespace existed.
+    const chains = (currentEip155?.chains?.length > 0 ? currentEip155.chains : walletConnectItem.chainArray) || []
+
+    if (chains.length === 0) {
+      throw new Error('switchAccountV2: session has no eip155 chain')
+    }
+
+    const accountArr = chains.map((chain) => `${chain}:${address}`)
+    const accountArrInfo = chains.map(() => ({ address }))
+    const newNamespace = {
+      ...currentNamespace,
+      supportedNamespaces: {
+        eip155: {
+          chains: [...chains],
+          accounts: accountArr,
+          methods: [...(currentEip155?.methods || [])],
+          events: [...(currentEip155?.events || [])]
+        }
+      }
+    }
+
+    // Tell the dApp FIRST: if the session is already dead, redux must not be left
+    // pointing at an account the dApp never received.
+    await wcWeb3Wallet.updateSession({
+      topic: walletConnectItem.topic,
+      namespaces: { ...newNamespace.supportedNamespaces }
+    })
+
+    // EIP-1193 accountsChanged, one emit per chain — a dApp only listens on the
+    // chain it is currently on and we don't know which one that is. One chain
+    // rejecting the event must not abort the switch.
+    for (const chain of chains) {
+      try {
+        await wcWeb3Wallet.emitSessionEvent({
+          topic: walletConnectItem.topic,
+          event: {
+            name: 'accountsChanged',
+            data: [address]
+          },
+          chainId: chain
+        })
+      } catch (error) {
+        // do nothing
+      }
+    }
+
+    const walletConnectReduxClone = walletConnectRedux.slice()
+    walletConnectReduxClone[walletConnectIndex] = {
+      ...walletConnectItem,
+      accountArr,
+      accountArrInfo,
+      // Binds the session to the new account — the connected-dApps list is
+      // filtered by this address.
+      accountAddress: lowerCase(address),
+      currentNamespace: newNamespace,
+      // Keep the stored session snapshot in sync (it is the fallback namespace
+      // source for sessions restored from storage).
+      session: authNamespace
+        ? {
+          ...walletConnectItem.session,
+          namespaces: {
+            ...walletConnectItem.session.namespaces,
+            eip155: {
+              ...authNamespace,
+              accounts: accountArr
+            }
+          }
+        }
+        : walletConnectItem.session
+    }
+    ReduxService.callDispatchAction(StorageReduxAction.setWalletConnect(walletConnectReduxClone))
+
+    await rejectPendingRequestsV2(walletConnectIndex, wcWeb3Wallet)
+
+    callbackOnDone && callbackOnDone()
+  } catch (error) {
+    callbackOnError && callbackOnError(error)
+  }
+}
+
+/**
+ * Reject + clear every pending request of one session. Used when the connected
+ * account changes: those requests name the old address, so nothing can sign them.
+ *
+ * @param {number} walletConnectIndex index of the session in walletConnectRedux
+ * @param {object} wcWeb3Wallet the WalletKit instance from getConnectorV2()
+ */
+const rejectPendingRequestsV2 = async (walletConnectIndex, wcWeb3Wallet) => {
+  const callRequestRedux = ReduxService.getReduxDataByKey('callRequestRedux', [])
+  const pendingRequests = callRequestRedux?.[walletConnectIndex] || []
+
+  if (pendingRequests.length === 0) return
+
+  for (const request of pendingRequests) {
+    try {
+      await wcWeb3Wallet.respondSessionRequest({
+        topic: request.topic,
+        response: formatJsonRpcErrorForWalletConnectV2(request)
+      })
+    } catch (error) {
+      // Already answered / expired — drop it from redux anyway.
+    }
+  }
+
+  const callRequestReduxClone = callRequestRedux.slice()
+  callRequestReduxClone[walletConnectIndex] = []
+  ReduxService.callDispatchAction(StorageReduxAction.setCallRequest(callRequestReduxClone))
+  ReduxService.callDispatchAction(StorageReduxAction.setCurrentCallRequest(false))
+}
+
 export const removeCallRequest = (walletconnectIndex, request, removeCurrentCallRequest = true) => {
   const callRequestRedux = ReduxService.getReduxDataByKey('callRequestRedux', [])
   const callRequestReduxClone = callRequestRedux.slice()
@@ -362,7 +513,7 @@ export const handleOpenExplorerUserAddress = (userAddress, chainId) => {
   const linkScan = blockchainListRedux?.[chainId]?.linkScan
 
   if (linkScan) {
-    handleOpenUrl(`${linkScan}/${userAddress}`.replace(/\/\//g, '/'))
+    handleOpenUrl(`${linkScan}/${userAddress}`.replace(/([^:]\/)\/+/g, '$1'))
   } else {
     Clipboard.setString(userAddress)
     Alert.alert(I18n.t('Initial.copyDone', { value: 'Address' }))
@@ -393,7 +544,8 @@ export const getUrlExplorerHash = (txHash, chainId) => {
     linkScanHash = linkScanHash + '/' + txHash
   }
 
-  return linkScanHash.replace(/\/\//g, '/')
+  // Collapse duplicate slashes in the path but keep the `://` after the scheme
+  return linkScanHash.replace(/([^:]\/)\/+/g, '$1')
 }
 
 export const handleCopyExplorerHash = (chainTypeOrChainId, txHash, showAlertFunc) => {

@@ -1,3 +1,107 @@
+diff --git a/node_modules/react-native/Libraries/LinkingIOS/RCTLinkingManager.mm b/node_modules/react-native/Libraries/LinkingIOS/RCTLinkingManager.mm
+index ad75ed4..0e48104 100644
+--- a/node_modules/react-native/Libraries/LinkingIOS/RCTLinkingManager.mm
++++ b/node_modules/react-native/Libraries/LinkingIOS/RCTLinkingManager.mm
+@@ -16,12 +16,52 @@
+ 
+ static NSString *const kOpenURLNotification = @"RCTOpenURLNotification";
+ 
+-static void postNotificationWithURL(NSURL *URL, id sender)
++// PATCH(keyring): hold on to an opened URL that has not reached JS yet.
++//
++// On an iOS app running on a Mac (Apple Silicon), a cold launch through a URL
++// scheme does NOT put the URL in launchOptions. macOS calls
++// application:openURL:options: ~0.5s after launch instead, while the JS bundle is
++// still loading, so nobody observes kOpenURLNotification yet and the link is
++// silently dropped (getInitialURL also returns null). On iPhone the same URL is in
++// launchOptions, so it was never lost there.
++//
++// Invariant: sPendingURL only ever holds a URL that JS has NOT received. It must
++// never outlive its delivery, otherwise a stale WalletConnect URI would be
++// replayed later.
++//  - set right before the notification is posted;
++//  - cleared synchronously when an observing instance forwards it as a `url`
++//    event (an observer exists only while JS has at least one `url` listener);
++//  - consumed by getInitialURL: returned at most once, then cleared.
++// Guarded by a lock; in practice all access is on the main thread.
++static NSString *sPendingURL = nil;
++
++static NSObject *pendingURLLock(void)
++{
++  static NSObject *lock;
++  static dispatch_once_t onceToken;
++  dispatch_once(&onceToken, ^{
++    lock = [NSObject new];
++  });
++  return lock;
++}
++
++static void postNotificationWithURLString(NSString *URLString, id sender)
+ {
+-  NSDictionary<NSString *, id> *payload = @{@"url" : URL.absoluteString};
++  if (URLString == nil) {
++    return;
++  }
++  @synchronized(pendingURLLock()) {
++    sPendingURL = URLString;
++  }
++  NSDictionary<NSString *, id> *payload = @{@"url" : URLString};
+   [[NSNotificationCenter defaultCenter] postNotificationName:kOpenURLNotification object:sender userInfo:payload];
+ }
+ 
++static void postNotificationWithURL(NSURL *URL, id sender)
++{
++  postNotificationWithURLString(URL.absoluteString, sender);
++}
++
+ @interface RCTLinkingManager () <NativeLinkingManagerSpec>
+ @end
+ 
+@@ -76,14 +116,22 @@ + (BOOL)application:(UIApplication *)application
+ {
+   // This can be nullish when launching an App Clip.
+   if ([userActivity.activityType isEqualToString:NSUserActivityTypeBrowsingWeb] && userActivity.webpageURL != nil) {
+-    NSDictionary *payload = @{@"url" : userActivity.webpageURL.absoluteString};
+-    [[NSNotificationCenter defaultCenter] postNotificationName:kOpenURLNotification object:self userInfo:payload];
++    // PATCH(keyring): go through the pending-URL buffer like openURL does.
++    postNotificationWithURLString(userActivity.webpageURL.absoluteString, self);
+   }
+   return YES;
+ }
+ 
+ - (void)handleOpenURLNotification:(NSNotification *)notification
+ {
++  // PATCH(keyring): this URL is being delivered as a `url` event, so it must not
++  // be replayed by getInitialURL. Only clear it if no newer URL replaced it.
++  NSString *URLString = notification.userInfo[@"url"];
++  @synchronized(pendingURLLock()) {
++    if (URLString != nil && [sPendingURL isEqualToString:URLString]) {
++      sPendingURL = nil;
++    }
++  }
+   [self sendEventWithName:@"url" body:notification.userInfo];
+ }
+ 
+@@ -154,6 +202,19 @@ - (void)handleOpenURLNotification:(NSNotification *)notification
+ 
+ RCT_EXPORT_METHOD(getInitialURL : (RCTPromiseResolveBlock)resolve reject : (__unused RCTPromiseRejectBlock)reject)
+ {
++  // PATCH(keyring): a URL opened before JS listened (cold launch on Mac) wins, and
++  // is consumed here so it can never be returned twice. On iPhone the same URL is
++  // also in launchOptions, so the result is unchanged there.
++  NSString *pendingURL = nil;
++  @synchronized(pendingURLLock()) {
++    pendingURL = sPendingURL;
++    sPendingURL = nil;
++  }
++  if (pendingURL != nil) {
++    resolve(pendingURL);
++    return;
++  }
++
+   NSURL *initialURL = nil;
+   if (self.bridge.launchOptions[UIApplicationLaunchOptionsURLKey]) {
+     initialURL = self.bridge.launchOptions[UIApplicationLaunchOptionsURLKey];
 diff --git a/node_modules/react-native/React/Fabric/Mounting/ComponentViews/ScrollView/RCTPullToRefreshViewComponentView.mm b/node_modules/react-native/React/Fabric/Mounting/ComponentViews/ScrollView/RCTPullToRefreshViewComponentView.mm
 index 0d231bc..bc10363 100644
 --- a/node_modules/react-native/React/Fabric/Mounting/ComponentViews/ScrollView/RCTPullToRefreshViewComponentView.mm

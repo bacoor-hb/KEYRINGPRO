@@ -184,9 +184,11 @@ const images = {
       payProcess: require('./UIV2/Icon/payProcess.png'),
       blockScan: require('./UIV2/Icon/blockScan.png'),
       icon_CA: require('./UIV2/Icon/icon_CA.png'),
+      icon_ai_support: require('./UIV2/Icon/icon_ai_support.png'),
       revoke: require('./UIV2/Icon/revoke.png'),
       nftViewer: require('./UIV2/Icon/nftViewer.png'),
       editBrand: require('./UIV2/Icon/editBrand.png'),
+      editBrandRound: require('./UIV2/Icon/editBrandRound.png'),
       editWhite: require('./UIV2/Icon/editWhite.png'),
       icon_register: require('./UIV2/Icon/icon_register.png'),
       walletConnectPayWhite: require('./UIV2/Icon/walletConnectPayWhite.png'),
@@ -259,6 +261,7 @@ const images = {
       unknowToken: require('./UIV2/Icon/unknowToken.png'),
       unknowChain: require('./UIV2/Icon/unknowChain.png'),
       information: require('./UIV2/Icon/Information.png'),
+      informationRound: require('./UIV2/Icon/informationRound.png'),
       informationWhite: require('./UIV2/Icon/informationWhite.png'),
       explorerLink: require('./UIV2/Icon/scanTxHash.png'),
       dappDesktop: require('./UIV2/Icon/dappDesktop.png'),
@@ -280,14 +283,15 @@ const images = {
         liquidityManagement: require('./UIV2/Icon/Home/liquidityManagementDarkmode.png')
       },
       // Lending-protocol logos, keyed by the market `type` the core reports
-      // (see WithdrawToken/abis.js SUPPORTED_WITHDRAW_TYPES). Spark and
+      // (see common/constants/lending). Spark and
       // Spark-ethereum are one protocol with two market types, so they share
       // an image — the mapping lives in WithdrawToken/protocolLogo.js.
       lending: {
         aave: require('./UIV2/Icon/lending/logo_aave.png'),
         compound: require('./UIV2/Icon/lending/logo_compound.png'),
         morpho: require('./UIV2/Icon/lending/logo_morpho.png'),
-        spark: require('./UIV2/Icon/lending/logo_spark.png')
+        spark: require('./UIV2/Icon/lending/logo_spark.png'),
+        maple: require('./UIV2/Icon/lending/logo_maple.png')
       },
       settings: {
         customRPC: require('./UIV2/Icon/Settings/customRPCDarkmode.png'),
@@ -330,16 +334,19 @@ const images = {
       143: require('./UIV2/Icon/defaultChains/143.png'),
       988: require('./UIV2/Icon/defaultChains/988.png'),
       999: require('./UIV2/Icon/defaultChains/999.png'),
+      1329: require('./UIV2/Icon/defaultChains/1329.png'),
       4217: require('./UIV2/Icon/defaultChains/4217.png'),
       4326: require('./UIV2/Icon/defaultChains/4326.png'),
       4663: require('./UIV2/Icon/defaultChains/4663.png'),
       5000: require('./UIV2/Icon/defaultChains/5000.png'),
+      5042: require('./UIV2/Icon/defaultChains/5042.png'),
       8453: require('./UIV2/Icon/defaultChains/8453.png'),
       9745: require('./UIV2/Icon/defaultChains/9745.png'),
       42161: require('./UIV2/Icon/defaultChains/42161.png'),
       42220: require('./UIV2/Icon/defaultChains/42220.png'),
       43114: require('./UIV2/Icon/defaultChains/43114.png'),
       57073: require('./UIV2/Icon/defaultChains/57073.png'),
+      81457: require('./UIV2/Icon/defaultChains/81457.png'),
       747474: require('./UIV2/Icon/defaultChains/747474.png')
     }
   }

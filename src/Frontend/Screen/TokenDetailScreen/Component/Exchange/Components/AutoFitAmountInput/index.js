@@ -104,10 +104,32 @@ const AutoFitAmountInput = ({
   // break the emptiness checks below.
   const text = value == null ? '' : String(value)
 
-  const fontKey = StyleSheet.flatten(textStyle)?.fontFamily || 'system'
-  const cache = getCharWidthCache(fontKey)
+  // The font the value is ACTUALLY rendered in. `styles.input` sets fontFamily
+  // after textStyle in the input's style array, so getFontFamily(700) always
+  // wins there — a caller's fontFamily in textStyle never reaches the input.
+  // The measurer must therefore render in this same font, and the width cache be
+  // keyed by it: measuring a different (e.g. narrower system) font underestimates
+  // every character, so the fitted scale comes out too large and the value
+  // overflows its row. Callers that happen to pass this identical family never
+  // saw it; a caller passing only a color did.
+  //
+  // Resolved per render, never hoisted to module scope: getFontFamily reads the
+  // locale from Redux, which is unhydrated at import time and changes when the
+  // user switches language.
+  const fontFamily = getFontFamily(700)
+  const cache = getCharWidthCache(fontFamily)
 
   const containerWidthRef = useRef(0)
+  // The last trustworthy container width, mirrored into state purely to
+  // re-trigger the sync effect above — every READ of the width goes through
+  // containerWidthRef so the imperative path stays synchronous.
+  const [measuredWidth, setMeasuredWidth] = useState(0)
+  // The value `onLayout` must fit. onLayout is a prop callback captured in the
+  // commit that mounted the container, so it can fire holding a `text` older
+  // than the committed one (a restored value arriving in a later render than
+  // the mount). Reading through a ref keeps it on the current value.
+  const textRef = useRef(text)
+  textRef.current = text
   const scaleWrapperRef = useRef(null)
   const placeholderRef = useRef(null)
   // Only forces a re-render when this font's measurements complete (to drop
@@ -155,11 +177,22 @@ const AutoFitAmountInput = ({
   // Re-sync for non-typing changes (Max button, quote-computed values, parent
   // sanitization) and once measurements/container width become available.
   // useLayoutEffect runs before paint, so there is no one-frame flash.
+  //
+  // `measuredWidth` is in the deps because a mount that ALREADY has a value —
+  // this card restored from a persisted run, rather than a drawer opening empty
+  // — has no other trigger. On such a mount the first layout effect runs before
+  // the container has been laid out (width 0 → computeFitScale returns 1), and
+  // when the width does arrive it lands in a ref, which re-renders nothing. The
+  // measurer would normally save it by flipping cache.ready, but those widths
+  // are cached per font for the whole app SESSION: on every mount after the
+  // first the measurer never renders, cache.ready never changes, and the effect
+  // never re-ran — so a restored value kept scale 1 and overflowed its row,
+  // while typing (which scales imperatively) looked fine.
   useLayoutEffect(() => {
     applyScaleFor(text)
     applyPlaceholderFor(text)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, cache.ready])
+  }, [text, cache.ready, measuredWidth])
 
   const handleChangeText = (nextText) => {
     // Same-frame fit: hide the placeholder + scale first, then hand the text to
@@ -173,8 +206,14 @@ const AutoFitAmountInput = ({
     <View
       style={styles.container}
       onLayout={e => {
-        containerWidthRef.current = e.nativeEvent.layout.width
-        applyScaleFor(text)
+        const w = e.nativeEvent.layout.width
+        containerWidthRef.current = w
+        applyScaleFor(textRef.current)
+        // Only a trustworthy width is worth a re-render, and only when it
+        // actually changed — onLayout fires on every rotation/reflow.
+        if (w >= MIN_TRUSTED_CONTAINER_WIDTH) {
+          setMeasuredWidth(prev => (prev === w ? prev : w))
+        }
       }}
     >
       {/* One-time (per font, per app session) hidden character measurer. */}
@@ -183,7 +222,7 @@ const AutoFitAmountInput = ({
           {AMOUNT_CHARS.split('').map(ch => (
             <Text
               key={ch}
-              style={[textStyle, styles.measurerChar]}
+              style={[textStyle, styles.measurerChar, { fontFamily }]}
               onLayout={e => handleCharLayout(ch, e.nativeEvent.layout.width)}
             >
               {ch}
@@ -206,7 +245,7 @@ const AutoFitAmountInput = ({
         >
           <Text
             numberOfLines={1}
-            style={[styles.placeholder, { color: placeholderTextColor }, placeholderStyle]}
+            style={[styles.placeholder, { fontFamily }, { color: placeholderTextColor }, placeholderStyle]}
           >
             {placeholder}
           </Text>
@@ -227,6 +266,7 @@ const AutoFitAmountInput = ({
           style={[
             textStyle,
             styles.input,
+            { fontFamily },
             // While empty (overlay placeholder showing) use a normal full-width
             // box so the input lays out/paints like any static text. The huge
             // width is only needed once there is a value to auto-fit.
@@ -270,9 +310,11 @@ const styles = StyleSheet.create({
   // Color comes from placeholderTextColor at the call site.
   placeholder: {
     fontSize: AMOUNT_INPUT_FONT_SIZE,
-    includeFontPadding: false,
-    fontFamily: getFontFamily(700)
+    includeFontPadding: false
   },
+  // Mirrors `input`'s text metrics (the widths the fit is computed from). The
+  // fontFamily is applied at the usage site, after textStyle, exactly as it is
+  // for `input` — so the caller's textStyle cannot change what gets measured.
   measurerChar: {
     fontSize: AMOUNT_INPUT_FONT_SIZE,
     includeFontPadding: false
@@ -290,8 +332,7 @@ const styles = StyleSheet.create({
     fontSize: AMOUNT_INPUT_FONT_SIZE,
     // Android: keep the glyph centered without the font's extra padding.
     includeFontPadding: false,
-    textAlignVertical: 'center',
-    fontFamily: getFontFamily(700)
+    textAlignVertical: 'center'
   },
   inputWithValue: {
     width: INPUT_LAYOUT_WIDTH

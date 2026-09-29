@@ -1,7 +1,7 @@
 import { Dimensions, Platform, PixelRatio, StatusBar } from 'react-native'
 import DeviceInfo from 'react-native-device-info'
 import ReduxService from './redux'
-import { initialWindowMetrics } from 'react-native-safe-area-context'
+import { getSafeAreaValues as getGlobalSafeAreaValues } from 'common/safeArea'
 import { getHeightScreenAndroid } from 'frontend/Components/SafeViewAreaWrapper'
 // import ExtraDimensions from 'react-native-extra-dimensions-android'
 const CORE_RATIO = 667 / 375
@@ -372,40 +372,24 @@ export const getSizeImgSquare = (variant = 'medium', sizeCustom) => {
 }
 
 export const getSafeAreaValues = (defaultValueBottom = 24, defaultValueTop = 24) => {
-  let bottom = defaultValueBottom
-  let top = defaultValueTop
+  const values = getGlobalSafeAreaValues()
 
-  try {
-    bottom = initialWindowMetrics.insets?.bottom
-    top = initialWindowMetrics.insets?.top
+  let bottom = values.bottom
+  let top = values.top
 
-    if (bottom < defaultValueBottom) {
-      bottom = defaultValueBottom
-    }
-
-    if (top < defaultValueTop) {
-      top = defaultValueTop
-    }
-
-    if (!ISIOS) {
-      top = 10
-    }
-
-    return {
-      ...initialWindowMetrics.insets,
-      bottom,
-      top
-
-    }
-  } catch (error) {
-    if (!ISIOS) {
-      top = 10
-    }
-    return {
-      bottom: defaultValueBottom,
-      top: defaultValueTop
-    }
+  if (bottom < defaultValueBottom) {
+    bottom = defaultValueBottom
   }
+
+  if (top < defaultValueTop) {
+    top = defaultValueTop
+  }
+
+  if (!ISIOS) {
+    top = 10
+  }
+
+  return { bottom, top }
 }
 
 export const getHeightScreen = () => {

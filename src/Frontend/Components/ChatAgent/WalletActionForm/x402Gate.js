@@ -26,7 +26,14 @@ export const X402_PATH = {
   addPool: { path: '/api/add-pool', method: 'GET' },
   // The whole supply sequence — approve + deposit — is ONE authorization and one
   // charge, because it is one action to the user (see SupplyFormShell).
-  supplyUsdc: { path: '/api/supply-usdc', method: 'GET' }
+  supplyUsdc: { path: '/api/supply-usdc', method: 'GET' },
+  // Swap and buy are the same transaction framed two ways, but they stay
+  // SEPARATE routes so the backend can price and authorize them independently —
+  // collapsing them would make one price the other. Each covers its whole
+  // sequence (approve + swap) as ONE authorization and one charge, because that
+  // is one action to the user (see SwapTokenForm).
+  swapToken: { path: '/api/swap-token', method: 'GET' },
+  buyToken: { path: '/api/buy-token', method: 'GET' }
 }
 
 // Accept both entry shapes so existing string entries keep working.

@@ -37,7 +37,7 @@ import {
   useWithdrawFeeCheck
 } from './useWithdrawQueries'
 import { assetDecimalsOf, fromUnits } from './withdrawChecks'
-import { SUPPORTED_WITHDRAW_TYPES, isShareBasedType } from './abis'
+import { ENCODABLE_MARKET_TYPES, isShareBasedType } from './abis'
 import MyDotsLoading from 'frontend/Components/UI/MyDotsLoading'
 
 // Withdraw from a lending position.
@@ -109,7 +109,7 @@ const WithdrawToken = ({ _this }) => {
   // A market we cannot encode a call for — or cannot size, because its
   // underlying never resolved — must not offer a submit button.
   const isSupported =
-    !!market && SUPPORTED_WITHDRAW_TYPES.includes(market.type) && assetDecimals !== null
+    !!market && ENCODABLE_MARKET_TYPES.includes(market.type) && assetDecimals !== null
 
   const [amount, setAmount] = useState('')
   // True only while the field holds the exact maximum. It is what selects the

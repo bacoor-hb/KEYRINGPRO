@@ -11,6 +11,7 @@ import MyViewPage from 'frontend/Components/UI/MyViewPage'
 import TitleDrawer from 'frontend/Components/UI/TitleDrawer'
 import TokenIconWithChain from 'frontend/Components/UI/TokenIconWithChain'
 import Spinner from 'frontend/Components/Common/Spinner'
+import { isSameToken } from '../x402FeeReserve'
 import { signX402 } from './signX402'
 import usePaymentBalance from './usePaymentBalance'
 import usePaymentToken from './usePaymentToken'
@@ -50,6 +51,10 @@ const fmtAmount = (display) => {
 // balance funds both, and the fee has to come out of what is left. Sending ETH
 // while paying a USDC fee draws on two separate balances and reserves nothing.
 //
+// A NATIVE spend never collides: an x402 charge is settled in an ERC-20, and the
+// add-liquidity card spends only the native coin (the gateway swaps it on-chain),
+// so nothing is reserved there however large the position.
+//
 // `spend` is `{ chainId, assetAddress, amount }` where `amount` is the HUMAN
 // figure the user typed. It is scaled here, by `display.decimals` — the token's
 // real on-chain `decimals()`, read by the core — and deliberately NOT by the
@@ -60,24 +65,20 @@ const fmtAmount = (display) => {
 // decimals are by definition the right ones for the sent amount too.
 const matchedSpendRaw = (spend, display) => {
   if (!spend || !display) return null
-  const { chainId, assetAddress, amount } = spend
-  if (amount == null || amount === '' || !assetAddress || !display.assetAddress) return null
+  const { amount } = spend
+  if (amount == null || amount === '') return null
+  if (!display.assetAddress) return null
 
-  // Numeric compare: the challenge's chain id is decimal, the form's may be the
-  // agent's hex ("0xa"), and a string compare would call those different and
-  // skip a deduction that is actually needed.
+  // The SAME "is this one balance or two?" test the forms use while sizing the
+  // amount (see x402FeeReserve). Sharing it is the point: the form's Spendable
+  // line and this sheet's have to agree, and they only do if one definition
+  // decides both. It also brings the native sentinels with it — the swap card
+  // spells a native side 'native', which a bare string compare would silently
+  // treat as a contract that merely happens not to match.
   //
-  // Both sides are checked for a real number FIRST. `display.chainId` is
-  // explicitly nullable — the core leaves it null when it could not resolve the
-  // chain — and `Number(null)` is 0, which would compare equal to a 0 from the
-  // other side and reserve against a chain neither side actually identified.
-  const feeChain = Number(display.chainId)
-  const spendChain = Number(chainId)
-  if (display.chainId == null || chainId == null) return null
-  if (!Number.isFinite(feeChain) || !Number.isFinite(spendChain)) return null
-  if (feeChain !== spendChain) return null
-
-  if (String(assetAddress).toLowerCase() !== String(display.assetAddress).toLowerCase()) return null
+  // `display` is the challenge's own view of the fee token, so it plays the role
+  // `fee.asset` plays in the forms: `{ chainId, address }`.
+  if (!isSameToken({ chainId: display.chainId, address: display.assetAddress }, spend)) return null
 
   // No on-chain scale means the core could not read the token, and `amountRaw`
   // below would be scaled by a guess. usePaymentBalance already refuses to judge

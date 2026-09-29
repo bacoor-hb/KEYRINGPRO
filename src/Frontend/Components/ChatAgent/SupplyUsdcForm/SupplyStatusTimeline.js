@@ -119,7 +119,7 @@ export default function SupplyStatusTimeline ({
         style={timelineStyles.hashTextWrap}
         onPress={() => handleOpenExplorerHash(hash, Number(chainId))}
       >
-        <MyText variant='small' className='text-brand'>{hash}</MyText>
+        <MyText className='text-brand'>{hash}</MyText>
       </TouchableOpacity>
       {copyable && (
         <TouchableOpacity
@@ -134,11 +134,14 @@ export default function SupplyStatusTimeline ({
     </View>
   )
 
-  // One timeline node. Deliberately the same anatomy as the shared
-  // `TxStatusTimeline`'s Sending node — title + animated dots while in flight,
-  // the "approximate time" line, then either the hash or the explorer fallback —
-  // so a supply reads like every other transaction in the chat.
-  // One timeline node.
+  // One timeline node, built as TWO stacked containers rather than one row:
+  //
+  //   ┌ head  ─ [icon] │ title + "approximate time"
+  //   └ trail ─ [line] │ hash  (or the explorer hint)
+  //
+  // The same anatomy every chat timeline uses — the head/trail styles live in
+  // the shared `TxStatusTimeline` stylesheet, so this, Swap and the shared
+  // timeline itself stay identical. See that file for why the node is split.
   //
   // The connector is ALWAYS rendered, exactly as the shared timeline does it —
   // never gated on being the last node. Two reasons it has to stay put: a line
@@ -151,37 +154,47 @@ export default function SupplyStatusTimeline ({
   // alignment, so a node that stopped being last would jump. Every node here
   // keeps one layout for its whole life.
   const renderNode = ({ icon, title, hash, pending, copyable = true }) => (
-    <View style={timelineStyles.stepRow}>
-      <View style={timelineStyles.stepLeft}>
-        <TxStepIcon uri={icon} animate={animateIntro} />
-        <View style={timelineStyles.connector} className='bg-box-small' />
+    <View>
+      {/* Head — the marker and the words it labels, nothing else. */}
+      <View style={timelineStyles.stepHeadRow}>
+        <View style={timelineStyles.stepLeft}>
+          <TxStepIcon uri={icon} animate={animateIntro} />
+        </View>
+        <View style={timelineStyles.stepBodyLast}>
+          <View style={timelineStyles.titleRow}>
+            <MyText fontWeight={700}>{title}</MyText>
+            {pending && (
+              <MyDotsLoading style={timelineStyles.titleDots} source={images.threeDotsWhiteLoading} />
+            )}
+          </View>
+          <MyText className='text-medium'>
+            {t('approxTime')}
+          </MyText>
+        </View>
       </View>
-      <View style={timelineStyles.stepBody}>
-        <View style={timelineStyles.titleRow}>
-          <MyText fontWeight={700}>{title}</MyText>
-          {pending && (
-            <MyDotsLoading style={timelineStyles.titleDots} source={images.threeDotsWhiteLoading} />
+
+      {/* Trail — the connector in the icon's column, the hash beside it. */}
+      <View style={timelineStyles.stepTrailRow}>
+        <View style={[timelineStyles.stepLeft, timelineStyles.trailLeft]}>
+          <View style={timelineStyles.trailConnector} className='bg-box-small' />
+        </View>
+        <View style={timelineStyles.trailBody}>
+          {hash ? renderHash(hash, copyable) : (
+            // Broadcast, but no hash back yet — point at the explorer, exactly as
+            // the shared timeline does rather than leaving the node empty.
+            <View style={timelineStyles.explorerHint}>
+              <MyText className='text-medium'>{ti('plsCheckExplorer')}</MyText>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => handleOpenExplorerUserAddress(walletAddress, Number(chainId))}
+              >
+                <MyText className='text-brand' style={timelineStyles.explorerLink}>
+                  {ti('checkingExplorer')}
+                </MyText>
+              </TouchableOpacity>
+            </View>
           )}
         </View>
-        <MyText variant='small' className='text-medium' style={timelineStyles.stepDesc}>
-          {t('approxTime')}
-        </MyText>
-
-        {hash ? renderHash(hash, copyable) : (
-          // Broadcast, but no hash back yet — point at the explorer, exactly as
-          // the shared timeline does rather than leaving the node empty.
-          <View style={timelineStyles.explorerHint}>
-            <MyText variant='small' className='text-medium'>{ti('plsCheckExplorer')}</MyText>
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => handleOpenExplorerUserAddress(walletAddress, Number(chainId))}
-            >
-              <MyText variant='small' className='text-brand' style={timelineStyles.explorerLink}>
-                {ti('checkingExplorer')}
-              </MyText>
-            </TouchableOpacity>
-          </View>
-        )}
       </View>
     </View>
   )
@@ -259,7 +272,7 @@ export default function SupplyStatusTimeline ({
         <StatusMessage
           variant={isDone ? 'success' : 'error'}
           title={isDone ? t('statusSuccess') : t('statusFailed')}
-          titleConfig={{ className: isDone ? 'text-green' : 'text-red', variant: 'subTitle' }}
+          titleConfig={{ className: isDone ? 'text-green' : 'text-red' }}
           message={resultMessage}
           style={resultMessage ? styles.statusResultWithMessage : timelineStyles.statusResult}
           autoplay={animate}

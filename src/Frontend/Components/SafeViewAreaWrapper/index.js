@@ -1,6 +1,7 @@
+import { setSafeAreaValues } from 'common/safeArea'
 import { Colors, DarkColors, height } from 'common/styles'
 import { ThemeContext } from 'frontend/Contexts/ThemeContext'
-import React from 'react'
+import React, { useLayoutEffect } from 'react'
 import { View } from 'react-native'
 
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -17,6 +18,10 @@ export const getHeightScreenAndroid = () => heightScreenAndroid
 
 const SafeViewAreaWrapper = (props) => {
   const insets = useSafeAreaInsets()
+
+  useLayoutEffect(() => {
+    setSafeAreaValues(insets)
+  }, [insets])
 
   return (
     ISIOS ? (

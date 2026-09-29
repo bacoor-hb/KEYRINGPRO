@@ -1,3 +1,9 @@
+import { ENCODABLE_MARKET_TYPES, VIEW_ONLY_MARKET_TYPES } from 'common/constants/lending'
+
+// Protocol names and capabilities live in `common/constants/lending` — this
+// module owns only the ABIs and the call-shape groupings below.
+export { ENCODABLE_MARKET_TYPES }
+
 // Minimal ABI fragments for withdrawing from a lending market — only the
 // functions this flow actually calls, not the protocols' full ABIs.
 //
@@ -231,7 +237,7 @@ export const VAULT_TYPES = ['spark', 'spark-ethereum', 'morpho-v2']
  *
  * Kept OUT of {@link VAULT_TYPES} deliberately: every branch keyed on that list
  * calls a 4626 function on `market.contract`, all of which revert here. It is
- * also out of {@link SUPPORTED_WITHDRAW_TYPES}, because exiting the position is
+ * also out of {@link ENCODABLE_MARKET_TYPES}, because exiting the position is
  * a PSM3 swap (approve + `swapExactIn` with a slippage bound), not the
  * single-transaction burn this flow is built for. The position is therefore
  * displayed accurately and the submit button stays disabled — see
@@ -239,21 +245,34 @@ export const VAULT_TYPES = ['spark', 'spark-ethereum', 'morpho-v2']
  */
 export const ORACLE_PRICED_TYPES = ['spark-l2-susds']
 
+/**
+ * True for a market shown but never exited from here — Maple Syrup pools today.
+ *
+ * Exiting a Syrup pool is not a redemption but a REQUEST: `requestRedeem(shares,
+ * owner)` joins a FIFO queue Maple processes when the pool has liquidity —
+ * "within a few minutes" at best by Maple's own docs, "typically less than 2
+ * days", and up to 30 days at worst — after which the assets arrive with no
+ * further signature from the user. This drawer signs one transaction that
+ * settles immediately, which is a different shape entirely.
+ *
+ * Read by the token screen to hide the withdraw row entirely; a dimmed row would
+ * be a control that never becomes usable, since no amount the user could enter
+ * would make this drawer able to sign the exit.
+ *
+ * Worth knowing if a Maple exit is ever built: it must not go through
+ * {@link VAULT_TYPES}. Maple is a genuine ERC-4626 pool, so every call in
+ * `buildWithdrawTx` would encode against it cleanly and then either revert (a
+ * queue-based pool reports `maxWithdraw` 0 until a request is processed) or,
+ * worse, succeed as a REQUEST while the timeline reported a completed
+ * withdrawal and the funds were not yet anywhere.
+ */
+export const isRequestOnlyMarket = (type) => VIEW_ONLY_MARKET_TYPES.includes(type)
+
 /** True for a position valued by an external rate oracle rather than by its own contract. */
 export const isOraclePricedType = (type) => ORACLE_PRICED_TYPES.includes(type)
 
 /** Share-based in the sense of "balanceOf is not the underlying" — vault or oracle-priced. */
 export const isShareBasedType = (type) => VAULT_TYPES.includes(type) || isOraclePricedType(type)
-
-/**
- * Every protocol family this withdraw flow can encode a call for.
- *
- * {@link ORACLE_PRICED_TYPES} is included, but it exits through a PSM3 SWAP
- * rather than a vault redemption — see `buildPsmSwapTx`. That difference is why
- * it is not in {@link VAULT_TYPES}: every branch keyed on that list calls a 4626
- * function, all of which revert on a bridged sUSDS token.
- */
-export const SUPPORTED_WITHDRAW_TYPES = ['aave-v3', 'compound-v3', ...VAULT_TYPES, ...ORACLE_PRICED_TYPES]
 
 /**
  * Spark PSM3 — the L2 swap between USDC, USDS and sUSDS, and the only way out of

@@ -7,6 +7,10 @@ const createStyles = () => {
   // fontSize-based reserved heights by the same scale so the reserved space keeps
   // matching the real text height and the buttons don't shift when text scales.
   const fontScale = PixelRatio.getFontScale()
+  // Action icons (info / edit) are 44px round buttons. They are TALLER than the
+  // label text next to them, so they — not the text — drive the height of the row
+  // they sit in. The reserved-height math below has to use this same value.
+  const actionIconSize = getSizeImgSquare('large')
   return StyleSheet.create({
     // Outer wrapper is inset to the card edges and carries the bottom divider,
     // so the divider lines up with the card (not the screen edges).
@@ -20,13 +24,17 @@ const createStyles = () => {
       paddingVertical: pixelByHeight(12),
       gap: pixelByHeight(14)
     },
+    // Timestamp + address stack on the left, info icon alone on the right.
     header: {
-      gap: pixelByHeight(4)
-    },
-    rowBetween: {
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'space-between'
+      gap: pixelByWidth(8)
+    },
+    // flex:1 so the column takes the width left over by the info icon and the
+    // address truncates against the real remaining space.
+    headerTextColumn: {
+      flex: 1,
+      gap: pixelByHeight(4)
     },
     accountRow: {
       flexDirection: 'row',
@@ -36,19 +44,45 @@ const createStyles = () => {
     body: {
       gap: pixelByHeight(4)
     },
-    // Reserves space for the spending-cap rows so they don't push the buttons
-    // down when they pop in after token info loads. The floor is sized in the SAME
-    // fontSize() units as the content's line heights — row1 = "Spending cap" label
-    // (variant small, 14) + row2 = amount/symbol (default, 16.5) + the 4px gap,
-    // plus 2px slack. The two font terms are multiplied by fontScale so the floor
-    // tracks the system-scaled text height (see fontScale note above); the gap and
-    // slack are layout pixels and stay fixed. A plain pixelByHeight(49) floor scaled
-    // by a DIFFERENT ratio than the fontSize-based content, so on some devices the
-    // content was ~1px taller than the floor and nudged the buttons down. minHeight
-    // (not height) still lets it grow if the amount text ever wraps, instead of clipping.
-    spendingCapReserved: {
-      minHeight: fontSize(14) * 1.5 * fontScale + fontSize(16.5) * 1.5 * fontScale + pixelByHeight(4) + pixelByHeight(2),
+    // Top of the body: the method name and the "Spending cap" label stack in a
+    // column on the left, with the edit icon standing alone on the right, centered
+    // against BOTH lines.
+    methodRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: pixelByWidth(8)
+    },
+    // Applied only while the spending-cap block is reserved or showing. The row's
+    // natural height is the text column (two lines), which is taller than the 44px
+    // icon at our shipped font sizes — but at the smallest accessibility scales the
+    // icon wins, and it only mounts once the data lands. Flooring the row at the
+    // icon height keeps that arrival from growing the row and nudging the buttons.
+    methodRowReserved: {
+      minHeight: actionIconSize
+    },
+    // Left column of the method row. flex:1 so it takes the width left over by the
+    // edit icon and the method-name ticker measures against the real remaining space.
+    methodTextColumn: {
+      flex: 1,
       gap: pixelByHeight(4)
+    },
+    // The "Spending cap" label (variant small, 14) is the column's second line. Hold
+    // its exact scaled line height open while loading so the column is already two
+    // lines tall before the text arrives.
+    spendingCapLabelReserved: {
+      height: fontSize(14) * 1.5 * fontScale
+    },
+    // Amount/symbol row (default variant, 16.5) sits below the method row at full
+    // width. Reserved on the same flag as the label, plus 2px slack.
+    //
+    // The floor is sized in the SAME fontSize() units as the content's line height,
+    // multiplied by fontScale so it tracks the system-scaled text (see fontScale note
+    // above); the slack is layout pixels and stays fixed. A plain pixelByHeight()
+    // floor scaled by a DIFFERENT ratio than the fontSize-based content, so on some
+    // devices the content was ~1px taller than the floor and nudged the buttons down.
+    // minHeight (not height) still lets it grow if the amount text ever wraps.
+    amountReserved: {
+      minHeight: fontSize(16.5) * 1.5 * fontScale + pixelByHeight(2)
     },
     // The method name (MyTextTicker, default variant) renders at line height
     // fontSize(16.5) * 1.5, scaled by the system font setting. Reserve that EXACT
@@ -61,9 +95,9 @@ const createStyles = () => {
       alignItems: 'center',
       gap: pixelByWidth(8)
     },
-    icon18: {
-      width: getSizeImgSquare('small'),
-      height: getSizeImgSquare('small')
+    icon44: {
+      width: actionIconSize,
+      height: actionIconSize
     },
     amountRow: {
       flexDirection: 'row',

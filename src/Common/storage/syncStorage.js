@@ -1,23 +1,35 @@
 import Config from 'react-native-config'
 import { MMKV } from 'react-native-mmkv'
 
-export const storeDataToSyncStorage = async (key, value) => {
-  try {
-    const syncStorage = new MMKV({
+// One instance for the whole app, created on first use.
+//
+// Every `new MMKV()` registers an AppState 'memoryWarning' listener, and the
+// library can only release it through FinalizationRegistry — which Hermes does
+// not implement, so it takes the "retains MMKV strong forever" branch instead.
+// Constructing per call therefore leaked a listener on every read/write, and
+// these helpers are called from module-scope style code on nearly every screen.
+let syncStorage = null
+
+const getSyncStorage = () => {
+  if (!syncStorage) {
+    syncStorage = new MMKV({
       id: Config.SYNC_STORAGE_ID
     })
-    syncStorage.set(key, JSON.stringify(value))
+  }
+  return syncStorage
+}
+
+export const storeDataToSyncStorage = (key, value) => {
+  try {
+    getSyncStorage().set(key, JSON.stringify(value))
   } catch (e) {
     // saving error
   }
 }
 
-export const getDataFromSyncStorage = async (key, defaultData = null) => {
+export const getDataFromSyncStorage = (key, defaultData = null) => {
   try {
-    const syncStorage = new MMKV({
-      id: Config.SYNC_STORAGE_ID
-    })
-    const jsonValue = syncStorage.getString(key)
+    const jsonValue = getSyncStorage().getString(key)
     return JSON.parse(jsonValue)
   } catch (e) {
     // error reading value

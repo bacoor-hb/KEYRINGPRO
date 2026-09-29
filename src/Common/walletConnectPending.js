@@ -18,16 +18,45 @@ export const consumePendingWcRequest = () => {
   return topic
 }
 
-// The WalletConnect screen registers an opener while mounted so a request that
-// arrives while it's already the current screen can open the drawer directly
-// (navigating to an already-current screen wouldn't re-fire `focus`).
-export const registerWcRequestsOpener = (fn) => { requestsOpener = fn }
+// Topics of incoming requests that arrived while NO opener was registered. On a
+// cold start walletKit is initialised during App boot (before the UI renders), so
+// a pending session_request can be emitted before WalletConnectRequestHost mounts.
+// Without this queue that request would land in callRequestRedux but its drawer
+// would never open (nor be stashed for after-unlock).
+let unopenedRequestTopics = []
+
+// WalletConnectRequestHost registers its opener while mounted. Registering also
+// replays requests that arrived before it mounted; the opener itself applies the
+// locked-vault gate (stashes the topic until unlock).
+export const registerWcRequestsOpener = (fn) => {
+  requestsOpener = fn
+  const topics = unopenedRequestTopics
+  unopenedRequestTopics = []
+  topics.forEach((topic) => {
+    try {
+      fn(topic)
+    } catch (e) {
+      // one failing topic must not block the others
+    }
+  })
+}
 
 export const unregisterWcRequestsOpener = (fn) => {
   if (requestsOpener === fn) requestsOpener = null
 }
 
 export const getWcRequestsOpener = () => requestsOpener
+
+// Entry point for an INCOMING request (not a user tap): open it now if the host is
+// mounted, otherwise queue it until the host registers.
+export const openIncomingWcRequest = (topic) => {
+  if (!topic) return
+  if (requestsOpener) {
+    requestsOpener(topic)
+  } else if (!unopenedRequestTopics.includes(topic)) {
+    unopenedRequestTopics.push(topic)
+  }
+}
 
 // An incoming request that arrives while the vault is locked must NOT open its
 // drawer over the unlock screen. The host stashes the topic here; UnlockScreen

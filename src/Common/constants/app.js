@@ -153,7 +153,7 @@ export const DEFAULT_WC_APP_METADATA = {
   }
 }
 
-export const APP_VERSION = '6.2.0'
+export const APP_VERSION = '6.3.0'
 
 export const IconType = {
   // AntDesign: require('react-native-vector-icons/AntDesign').default,
@@ -243,12 +243,19 @@ export const STATUS_RANGE = {
 }
 
 export const NATIVE_TOKEN_BY_CHAIN_ID = {
-  988: '0x779ded0c9e1022225f8e0630b35a9b54be713736', // stable chain: https://stablescan.xyz/address/0x779ded0c9e1022225f8e0630b35a9b54be713736
-  42220: '0x471ece3750da237f93b8e339c536989b8978a438', // celo
-  // Cronos chain
-  // https://explorer.cronos.com/address/0x3d7f2c478aafdb65542bcb44bceec05849999d2d
-  25: '0x3d7f2c478aafdb65542bcb44bceec05849999d2d'
+  // stable chain
+  988: '0x779ded0c9e1022225f8e0630b35a9b54be713736'
+}
 
+// Contract addresses that the price API only knows as the chain's native coin (zero address)
+export const CONTRACT_CONVERT_ZERO_ADDRESS_GET_PRICE_API = {
+  // Celo chain
+  42220: '0x471ece3750da237f93b8e339c536989b8978a438',
+  // stable chain:
+  988: '0x779ded0c9e1022225f8e0630b35a9b54be713736',
+  // Arc chain
+  // https://arc-scan.org/address/0x3600000000000000000000000000000000000000
+  5042: '0x3600000000000000000000000000000000000000'
 }
 
 export const KEY_STORE_ID = {

@@ -3,9 +3,17 @@ import { REACT_QUERY_KEY } from 'common/constants/reactQuery'
 import { isNativeToken } from 'common/tokens'
 import { isAddress, zeroAddress } from 'viem'
 import { lowerCase, sanitizeUrl } from 'common/function'
-import { NATIVE_TOKEN_BY_CHAIN_ID } from 'common/constants/app'
+import { CONTRACT_CONVERT_ZERO_ADDRESS_GET_PRICE_API, NATIVE_TOKEN_BY_CHAIN_ID } from 'common/constants/app'
 import { resolveKeyringTokenPriceUSD } from 'src/Services/TokenListV2'
 import Config from 'react-native-config'
+
+const getAddressConvert = (address, chainId) => {
+  const contractConvert = CONTRACT_CONVERT_ZERO_ADDRESS_GET_PRICE_API[chainId]
+  if (contractConvert && lowerCase(address) === lowerCase(contractConvert)) {
+    return zeroAddress
+  }
+  return address
+}
 
 const getData = async ({ queryKey }) => {
   try {
@@ -14,6 +22,9 @@ const getData = async ({ queryKey }) => {
     if (isNativeToken(textSearch) || (chainId && NATIVE_TOKEN_BY_CHAIN_ID[chainId] && NATIVE_TOKEN_BY_CHAIN_ID[chainId] === lowerCase(textSearch || zeroAddress))) {
       textSearch = zeroAddress
     }
+
+    textSearch = getAddressConvert(textSearch, chainId)
+
     const baseUrl = `${Config.KEYRING_API}/token-list/all`
 
     let url = `${baseUrl}?chainId=${chainId}`

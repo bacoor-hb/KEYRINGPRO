@@ -276,7 +276,7 @@ callback(STEP_EXCHANGE.approve, hash)
 1. `callback(STEP_EXCHANGE.exchanging)` — UI shows the "Sending…" step with a loading spinner.
 2. Computes the destination-chain checks:
    - `isHasChainActiveInApp` → if the destination chain isn't an active EVM chain, it is added via `StorageReduxAction.setActiveEvmChainIds([...currentChainActive, chainIdOut])`.
-   - `isHasChainInfoInApp` / `isHasChainCommonInApp` → if the chain is completely unknown to the app (custom network), a `chainOut` entry stamped `{ isCustomChainData: true, isSupportedChain: false }` is written into `blockchainListRedux`.
+   - `isHasChainInfoInApp` / `isHasChainCommonInApp` → if the chain is completely unknown to the app (custom network), a `chainOut` entry (stamped with `chainId` + `keyChain`) is written into `blockchainListRedux`.
 3. Resolves the swap service with the **already-chosen provider** (`SwapServiceFactory.getService(provider)` — it no longer decides internally).
 4. Gets the private key (NFC or Secure Storage).
 5. **Broadcasts the swap/bridge tx** via `AllChainServices.postBaseSendTxsForSwap` → `ViemWeb3.sendTransaction(chainId, privateKey, rawTransaction)` (viem `privateKeyToAccount` + `walletClient.sendTransaction`; gas/price bumps are handled there).

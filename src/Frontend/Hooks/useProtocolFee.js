@@ -8,7 +8,7 @@ const getData = async ({ queryKey }) => {
   try {
     const [, chainIdIn, chainIdOut, bridgeProvider] = queryKey
     const isCrossChain = chainIdIn?.toString() !== chainIdOut?.toString()
-    const contractAddress = CONTRACT_FEE_PROTOCOL?.[bridgeProvider]?.[chainIdIn]
+    const contractAddress = CONTRACT_FEE_PROTOCOL?.[bridgeProvider]?.[chainIdIn] || CONTRACT_FEE_PROTOCOL?.[bridgeProvider]?.DEFAULT
 
     if (isCrossChain && contractAddress) {
       const minABI = [

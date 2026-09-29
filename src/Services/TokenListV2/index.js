@@ -18,23 +18,20 @@ import { lowerCase, getChainInfo, getRpcUrlByChain } from 'common/function'
 import { erc20Abi, formatUnits, isAddress, zeroAddress } from 'viem'
 import ViemWeb3 from 'src/Web3/ViemWeb3'
 import { isNativeToken } from 'common/tokens'
-// Yield-token valuation lives in keyring-agent-core, which already models the
-// ERC-4626-share vs. rebasing-receipt distinction for its lending protocols.
-// Core now owns the reads too (`valueYieldTokens` / `resolveTokenPriceUSD`):
-// it plans them, batches them over its own multicall, and folds the answers
-// back — this service used to hand-roll that batching and had grown a second,
-// worse copy of it. The RPC endpoint is still ours, passed per call.
+import { resolveApiYieldProtocol, resolveApiYieldAsset } from 'common/constants/lending'
+// Yield-token valuation (see applyYieldTokenValues):
+//   - Rebasing (aave-v3, compound-v3): balance is already the underlying →
+//     balance × unit price.
+//   - Share (ERC-4626 vaults, maple, L2 sUSDS): balance is shares → core converts
+//     them to underlying on-chain (`valueYieldTokens`) × unit price.
+// Unit price = `yieldAsset.fixedPrice` when the API sends one, otherwise the
+// UNDERLYING asset's own price from the token API (never the vault's `price`).
 //
 // Identity (`yieldProtocol` / `yieldAsset`) stays OUR job: it is resolved from
 // sources only this service can see (the live API row, the field persisted on
 // the token, a by-address re-ask, the Redux snapshot), so the tokens handed to
-// core arrive already described. Letting core re-fetch it would see only the
-// first of those and silently drop the tag on a snapshot-recovered vault.
-// `planYieldTokenConversions` is still imported, but ONLY to explain a decision
-// in the debug trace below (which tokens qualified, and why the rest didn't).
-// The valuation itself no longer runs it here — `valueYieldTokens` does, so the
-// trace describes the same plan the conversion actually used.
-import { valueYieldTokens, resolveTokenPriceUSD, isShareBasedProtocol, planYieldTokenConversions, effectivePriceUSD } from 'keyring-agent-core'
+// core arrive already described.
+import { valueYieldTokens, resolveTokenPriceUSD, isShareBasedProtocol } from 'keyring-agent-core'
 import { resolveOnchainSymbols } from './symbolOnchain'
 import pLimit from 'p-limit'
 
@@ -56,6 +53,17 @@ const NATIVE = 'native'
 // (non-manually-shown) token is excluded from the visible list. Kept local so
 // this service doesn't depend on the Frontend layer; keep the two in sync.
 const MIN_VISIBLE_VALUE_USD = 0.01
+
+// Chains whose native coin is ALSO exposed through an ERC-20 contract that reads
+// the very same balance. Indexers return both rows, so without dropping the
+// contract row the balance shows twice: once as native, once as a token the
+// Keyring list does not carry (auto-hidden). Kept apart from
+// NATIVE_TOKEN_BY_CHAIN_ID on purpose: that map also rewrites the native address
+// sent to swap providers, and Arc's ERC-20 interface uses 6 decimals while native
+// USDC uses 18.
+const NATIVE_BALANCE_MIRROR_BY_CHAIN_ID = {
+  5042: '0x3600000000000000000000000000000000000000' // Arc — USDC
+}
 
 // Per-token RPC reads (sequential fallback) run in bounded-concurrency batches —
 // fast enough without blasting the RPC as one giant burst.
@@ -468,8 +476,12 @@ const transformMulticallEntry = (chainId, keyring, rawBalance, pricingDegraded =
     // here is what permanently locked vaults added before yield support shipped
     // out of the conversion: the first full refresh overwrote their unasked
     // state with a wrong verdict no later pass would revisit.
-    yieldProtocol: keyring?.yieldProtocol,
-    yieldAsset: keyring?.yieldAsset,
+    // Read through the two-field resolver, not `keyring.yieldProtocol` directly:
+    // a protocol the API serves only in `yieldProtocolV2` (Maple today) would
+    // otherwise be stored untagged and valued as if its shares were the
+    // underlying. See `resolveApiYieldProtocol`.
+    yieldProtocol: resolveApiYieldProtocol(keyring),
+    yieldAsset: resolveApiYieldAsset(keyring),
     // Built from the previous snapshot rather than a live Keyring entry (the API
     // list came back without this token) — the commit keeps the metadata it
     // already has and refreshes only the live numbers.
@@ -539,8 +551,8 @@ const buildTokenEntry = (chainId, nrow, keyring, pricingDegraded = false, keepAt
     // null, "not a vault") and a healthy batch that didn't return the token at
     // all records the same. Only a DEGRADED batch records nothing (`undefined`)
     // — it never really answered, and the identity backfill asks again later.
-    yieldProtocol: keyring ? (keyring.yieldProtocol || null) : (pricingDegraded ? undefined : null),
-    yieldAsset: keyring ? (keyring.yieldAsset || null) : (pricingDegraded ? undefined : null),
+    yieldProtocol: keyring ? (resolveApiYieldProtocol(keyring) || null) : (pricingDegraded ? undefined : null),
+    yieldAsset: keyring ? (resolveApiYieldAsset(keyring) || null) : (pricingDegraded ? undefined : null),
     // The Keyring list came back incomplete for this batch, so metadata/price
     // here is provider-only. commitChainTokens keeps what it already knows rather
     // than letting this thinner row overwrite it.
@@ -551,8 +563,16 @@ const buildTokenEntry = (chainId, nrow, keyring, pricingDegraded = false, keepAt
 
 // Shared tail for every indexer source (Moralis, Alchemy, a future proxy): price
 // a set of neutral rows against the Keyring list and build token entries.
-const buildTokensFromRows = async (chainId, address, neutralRows) => {
+const buildTokensFromRows = async (chainId, address, sourceRows) => {
   const snapshotByAddress = snapshotTokensByAddress(chainId, address)
+
+  // Drop the ERC-20 mirror of the native balance (see
+  // NATIVE_BALANCE_MIRROR_BY_CHAIN_ID) — unless the user added it by hand, which
+  // is their call and always stays.
+  const mirror = NATIVE_BALANCE_MIRROR_BY_CHAIN_ID[chainId]
+  const neutralRows = mirror && !snapshotByAddress[mirror]?.isCustom
+    ? sourceRows.filter((r) => r.isNative || r.contractAddress !== mirror)
+    : sourceRows
 
   // The NATIVE sentinel is not an address — a malformed row (no address, not
   // flagged native) must not smuggle it into the lookup query.
@@ -618,7 +638,7 @@ const buildTokensFromRows = async (chainId, address, neutralRows) => {
     // recorded as null, exactly as buildTokenEntry does. A degraded batch
     // records nothing (`undefined`) and the identity is re-asked later.
     const answered = ok
-      ? { ...keyring, yieldProtocol: keyring.yieldProtocol || null, yieldAsset: keyring.yieldAsset || null }
+      ? { ...keyring, yieldProtocol: resolveApiYieldProtocol(keyring) || null, yieldAsset: resolveApiYieldAsset(keyring) || null }
       : keyring
     const entry = transformMulticallEntry(chainId, answered, rawBalance, !ok, true)
     if (!entry || seen.has(entry.metaKey)) return
@@ -653,39 +673,81 @@ const assertEmptyIsPlausible = (chainId, address, source) => {
 // exception: a source that answered the protocol but omitted the asset object
 // may borrow the asset from a source that AGREES on the protocol — without it
 // the conversion would just fail closed on the missing decimals.
+//
+// Each source is read through `resolveApiYieldProtocol` rather than by field:
+// the first source is the RAW API entry, which may carry the tag in either
+// field, while the rest are stored tokens that only ever hold the resolved one.
+// Reading the raw field here is what let a `yieldProtocolV2`-only vault fall
+// through to a stale/absent tag and skip its share conversion.
 const resolveYieldIdentity = (sources) => {
-  const answered = sources.find((s) => s && s.yieldProtocol !== undefined)
+  const answered = sources.find((s) => s && resolveApiYieldProtocol(s) !== undefined)
   if (!answered) return { yieldProtocol: undefined, yieldAsset: undefined }
-  let { yieldProtocol, yieldAsset } = answered
+  const yieldProtocol = resolveApiYieldProtocol(answered)
+  let yieldAsset = resolveApiYieldAsset(answered)
   if (yieldProtocol && !yieldAsset) {
-    const donor = sources.find((s) => s && s.yieldProtocol === yieldProtocol && s.yieldAsset)
-    if (donor) yieldAsset = donor.yieldAsset
+    const donor = sources.find((s) => s && resolveApiYieldProtocol(s) === yieldProtocol && resolveApiYieldAsset(s))
+    if (donor) yieldAsset = resolveApiYieldAsset(donor)
   }
   return { yieldProtocol, yieldAsset }
 }
 
-// Re-price yield-bearing tokens for ONE chain.
-//
-// WHY this exists: for an ERC-4626 vault the Keyring API quotes the price of the
-// UNDERLYING asset while `balanceOf` returns SHARES, which are worth more and
-// carry different decimals — so `balance × price` understates the position (a
-// live check measured 1 steakUSDC = 1.0354 USDC, 1 Spark sUSDC = 1.1051 USDC).
-// Rebasing receipts (aave-v3 / compound-v3) are already denominated in the
-// underlying and must NOT be touched.
-// its lending protocols), so this function only supplies inputs, runs the reads,
-//
-// That whole distinction lives in keyring-agent-core (`balanceIsUnderlying` on
-// and writes the answers back:
-//   valueUSD → the position valued in underlying units
-//   priceUSD → value per SHARE, keeping a row's unit price consistent with its
-//              total AND letting a later balance-only refresh recompute
-//              `balance × price` correctly without another chain read.
-//
+// USD price of each underlying (`yieldAsset.address`) from the token API, keyed
+// by lowercased address — ONE batched lookup per chain. A fixed-price asset
+// needs no lookup. Best-effort: a failed lookup yields {} and unitPriceOf falls
+// back to the vault's own quote.
+const fetchAssetPrices = async (chainId, yieldAssets) => {
+  const addresses = [...new Set(
+    yieldAssets
+      .filter((a) => a?.address && !(toNumber(a.fixedPrice) > 0))
+      .map((a) => lowerCase(a.address))
+  )].filter((a) => isAddress(a))
+  if (addresses.length === 0) return {}
+  try {
+    const prices = {}
+    const rows = await fetchKeyringTokens(chainId, addresses)
+    rows.forEach((k) => {
+      const price = toNumber(k?.price)
+      if (k?.address && price > 0) prices[lowerCase(k.address)] = price
+    })
+    return prices
+  } catch {
+    return {}
+  }
+}
+
+// Price of ONE unit of a yield token's underlying: `fixedPrice` when the API
+// sends one, else the underlying's own price, else `fallback` — the vault's own
+// API quote, which is what tokens without an asset config were always valued at.
+// `source` says which one was used, for the yield log.
+const unitPriceOf = (yieldAsset, assetPrices, fallback) => {
+  const fixed = toNumber(yieldAsset?.fixedPrice)
+  if (fixed > 0) return { price: fixed, source: 'assetFixedPrice' }
+  const asset = lowerCase(yieldAsset?.address || '')
+  const assetPrice = assetPrices[asset]
+  if (assetPrice > 0) return { price: assetPrice, source: `asset ${asset} API price` }
+  const reason = asset ? `asset ${asset} has no API price` : 'no asset config'
+  return { price: toNumber(fallback), source: `vault's own quote (fallback: ${reason})` }
+}
+
+// `symbol (protocol, TYPE) on chain N` — the prefix of every per-token yield log.
+// Symbol alone is ambiguous (a Morpho vault often reports its underlying's
+// symbol, e.g. "USDC"), so the name, contract and underlying are logged too.
+const yieldLabel = (chainId, { symbol, name, address }, yieldProtocol, yieldAsset) =>
+  `chain ${chainId} | ${symbol || '?'}${name && name !== symbol ? ` "${name}"` : ''} ${address || '?'}` +
+  ` (${yieldProtocol}, ${isShareBasedProtocol(yieldProtocol) ? 'SHARE' : 'REBASING'}` +
+  `, underlying ${yieldAsset?.address || '?'})`
+
+// Value the yield-bearing tokens of ONE chain (rules at the top of this file).
+// Writes back:
+//   priceUSD → value per token HELD (per share for a vault), so a later
+//              balance-only refresh can recompute `balance × price` correctly
+//   valueUSD → the position in USD
 // `keyringByMetaKey` supplies each token's yieldProtocol/yieldAsset from the
 // live API response, falling back to the fields persisted on the token itself
-// (snapshot-recovered vaults have no live entry). Non-yield tokens pass through
-// untouched; a failed read keeps the value the token already had, so a flaky RPC
-// under-reports a position at worst instead of zeroing it. Returns a NEW array.
+// (snapshot-recovered vaults have no live entry). Untagged tokens pass through
+// untouched; a failed share conversion keeps the value the token already had,
+// so a flaky RPC under-reports a position at worst instead of zeroing it.
+// Returns a NEW array.
 const applyYieldTokenValues = async (chainId, tokens, keyringByMetaKey, snapshotByMetaKey = null) => {
   // Last-resort yield identity: what this very token was recorded as last time.
   // Every path here rebuilds its token entries from the live API response, so a
@@ -716,7 +778,9 @@ const applyYieldTokenValues = async (chainId, tokens, keyringByMetaKey, snapshot
   // same single batched call, so re-asking costs no extra request.
   const unknownIdentity = tokens.filter((t) => {
     if (t.contractAddress === NATIVE) return false
-    if (keyringByMetaKey[t.metaKey]?.yieldProtocol !== undefined) return false
+    // Same resolver the entry builders use, so a token the API tagged only in
+    // `yieldProtocolV2` counts as ANSWERED and isn't re-asked every refresh.
+    if (resolveApiYieldProtocol(keyringByMetaKey[t.metaKey]) !== undefined) return false
     if (t.yieldProtocol !== undefined) return false
     const snap = snapshot[t.metaKey]
     if (snap?.yieldProtocol === undefined) return true // never answered anywhere
@@ -728,230 +792,174 @@ const applyYieldTokenValues = async (chainId, tokens, keyringByMetaKey, snapshot
       fresh.forEach((k) => {
         if (!k?.address) return
         tagPatch[buildMetaKey(chainId, lowerCase(k.address))] = {
-          yieldProtocol: k.yieldProtocol || null,
-          yieldAsset: k.yieldAsset || null
+          yieldProtocol: resolveApiYieldProtocol(k) || null,
+          yieldAsset: resolveApiYieldAsset(k) || null
         }
       })
-      if (DEBUG_YIELD) {
-        logYield(`chain ${chainId}: asked yield identity for ${unknownIdentity.length} unanswered token(s), ${Object.keys(tagPatch).length} answered`)
-      }
+      logYield(`chain ${chainId} | identity re-asked for ${unknownIdentity.length} untagged token(s), API answered ${Object.keys(tagPatch).length}`)
     } catch {
       // Best-effort — unanswered tokens stay `undefined` and are re-asked.
     }
   }
 
-  const inputs = tokens.map((t) => {
-    const keyring = keyringByMetaKey[t.metaKey]
-    const prev = snapshot[t.metaKey]
+  // Identity precedence: the live API entry, then the token's own recorded
+  // answer, then the fresh by-address answer, then the snapshot — a
+  // snapshot-recovered vault has no live entry yet is still a vault.
+  // resolveYieldIdentity stops at the first source that ANSWERED (`null`
+  // included), so a fresh "not a vault" beats a stale tag.
+  const inputs = []
+  tokens.forEach((t) => {
+    const { yieldProtocol, yieldAsset } = resolveYieldIdentity([keyringByMetaKey[t.metaKey], t, tagPatch[t.metaKey], snapshot[t.metaKey]])
+    if (!yieldProtocol) return
     let rawBalance = 0n
     try { rawBalance = BigInt(t.balance) } catch { rawBalance = 0n }
-    // Identity precedence: the live API entry, then the token's own recorded
-    // answer, then the fresh by-address answer, then the snapshot — a
-    // snapshot-recovered vault has no live entry yet is still a vault, and must
-    // not be valued as if its balance were the underlying. resolveYieldIdentity
-    // stops at the first source that ANSWERED (`null` included), so a fresh
-    // "not a vault" is respected instead of falling through to a stale tag, and
-    // both fields always come from the same source. The by-address tagPatch
-    // outranks the snapshot: when both exist (a re-asked custom token) the
-    // patch is the newer, address-authoritative answer.
-    const identity = resolveYieldIdentity([keyring, t, tagPatch[t.metaKey], prev])
-    return {
+    inputs.push({
       key: t.metaKey,
       address: t.contractAddress,
       rawBalance,
       decimals: Number(t.decimals ?? 18),
-      priceUSD: t.priceUSD,
-      yieldProtocol: identity.yieldProtocol,
-      yieldAsset: identity.yieldAsset,
-      // Needed only by cross-chain sUSDS, whose token implements no ERC-4626:
-      // its shares are valued against the chain's SSR oracle, and core resolves
-      // that address per chain. Every other vault converts against itself and
-      // ignores this. Without it such a row is passed through at 1:1, which
-      // understates the position by exactly the yield accrued.
+      priceUSD: t.priceUSD, // replaced by the unit price below
+      yieldProtocol,
+      yieldAsset,
+      // Needed only by cross-chain sUSDS, valued against its chain's oracle.
       chain: chainId
-    }
-  })
-
-  const plan = planYieldTokenConversions(inputs)
-
-  if (DEBUG_YIELD) {
-    // Every token the API tagged, and whether it qualified — the two differ
-    // whenever a guard rejected one, which is what this trace is for. The skip
-    // reason is spelled out because "tagged but not converted" is the case most
-    // likely to be mistaken for a bug. The protocol test comes from core, so the
-    // explanation can't drift from the decision it describes.
-    const tagged = inputs.filter((i) => i.yieldProtocol)
-    const planned = new Set(plan.calls.map((c) => c.key))
-    logYield(`chain ${chainId}: ${tokens.length} tokens, ${tagged.length} tagged, ${plan.calls.length} eligible for conversion`)
-    tagged.forEach((i) => {
-      const t = tokens.find((x) => x.metaKey === i.key)
-      const skipReason = planned.has(i.key)
-        ? ''
-        : !isShareBasedProtocol(i.yieldProtocol)
-          ? ' — skipped: rebasing receipt, balance is already the underlying'
-          : !(Number(i.priceUSD) > 0)
-            ? ' — skipped: no usable price, keeping balance x price'
-            : i.rawBalance <= 0n
-              // Not a rejection: there is no amount to scale, so the unit price is
-              // fetched separately below instead of via convertToAssets.
-              ? ' — no balance to convert, per-share price fetched separately'
-              : ' — skipped: yieldAsset.decimals missing, cannot scale the result'
-      logYield(
-        `  ${planned.has(i.key) ? 'convert' : 'skip   '} ${t?.symbol || i.key}` +
-        ` protocol=${i.yieldProtocol} assetDecimals=${JSON.stringify(i.yieldAsset?.decimals)}` +
-        ` price=${i.priceUSD} balance=${t?.balanceFormatted}${skipReason}`
-      )
     })
-  }
-
-  // Share-based vaults the plan skips purely because the wallet holds none of
-  // them. Core plans no `convertToAssets` for a zero balance — there is no
-  // amount to scale — but such a token still needs a per-SHARE unit PRICE: its
-  // stored one is the API's UNDERLYING quote, which is the wrong unit and is
-  // exactly what the detail screen (resolveKeyringTokenPriceUSD, priced off a
-  // synthetic single share) disagrees with. Only manually added tokens reach
-  // here at zero balance; everything else is dropped upstream as "not held".
-  const zeroBalanceVaults = inputs.filter(
-    (i) => i.rawBalance <= 0n && isShareBasedProtocol(i.yieldProtocol) && Number(i.priceUSD) > 0
-  )
+  })
 
   // Recorded identity answers must ride along even when there is nothing to
   // value, or the same tokens would be re-asked on every refresh.
   const withTagPatch = (t) => (tagPatch[t.metaKey] ? { ...t, ...tagPatch[t.metaKey] } : t)
-
-  if (plan.calls.length === 0 && zeroBalanceVaults.length === 0) {
-    // Nothing yield-bearing here.
+  if (inputs.length === 0) {
     return Object.keys(tagPatch).length === 0 ? tokens : tokens.map(withTagPatch)
   }
 
-  // Priced off one synthetic share each, so the answer needs no balance. Failures
-  // resolve to null and simply leave the token's stored price alone.
+  const assetPrices = await fetchAssetPrices(chainId, inputs.map((i) => i.yieldAsset))
+  const inputByKey = {}
+  inputs.forEach((i) => {
+    const unit = unitPriceOf(i.yieldAsset, assetPrices, i.priceUSD)
+    i.vaultQuoteUSD = i.priceUSD
+    i.priceUSD = unit.price
+    i.priceSource = unit.source
+    inputByKey[i.key] = i
+  })
+  const shareCount = inputs.filter((i) => isShareBasedProtocol(i.yieldProtocol)).length
+  logYield(
+    `chain ${chainId} | ${inputs.length} yield token(s): ${inputs.length - shareCount} rebasing, ${shareCount} share` +
+    ` | asset prices from API: ${Object.keys(assetPrices).length}`
+  )
+
+  const rpcUrl = getRpcUrlByChain(Number(chainId))
+  const shares = inputs.filter((i) => isShareBasedProtocol(i.yieldProtocol) && i.priceUSD > 0)
+  const held = shares.filter((i) => i.rawBalance > 0n)
+  // A share vault held at zero (only manually added tokens get here) has no
+  // amount to convert, but still needs a per-SHARE unit price — priced off one
+  // synthetic share. Failures resolve to null and leave the stored price alone.
+  const zeroHeld = shares.filter((i) => i.rawBalance <= 0n)
+
+  const [values, perShare] = await Promise.all([
+    held.length > 0 ? valueYieldTokens(chainId, held, { rpcUrl }) : new Map(),
+    Promise.all(zeroHeld.map((i) =>
+      resolveTokenPriceUSD(Number(chainId), {
+        address: i.address,
+        decimals: i.decimals,
+        price: i.priceUSD,
+        yieldProtocol: i.yieldProtocol,
+        yieldAsset: i.yieldAsset
+      }, { rpcUrl }).catch(() => null)
+    ))
+  ])
   const perShareByKey = {}
-  if (zeroBalanceVaults.length > 0) {
-    const priced = await Promise.all(zeroBalanceVaults.map(async (i) => {
-      const t = tokens.find((x) => x.metaKey === i.key)
-      try {
-        const p = await resolveKeyringTokenPriceUSD(chainId, {
-          address: i.address,
-          decimals: i.decimals,
-          price: i.priceUSD,
-          symbol: t?.symbol,
-          yieldProtocol: i.yieldProtocol,
-          yieldAsset: i.yieldAsset
-        })
-        return p > 0 ? { key: i.key, priceUSD: p } : null
-      } catch {
-        return null
-      }
-    }))
-    priced.forEach((r) => { if (r) perShareByKey[r.key] = r.priceUSD })
-    if (DEBUG_YIELD) {
-      logYield(`  ${zeroBalanceVaults.length} zero-balance vault(s): ${Object.keys(perShareByKey).length} re-priced per share`)
-    }
+  zeroHeld.forEach((i, idx) => { if (perShare[idx] > 0) perShareByKey[i.key] = perShare[idx] })
+
+  // A listed token that is priced is not auto-hidden (the entry builders' rule).
+  // Re-applied here because a vault the API quotes no price for of its own is
+  // priced only now, from its underlying. The user's own choice is never touched.
+  const withPrice = (t, fields) => {
+    const unhide = t.autoHidden && !t.hiddenByUser && fields.priceUSD > 0 && !!keyringByMetaKey[t.metaKey]
+    return { ...t, ...fields, ...(unhide ? { autoHidden: false, isHidden: false } : {}) }
   }
 
-  // Core plans, batches and folds in one call. An input set with nothing
-  // convertible still returns a full map — the pass-through `balance × price`
-  // value every token needs — and costs no RPC, so the zero-balance-vault-only
-  // pass above reaches here harmlessly.
-  //
-  // Our RPC endpoint is passed explicitly: core PREFERS it and keeps the chain's
-  // other endpoints behind it as backups, so the paid provider leads without
-  // becoming a single point of failure.
-  const values = await valueYieldTokens(chainId, inputs, { rpcUrl: getRpcUrlByChain(Number(chainId)) })
+  return tokens.map((raw) => {
+    const t = withTagPatch(raw)
+    const i = inputByKey[t.metaKey]
+    if (!i) return t
+    const label = yieldLabel(chainId, { symbol: t.symbol, name: t.name, address: t.contractAddress }, i.yieldProtocol, i.yieldAsset)
+    const priceNote = `unit price $${i.priceUSD} from ${i.priceSource} (vault quote $${i.vaultQuoteUSD})`
 
-  // Read outcome, counted from the folded values rather than from raw return
-  // data — core owns the transport now, so the honest thing to report is how
-  // many of the planned conversions actually landed.
-  if (DEBUG_YIELD && plan.calls.length > 0) {
-    const converted = plan.calls.filter((c) => values.get(c.key)?.converted).length
-    logYield(`  ${converted}/${plan.calls.length} conversion read(s) succeeded`)
-  }
-
-  return tokens.map((rawT) => {
-    const t = withTagPatch(rawT)
-    // Zero-balance vault: only the unit price is known (no balance to value), so
-    // valueUSD stays 0 — it is 0 by definition, not by a failed read.
-    const perShare = perShareByKey[t.metaKey]
-    if (perShare > 0) {
-      logYield(`  ${t.symbol}: zero balance, price $${t.priceUSD} -> per-share $${perShare}`)
-      return { ...t, priceUSD: perShare, valueUSD: 0, isYieldConverted: true }
-    }
-    const v = values.get(t.metaKey)
-    if (!v?.converted) {
-      // Planned but not converted ⇒ the read failed; the old value is kept.
-      if (DEBUG_YIELD && plan.calls.some((c) => c.key === t.metaKey)) {
-        logYield(`  ${t.symbol}: read failed, retaining previous value $${t.valueUSD}`)
-      }
+    if (!(i.priceUSD > 0)) {
+      logYield(`${label} | NO PRICE — ${priceNote} → left unchanged ($${t.valueUSD})`)
       return t
     }
-    // The price the valuation ACTUALLY used, not the API's quote: an underlying
-    // carrying `fixedPrice` is valued at that instead, and printing the quote
-    // here made the log's own arithmetic fail to add up — `0.738156 x 0.999914`
-    // does not equal the `0.738156` shown beside it, which reads as a bug in a
-    // number that is in fact correct.
-    // Guarded: this runs only to LABEL a value core already computed, so a core
-    // build without this export (or any throw inside it) must not take the
-    // refresh down with it — a wrong number in a debug line is a far smaller
-    // problem than a chain that fails to commit.
-    let usedPrice = t.priceUSD
-    try {
-      const inputForPrice = inputs.find((i) => i.key === t.metaKey)
-      if (inputForPrice && typeof effectivePriceUSD === 'function') {
-        usedPrice = effectivePriceUSD(inputForPrice)
+
+    // Rebasing: the balance is already the underlying → balance × unit price.
+    if (!isShareBasedProtocol(i.yieldProtocol)) {
+      const valueUSD = t.balanceFormatted * i.priceUSD
+      logYield(`${label} | ${t.balanceFormatted} × $${i.priceUSD} = $${valueUSD} | ${priceNote}`)
+      return withPrice(t, { priceUSD: i.priceUSD, valueUSD })
+    }
+
+    // Share, held at zero: only the unit price is known; value is 0 by definition.
+    if (i.rawBalance <= 0n) {
+      const price = perShareByKey[t.metaKey]
+      if (!(price > 0)) {
+        logYield(`${label} | balance 0, per-share read FAILED → price left at $${t.priceUSD} | ${priceNote}`)
+        return t
       }
-    } catch { /* keep the API quote for the log */ }
-    const fixedNote = usedPrice !== t.priceUSD ? ` [fixedPrice $${usedPrice}, API quote $${t.priceUSD}]` : ''
+      logYield(`${label} | balance 0 → $${price}/share | ${priceNote}`)
+      return withPrice(t, { priceUSD: price, valueUSD: 0, isYieldConverted: true })
+    }
+
+    // Share, held: shares → underlying on-chain, × unit price.
+    const v = values.get(t.metaKey)
+    if (!v?.converted) {
+      logYield(`${label} | convertToAssets FAILED → keeping $${t.valueUSD} ($${t.priceUSD}/share) | ${priceNote}`)
+      return t
+    }
     logYield(
-      `  ${t.symbol}: ${t.balanceFormatted} shares x $${usedPrice} = $${t.balanceFormatted * usedPrice}` +
-      ` -> ${v.underlyingAmount} underlying x $${usedPrice} = $${v.valueUSD}` +
-      ` (price per share $${v.pricePerTokenUSD})${fixedNote}`
+      `${label} | ${t.balanceFormatted} shares → ${v.underlyingAmount} underlying × $${i.priceUSD} = $${v.valueUSD}` +
+      ` ($${v.pricePerTokenUSD}/share) | ${priceNote}`
     )
-    return { ...t, valueUSD: v.valueUSD, priceUSD: v.pricePerTokenUSD, isYieldConverted: true }
+    return withPrice(t, { priceUSD: v.pricePerTokenUSD, valueUSD: v.valueUSD, isYieldConverted: true })
   })
 }
 
-// The per-SHARE price of ONE Keyring token entry, for callers that fetch a price
-// straight from the token API instead of going through a token-list refresh
-// (useGetTokenPrice and everything built on it: token detail, Send, Exchange,
-// Swap & Send, the pay-link preview).
-//
-// Same problem applyYieldTokenValues solves for the list, at the price layer: the
-// API quotes a share-based vault at its UNDERLYING asset's price. Live example —
-// Base sUSDC is tagged `spark`, 18-decimal shares, priced 0.9997 (that's USDC)
-// while one share is worth ~1.10. Handing that number to a screen shows a price
-// and a holding value smaller than the token list's for the very same tokens.
-//
-// The conversion runs against a synthetic ONE-share balance, so the answer is a
-// unit price that needs no wallet balance — it is equally right for a vault the
-// user doesn't hold (e.g. the token they're swapping INTO). Plain tokens and
-// rebasing receipts (aave-v3 / compound-v3, already denominated in the
-// underlying) are not tagged as share-based, cost no RPC, and pass through with
-// the API price untouched.
-//
-// Returns null when there is no usable price, INCLUDING when the on-chain read
-// fails on a share-based vault: the API price is known to be in the wrong unit
-// there, so no price at all is better than a wrong one — callers then fall back
-// to their own token-list snapshot, which already holds the converted price.
-//
-// Thin wrapper over core's `resolveTokenPriceUSD` — it applies exactly the rules
-// above (plain tokens and rebasing receipts pass through with no RPC; a
-// share-based vault is priced off one synthetic share; a failed read yields
-// null). Kept as a named export because this service's callers pass a Keyring
-// API row, and the `chainId` they hold can be a string from a react-query key.
+// The per-token price of ONE Keyring API row, for callers that price a token
+// straight from the API instead of from a token-list refresh (useGetTokenPrice
+// and everything built on it: token detail, Send, Exchange, Swap & Send, the
+// pay-link preview; plus search and the add drawer). Same rules as
+// applyYieldTokenValues, so no screen disagrees with the list:
+//   - plain token → the API price;
+//   - rebasing    → the underlying's unit price;
+//   - share vault → per-SHARE price, converted off one synthetic share. Null
+//                   when that read fails: the unit price is in the wrong unit
+//                   there, so no price beats a wrong one.
 export const resolveKeyringTokenPriceUSD = async (chainId, keyringToken) => {
+  const apiPrice = toNumber(keyringToken?.price)
+  const yieldProtocol = resolveApiYieldProtocol(keyringToken) || null
+  if (!yieldProtocol) return apiPrice > 0 ? apiPrice : null
+
+  const yieldAsset = resolveApiYieldAsset(keyringToken) || null
+  const unit = unitPriceOf(yieldAsset, await fetchAssetPrices(chainId, [yieldAsset]), apiPrice)
+  const unitPrice = unit.price
+  const label = `[single price] ${yieldLabel(chainId, { symbol: keyringToken?.symbol, name: keyringToken?.name, address: keyringToken?.address }, yieldProtocol, yieldAsset)}`
+  const priceNote = `unit price $${unitPrice} from ${unit.source} (vault quote $${apiPrice})`
+  if (!isShareBasedProtocol(yieldProtocol)) {
+    logYield(`${label} | → $${unitPrice > 0 ? unitPrice : null} | ${priceNote}`)
+    return unitPrice > 0 ? unitPrice : null
+  }
+
   const price = await resolveTokenPriceUSD(
     Number(chainId),
     {
       address: lowerCase(keyringToken?.address || ''),
       decimals: keyringToken?.decimals ?? 18,
-      price: keyringToken?.price,
-      yieldProtocol: keyringToken?.yieldProtocol || null,
-      yieldAsset: keyringToken?.yieldAsset || null
+      price: unitPrice,
+      yieldProtocol,
+      yieldAsset
     },
     { rpcUrl: getRpcUrlByChain(Number(chainId)) }
   )
-  logYield(`price ${keyringToken?.symbol}: api $${toNumber(keyringToken?.price)} -> $${price}`)
+  logYield(`${label} | → ${price > 0 ? `$${price}/share` : 'NULL (per-share read failed)'} | ${priceNote}`)
   return price
 }
 
@@ -1161,18 +1169,10 @@ const withSnapshotDiscovery = (keyringList, snapshotByAddress) => {
     // snapshot check's job in applyYieldTokenValues — which knows to exempt
     // custom tokens. Laundering the null into the "live" entry here would
     // overrule that exemption and freeze a custom token's add-time verdict.
-    if (k?.yieldProtocol === undefined) {
-      return snap.yieldProtocol
-        ? { ...k, yieldProtocol: snap.yieldProtocol, yieldAsset: snap.yieldAsset }
-        : k
-    }
-    // Live answered the protocol but omitted the asset object — complete the
-    // pair from the snapshot only when both AGREE on the protocol; an asset
-    // recorded for a different protocol could scale by the wrong decimals.
-    if (k.yieldProtocol && !k.yieldAsset && snap.yieldProtocol === k.yieldProtocol && snap.yieldAsset) {
-      return { ...k, yieldAsset: snap.yieldAsset }
-    }
-    return k
+    // A live answer wins; a live tag missing its asset borrows it from a
+    // snapshot that agrees on the protocol (see resolveYieldIdentity).
+    if (resolveApiYieldProtocol(k) === undefined && !snap.yieldProtocol) return k
+    return { ...k, ...resolveYieldIdentity([k, snap]) }
   })
   const extra = Object.values(snapshotByAddress)
     .filter((t) => !listed.has(t.contractAddress))
@@ -1721,7 +1721,7 @@ const refreshTokenBalances = async (address, chainId, contractAddresses) => {
         }
         // A custom token stays — but its numbers must still be patched: skipping
         // the update left the stale pre-send balance on screen, and (for a
-        // share-based vault) kept it out of `touchedVaults` below, freezing its
+        // share-based vault) kept it out of `touchedYield` below, freezing its
         // per-share price at whatever the add-time read returned while the
         // detail screen kept showing a fresh one.
         updates[metaKey] = {
@@ -1821,69 +1821,53 @@ const refreshTokenBalances = async (address, chainId, contractAddresses) => {
         // untagged so a later refresh asks again, rather than recording a `null`
         // that would read as the settled answer "not a vault".
         if (!k) return t
-        return { ...t, yieldProtocol: k.yieldProtocol || null, yieldAsset: k.yieldAsset || null }
+        return { ...t, yieldProtocol: resolveApiYieldProtocol(k) || null, yieldAsset: resolveApiYieldAsset(k) || null }
       })
     } catch {
       // Best-effort — the token keeps what it had and is re-asked next refresh.
     }
   }
 
-  // Re-price the share-based vaults among the tokens we just touched. Without
-  // this the targeted path can never show accrued yield: a vault's share count
-  // doesn't move as it earns, so re-reading `balanceOf` returns the same number
-  // and `shares × cached price` reproduces the same value forever.
+  // Re-price the YIELD tokens among the tokens we just touched, through the same
+  // applyYieldTokenValues the full refresh uses (rebasing → balance × unit
+  // price; share → converted on-chain). Without this a vault could never show
+  // accrued yield here: its share count doesn't move as it earns, so
+  // `shares × cached price` reproduces the same value forever.
   //
-  // The cached `priceUSD` cannot be reused as the input here — for a converted
-  // vault it is the per-SHARE price, while the conversion expects the UNDERLYING
-  // asset's price and would otherwise value underlying units at a share's price.
-  // So the underlying price is re-fetched from the token API, which is also what
-  // makes the result track the underlying's own price movement.
-  // isShareBasedProtocol, not a bare `yieldProtocol` test: the tag alone also
-  // covers rebasing receipts (aave-v3 / compound-v3), whose balance is ALREADY
-  // the underlying. Those must never be converted — doing so would scale an
-  // amount that needs no scaling — and core owns that allow-list precisely so
-  // callers don't keep a copy that drifts from it.
-  //
-  // Backfilled tokens are covered too — every backfilled token had a successful
-  // read, so it is either in `updates` (held balance, or custom at zero) or was
-  // removed above. Zero-balance vaults need no convertToAssets call of their
-  // own: applyYieldTokenValues prices them off a synthetic single share in its
-  // zero-balance branch, the same way the full-chain paths do.
+  // The cached `priceUSD` must not be the fallback price: for a converted vault
+  // it is per-SHARE, and valuing underlying units at a share's price inflates
+  // the position by the share/underlying ratio. So the vault's fresh API quote
+  // (0 when it has none) is the fallback, and a token left without any price
+  // keeps its provisional value. Zero-balance vaults (custom only) are priced
+  // off one synthetic share.
   const addedMetaKeys = new Set(addedTokens.map((t) => t.metaKey))
-  const touchedVaults = tokens.filter(
-    (t) => (updates[t.metaKey] || addedMetaKeys.has(t.metaKey)) &&
-      isShareBasedProtocol(t.yieldProtocol)
-  )
-  if (touchedVaults.length > 0) {
+  const isTouched = (t) => !!updates[t.metaKey] || addedMetaKeys.has(t.metaKey)
+  const touchedYield = tokens.filter((t) => isTouched(t) && t.yieldProtocol)
+  if (touchedYield.length > 0) {
     try {
-      const fresh = await fetchKeyringTokens(chainId, touchedVaults.map((t) => t.contractAddress))
+      const fresh = await fetchKeyringTokens(chainId, touchedYield.map((t) => t.contractAddress))
       const byMetaKey = {}
       fresh.forEach((k) => {
         if (k?.address) byMetaKey[buildMetaKey(chainId, lowerCase(k.address))] = k
       })
-      // Feed the UNDERLYING price in, and let applyYieldTokenValues write back
-      // both the converted valueUSD and the per-share priceUSD, exactly as the
-      // full-chain pass does.
-      //
-      // Only vaults the API actually re-priced are converted. A vault whose
-      // stored priceUSD were passed through instead would be valued at
-      // `underlying units x a SHARE's price` — the stored price is per-share once
-      // converted — inflating the position by the whole share/underlying ratio
-      // (~10% on a mature vault) and compounding on every later refresh. With no
-      // fresh underlying price there is nothing safe to convert against, so the
-      // provisional shares x cached-price value stands.
-      const priced = touchedVaults
-        .filter((t) => toNumber(byMetaKey[t.metaKey]?.price) > 0)
+      const priced = touchedYield
+        .filter((t) => byMetaKey[t.metaKey])
         .map((t) => ({ ...t, priceUSD: toNumber(byMetaKey[t.metaKey].price) }))
       if (priced.length > 0) {
-        const converted = await applyYieldTokenValues(chainId, priced, byMetaKey)
-        const convertedByKey = {}
-        converted.forEach((t) => { if (t.isYieldConverted) convertedByKey[t.metaKey] = t })
-        tokens = tokens.map((t) => convertedByKey[t.metaKey] || t)
+        const valued = await applyYieldTokenValues(chainId, priced, byMetaKey)
+        const valuedByKey = {}
+        // Only tokens that came back PRICED are taken. A share vault that failed
+        // to convert (or anything left at 0) is skipped: its `priced` copy
+        // carries the fallback quote beside the provisional value.
+        valued.forEach((t) => {
+          const ok = isShareBasedProtocol(t.yieldProtocol) ? t.isYieldConverted : t.priceUSD > 0
+          if (ok) valuedByKey[t.metaKey] = t
+        })
+        tokens = tokens.map((t) => valuedByKey[t.metaKey] || t)
       }
     } catch {
-      // Keep the provisional shares × cached-price value — a flaky RPC or API
-      // must not zero a position, only leave it slightly behind.
+      // Keep the provisional value — a flaky RPC or API must not zero a
+      // position, only leave it slightly behind.
     }
   }
 
@@ -1896,25 +1880,11 @@ const refreshTokenBalances = async (address, chainId, contractAddresses) => {
   // detail screen showed $2406.97. TokenDetailScreen fires this targeted refresh
   // on every mount and, whenever a balance is held, renders `token.priceUSD` from
   // Redux rather than its own live `useGetTokenPrice` value — deliberately, so the
-  // price shown and the holding value shown always come from ONE snapshot. That
-  // invariant is right; the missing half was that nothing here ever refreshed the
-  // snapshot's price. Both numbers were then stale together, which is self
-  // consistent and still wrong.
+  // price shown and the holding value shown always come from ONE snapshot.
   //
-  // Vaults are excluded on purpose: the block above already wrote their per-SHARE
-  // price, and the API's quote for them is the UNDERLYING's — applying it here
-  // would undo that conversion and under-report the position by the whole
-  // share/underlying ratio. `isShareBasedProtocol` (not a bare `yieldProtocol`
-  // test) is the same allow-list that block uses, so rebasing receipts (aave-v3,
-  // compound-v3) — whose price IS the underlying's — are re-priced normally here.
-  const repricedMetaKeys = new Set(
-    tokens.filter((t) => t.isYieldConverted).map((t) => t.metaKey)
-  )
-  const touchedPlain = tokens.filter(
-    (t) => (updates[t.metaKey] || addedMetaKeys.has(t.metaKey)) &&
-      !isShareBasedProtocol(t.yieldProtocol) &&
-      !repricedMetaKeys.has(t.metaKey)
-  )
+  // Yield tokens are excluded: the block above already priced them from their
+  // underlying, and the vault's own quote would undo that.
+  const touchedPlain = tokens.filter((t) => isTouched(t) && !t.yieldProtocol)
   // The chain's NATIVE row rides along on every chunked response (address ''),
   // so an ERC20 lookup re-prices native for free. But a NATIVE-ONLY refresh —
   // opening ETH's detail screen, or coming back from sending ETH — has no ERC20

@@ -10,7 +10,7 @@ import MyIcon from 'frontend/Components/UI/MyIcon'
 import MyButton from 'frontend/Components/UI/MyButton'
 import images from 'assets/Image'
 import I18n from 'assets/Lang'
-import { getSizeImgSquare, PADDING_TOP_CONTAINER_DRAWER, width } from 'common/styles'
+import { getHeightHeader, getHeightScreen, getSizeImgSquare, PADDING_TOP_CONTAINER_DRAWER, width } from 'common/styles'
 import { formatNumberBro, lowerCase } from 'common/function'
 import ReduxService from 'common/redux'
 import StorageReduxAction from 'controller/Redux/actions/storageAction'
@@ -22,6 +22,8 @@ import { WC_VERIFY_STATE } from 'src/Services/WalletConnectAssess'
 import styles from './styles'
 import MyRowItem from 'frontend/Components/UI/MyRowItem'
 import TitleDrawer from 'frontend/Components/UI/TitleDrawer'
+import ChangeAccountDrawer, { getSwitchableAccounts } from '../ChangeAccountDrawer'
+import MyTextTicker from 'frontend/Components/UI/MyTextTicker'
 
 // Signature methods are handled by their own stacked drawer (SignatureRequestCard,
 // opened by WalletConnectRequestHost), so they are excluded from the card list here.
@@ -59,6 +61,7 @@ const getUrlIcon = (state) => {
  */
 const WalletConnectRequestsModal = ({ topic, _this }) => {
   const walletConnectRedux = useSelector((s) => s.walletConnectRedux)
+  const accountListRedux = useSelector((s) => s.accountListRedux)
   const callRequestRedux = useSelector((s) => s.callRequestRedux)
   const gasPriceSlideValue = useSelector((s) => s.gasPriceSlideValue) || 1
 
@@ -119,6 +122,14 @@ const WalletConnectRequestsModal = ({ topic, _this }) => {
   // Only show the gas slider for EVM sessions (gas is irrelevant otherwise).
   const isEvmConnection = (walletConnectInfo?.chainArray || []).some((c) => String(c).startsWith('eip155:'))
 
+  // The account this session is currently bound to.
+  const connectedAddress = walletConnectInfo?.accountAddress ||
+    walletConnectInfo?.accountArrInfo?.[0]?.address || ''
+  // Nothing to switch to (this is the only EVM account) → no entry point at all.
+  const hasSwitchableAccount = getSwitchableAccounts(accountListRedux, connectedAddress).length > 0
+  // Drives both the pinned footer and the bottom room reserved for it in the body.
+  const showChangeAccount = accountIndex !== -1 && hasSwitchableAccount
+
   // While dragging: update the label only (no dispatch per step).
   const onGasChanging = (v) => {
     setGasDisplayValue(v ?? 1)
@@ -128,6 +139,25 @@ const WalletConnectRequestsModal = ({ topic, _this }) => {
   const onGasChange = (v) => {
     setGasDisplayValue(v ?? 1)
     ReduxService.callDispatchAction(StorageReduxAction.setGasPriceSlideValue(v ?? 1))
+  }
+
+  // A V2 session is bound to ONE account, so this opens a picker that REPLACES
+  // the connected account (the old one is dropped) — stacked on top of this
+  // drawer (addDrawer) so it pops back here on close.
+  const handleChangeAccount = () => {
+    _this.openDrawer({
+      heightDrawer: getHeightScreen() - getHeightHeader(true),
+      addDrawer: true,
+      backdrop: true,
+      children: (
+        <ChangeAccountDrawer
+          topic={topic}
+          currentAddress={connectedAddress}
+          onClose={() => _this.closeDrawer()}
+          onError={() => _this.showAlert('', '', { type: true })}
+        />
+      )
+    })
   }
 
   const handleDisconnect = () => {
@@ -177,7 +207,7 @@ const WalletConnectRequestsModal = ({ topic, _this }) => {
 
       <ScrollView
         style={[styles.bodyScroll]}
-        contentContainerStyle={styles.body}
+        contentContainerStyle={[styles.body, showChangeAccount && styles.bodyFooterSpace]}
         showsVerticalScrollIndicator={false}
       >
         {/* URL + connected chains */}
@@ -313,6 +343,23 @@ const WalletConnectRequestsModal = ({ topic, _this }) => {
           />
         ))}
       </ScrollView>
+
+      {/* Change the account this dApp is connected with — pinned to the bottom of
+          the sheet, floating OVER the body (absolute) so the list scrolls behind
+          the button's glass while it stays reachable however long the
+          request/history list gets. Hidden when this is the only EVM account. */}
+      {showChangeAccount && (
+        <View style={styles.changeAccountFooter}>
+          <MyButton
+            className='w-full'
+            onPress={handleChangeAccount}
+          >
+            <MyTextTicker className='text-medium'>
+              {I18n.t('v2.walletConnect.changeAccount')}
+            </MyTextTicker>
+          </MyButton>
+        </View>
+      )}
     </View>
   )
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { View, TextInput, TouchableOpacity, Keyboard } from 'react-native'
+import { View, TouchableOpacity, Keyboard } from 'react-native'
 import LottieView from 'lottie-react-native'
 import BigNumber from 'bignumber.js'
 import I18n from 'assets/Lang'
@@ -12,6 +12,7 @@ import MyButton from 'frontend/Components/UI/MyButton'
 import createStyles from './styles'
 import TitleDrawer from 'frontend/Components/UI/TitleDrawer'
 import MyViewPage from 'frontend/Components/UI/MyViewPage'
+import AutoFitAmountInput from 'frontend/Screen/TokenDetailScreen/Component/Exchange/Components/AutoFitAmountInput'
 
 const styles = createStyles()
 
@@ -95,16 +96,16 @@ const EditSpendingCapDrawer = ({
         {/* Amount field: bottom-line only (no icon, no surrounding box) + round Max */}
         <View style={styles.fieldLine}>
           <View style={styles.amountCol}>
-            {!newApproveAmount && (
-              <View style={styles.amountPlaceholderWrap} pointerEvents='none'>
-                <MyText style={styles.amountPlaceholder}>{I18n.t('Initial.amount')}</MyText>
-              </View>
-            )}
-            <TextInput
+            {/* minScale={0}: no readability floor — a long amount keeps shrinking
+              so the WHOLE number stays visible (same as the Send drawer). */}
+            <AutoFitAmountInput
               value={newApproveAmount}
               onChangeText={handleOnChangeApproveAmount}
               keyboardType='numeric'
-              style={styles.amountInput}
+              minScale={0}
+              placeholder={I18n.t('Initial.amount')}
+              placeholderStyle={styles.amountPlaceholder}
+              textStyle={styles.amountInput}
             />
           </View>
           <TouchableOpacity

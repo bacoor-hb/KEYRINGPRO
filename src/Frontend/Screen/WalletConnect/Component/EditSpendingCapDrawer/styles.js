@@ -1,5 +1,5 @@
 import { StyleSheet } from 'react-native'
-import { Colors, fontSize, getSizeImgSquare, pixelByHeight, pixelByWidth } from 'common/styles'
+import { Colors, fontSize, getFontFamily, getSizeImgSquare, pixelByHeight, pixelByWidth } from 'common/styles'
 
 const ICON_BOX = getSizeImgSquare('large')
 const CIRCLE = getSizeImgSquare('large')
@@ -44,35 +44,25 @@ const createStyles = () => {
       borderBottomWidth: 1.5,
       borderBottomColor: Colors.BG_BOX_SMALL
     },
-    // Input + symbol share the flexible column (relative for the placeholder overlay).
+    // The auto-fit input takes the flexible column; Max keeps its fixed circle.
     amountCol: {
       flex: 1,
       flexDirection: 'row',
       alignItems: 'center'
     },
-    // Constant fontSize so typing the first digit doesn't re-layout/clip the value
-    // (same approach as the Send drawer amount field). paddingLeft keeps the first
-    // bold glyph's left bearing from clipping.
+    // Text appearance ONLY — AutoFitAmountInput owns every layout-affecting prop
+    // (width/height/padding/fontSize) and keeps the base font fixed while
+    // auto-scaling a long value down to fit. Only color/fontFamily belong here.
     amountInput: {
-      flex: 1,
-      padding: 0,
-      paddingLeft: pixelByWidth(2),
-      fontSize: fontSize(30),
-      fontWeight: '700',
-      color: Colors.WHITE
+      color: Colors.WHITE,
+      fontFamily: getFontFamily(700)
     },
-    // Small "Amount" placeholder overlaid while empty — keeps a 15px hint without
-    // shrinking the TextInput's own fontSize (which would clip the first digit).
-    amountPlaceholderWrap: {
-      position: 'absolute',
-      left: pixelByWidth(2),
-      top: 0,
-      bottom: 0,
-      justifyContent: 'center'
-    },
+    // Small "Amount" hint shown while empty. Passed as placeholderStyle so it keeps
+    // its own 15px size independent of the input's large auto-fit value font.
     amountPlaceholder: {
       fontSize: fontSize(15),
-      color: Colors.TEXT_LOW
+      color: Colors.TEXT_LOW,
+      fontFamily: getFontFamily(400)
     },
     // Round Max button — circle with dark bg + border, brand-blue label.
     maxBtn: {
